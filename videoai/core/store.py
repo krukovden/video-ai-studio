@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import TypeVar
 
@@ -38,13 +40,26 @@ class ArtifactStore:
 
     def write(self, name: str, model: BaseModel, fingerprint: str) -> Path:
         target = self.path(name)
-        target.write_text(
-            model.model_dump_json(indent=2).encode("utf-8").decode("utf-8"),
-            encoding="utf-8",
-        )
-        self._meta_path(name).write_text(
-            json.dumps({"fingerprint": fingerprint}), encoding="utf-8"
-        )
+        meta_target = self._meta_path(name)
+
+        # Write artifact atomically: temp file + os.replace() ensures durability.
+        # If a crash occurs before both files are in place, the fingerprint will be absent
+        # (stale), not pointing at current content.
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=self.work_dir, delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(model.model_dump_json(indent=2))
+            tmp_artifact = tmp.name
+        os.replace(tmp_artifact, target)
+
+        # Write metadata sidecar atomically after artifact is durably in place.
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=self.meta_dir, delete=False, encoding="utf-8"
+        ) as tmp:
+            json.dump({"fingerprint": fingerprint}, tmp)
+            tmp_meta = tmp.name
+        os.replace(tmp_meta, meta_target)
+
         return target
 
     def read(self, name: str, model_cls: type[T]) -> T:

@@ -1,7 +1,8 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from videoai.core.store import ArtifactStore, hash_parts
 
@@ -9,6 +10,12 @@ from videoai.core.store import ArtifactStore, hash_parts
 class Sample(BaseModel):
     name: str
     value: int
+
+
+class SampleWithTimestamp(BaseModel):
+    name: str
+    timestamp: float
+    value: float
 
 
 def test_write_then_read_roundtrip(tmp_path: Path):
@@ -51,3 +58,59 @@ def test_hash_parts_is_stable_and_order_sensitive():
     assert hash_parts("a", "b") == hash_parts("a", "b")
     assert hash_parts("a", "b") != hash_parts("b", "a")
     assert len(hash_parts("a")) == 16
+
+
+def test_float_round_trip_fidelity(tmp_path: Path):
+    """Verify that float fields maintain precision across serialization."""
+    store = ArtifactStore(tmp_path)
+    original = SampleWithTimestamp(
+        name="test", timestamp=1234567890.123456, value=0.1
+    )
+    store.write("float-sample", original, fingerprint="fp1")
+    loaded = store.read("float-sample", SampleWithTimestamp)
+    assert loaded.timestamp == original.timestamp
+    assert loaded.value == original.value
+    assert loaded.name == original.name
+
+
+def test_crash_between_writes_leaves_no_stale_fingerprint(tmp_path: Path):
+    """Verify that fingerprint is absent if write is interrupted between artifact and meta.
+
+    Simulates the scenario: if a crash occurs after artifact is written but before
+    the meta sidecar, the fingerprint should be absent (not stale).
+    """
+    store = ArtifactStore(tmp_path)
+
+    # First, write successfully to establish a baseline.
+    store.write("01-sample", Sample(name="a", value=1), fingerprint="fp1")
+    assert store.fingerprint("01-sample") == "fp1"
+
+    # Now simulate a crash: write the artifact but fail before writing meta.
+    # Use monkeypatch to break os.replace for meta writes only.
+    original_replace = __import__("os").replace
+    replace_count = [0]
+
+    def patched_replace(src, dst):
+        replace_count[0] += 1
+        # Allow the first replace (artifact), but fail on the second (meta).
+        if replace_count[0] == 2:
+            raise OSError("Simulated crash during meta write")
+        return original_replace(src, dst)
+
+    with patch("os.replace", side_effect=patched_replace):
+        with pytest.raises(OSError, match="Simulated crash"):
+            store.write("01-sample", Sample(name="b", value=2), fingerprint="fp2")
+
+    # After the crash, the artifact file exists but fingerprint should still be "fp1"
+    # (the old one), proving we didn't write an orphaned fp2 that doesn't match.
+    assert store.fingerprint("01-sample") == "fp1"
+
+
+def test_read_with_mismatched_model_raises_validation_error(tmp_path: Path):
+    """Verify that reading JSON that doesn't match the model raises ValidationError."""
+    store = ArtifactStore(tmp_path)
+    store.write("01-sample", Sample(name="a", value=1), fingerprint="fp1")
+
+    # Try to read it as a different model that expects a float field.
+    with pytest.raises(ValidationError):
+        store.read("01-sample", SampleWithTimestamp)
