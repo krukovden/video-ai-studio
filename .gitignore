@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Subagent-driven development scratch
+.superpowers/
+
 # Python
 __pycache__/
 *.pyc
