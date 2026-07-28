@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node / Remotion
+node_modules/
+
+# Project working data (heavy media, caches)
+projects/*/work/
+projects/*/output/
+
+# macOS
+.DS_Store
