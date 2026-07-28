@@ -114,3 +114,38 @@ def test_read_with_mismatched_model_raises_validation_error(tmp_path: Path):
     # Try to read it as a different model that expects a float field.
     with pytest.raises(ValidationError):
         store.read("01-sample", SampleWithTimestamp)
+
+
+def test_no_orphaned_temp_files_on_replace_failure(tmp_path: Path):
+    """Verify that temp files are cleaned up if os.replace() fails.
+
+    Simulates a failure during os.replace (e.g., disk full, permissions error) and
+    verifies that the temp file is unlinked and does not accumulate in the directory.
+    """
+    store = ArtifactStore(tmp_path)
+    original_replace = __import__("os").replace
+
+    # First write succeeds.
+    store.write("01-sample", Sample(name="a", value=1), fingerprint="fp1")
+
+    # Now make os.replace fail on the meta write (second call).
+    replace_count = [0]
+
+    def failing_replace(src, dst):
+        replace_count[0] += 1
+        # Allow the first replace (artifact), fail on the second (meta).
+        if replace_count[0] == 2:
+            raise OSError("Simulated disk full during meta replace")
+        return original_replace(src, dst)
+
+    with patch("os.replace", side_effect=failing_replace):
+        with pytest.raises(OSError, match="Simulated disk full"):
+            store.write("01-sample", Sample(name="b", value=2), fingerprint="fp2")
+
+    # Verify no orphaned temp files in work_dir.
+    tmp_files_work = list(tmp_path.glob("tmp*"))
+    assert len(tmp_files_work) == 0, f"Orphaned temp files in work_dir: {tmp_files_work}"
+
+    # Verify no orphaned temp files in meta_dir.
+    tmp_files_meta = list((tmp_path / ".meta").glob("tmp*"))
+    assert len(tmp_files_meta) == 0, f"Orphaned temp files in .meta: {tmp_files_meta}"

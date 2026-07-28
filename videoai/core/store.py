@@ -45,20 +45,30 @@ class ArtifactStore:
         # Write artifact atomically: temp file + os.replace() ensures durability.
         # If a crash occurs before both files are in place, the fingerprint will be absent
         # (stale), not pointing at current content.
-        with tempfile.NamedTemporaryFile(
-            mode="w", dir=self.work_dir, delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp.write(model.model_dump_json(indent=2))
-            tmp_artifact = tmp.name
-        os.replace(tmp_artifact, target)
+        tmp_artifact = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=self.work_dir, delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp.write(model.model_dump_json(indent=2))
+                tmp_artifact = tmp.name
+            os.replace(tmp_artifact, target)
+        finally:
+            if tmp_artifact is not None:
+                Path(tmp_artifact).unlink(missing_ok=True)
 
         # Write metadata sidecar atomically after artifact is durably in place.
-        with tempfile.NamedTemporaryFile(
-            mode="w", dir=self.meta_dir, delete=False, encoding="utf-8"
-        ) as tmp:
-            json.dump({"fingerprint": fingerprint}, tmp)
-            tmp_meta = tmp.name
-        os.replace(tmp_meta, meta_target)
+        tmp_meta = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=self.meta_dir, delete=False, encoding="utf-8"
+            ) as tmp:
+                json.dump({"fingerprint": fingerprint}, tmp)
+                tmp_meta = tmp.name
+            os.replace(tmp_meta, meta_target)
+        finally:
+            if tmp_meta is not None:
+                Path(tmp_meta).unlink(missing_ok=True)
 
         return target
 
