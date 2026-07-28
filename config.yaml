@@ -1,0 +1,20 @@
+# Provider selection per stage. Switching a value re-runs only the affected
+# stages (fingerprints include the provider name).
+providers:
+  asr: parakeet      # parakeet | mock
+  llm: claude_cli    # claude_cli | mock
+
+transcribe:
+  phrase_gap_seconds: 0.5
+  max_words_per_phrase: 30
+  cut_padding_seconds: 0.15
+
+analyze:
+  keyframes_per_phrase: 1
+  llm_model: sonnet
+  llm_timeout_seconds: 600
+
+render:
+  draft_height: 720
+  draft_crf: 23
+  audio_fade_seconds: 0.03
