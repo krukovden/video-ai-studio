@@ -71,6 +71,7 @@ def _render_segment(
     produces="06-draft",
     requires=("01-manifest", "05-timeline"),
     model=DraftResult,
+    config_keys=("render.audio_fade_seconds", "render.draft_crf"),
 )
 def render_draft(ctx: StageContext) -> DraftResult:
     manifest = ctx.store.read("01-manifest", Manifest)

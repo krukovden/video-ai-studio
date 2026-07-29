@@ -30,6 +30,7 @@ def derive_speech_spans(words: list[Word], gap: float) -> list[SpeechSpan]:
     requires=("01-manifest", "01b-sync"),
     provider_key="asr",
     model=Transcript,
+    config_keys=("transcribe.phrase_gap_seconds",),
 )
 def transcribe(ctx: StageContext) -> Transcript:
     manifest = ctx.store.read("01-manifest", Manifest)

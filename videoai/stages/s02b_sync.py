@@ -10,7 +10,13 @@ from videoai.core.registry import StageContext, stage
 from videoai.logic.sync import audio_envelope, build_sync_map, choose_primary_camera
 
 
-@stage(id="sync", produces="01b-sync", requires=("01-manifest",), model=SyncMap)
+@stage(
+    id="sync",
+    produces="01b-sync",
+    requires=("01-manifest",),
+    model=SyncMap,
+    config_keys=("sync.primary_camera",),
+)
 def sync(ctx: StageContext) -> SyncMap:
     manifest = ctx.store.read("01-manifest", Manifest)
     cache: dict[str, np.ndarray | None] = {}

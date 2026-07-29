@@ -77,6 +77,8 @@ def _segments_view(analysis: Analysis) -> str:
     provider_key="llm",
     model=Timeline,
     uses_brief=True,
+    config_keys=("transcribe.cut_padding_seconds", "analyze.llm_model"),
+    prompt=INSTRUCTIONS,
 )
 def plan(ctx: StageContext) -> Timeline:
     manifest = ctx.store.read("01-manifest", Manifest)
@@ -85,7 +87,7 @@ def plan(ctx: StageContext) -> Timeline:
 
     brief = read_brief(ctx.project_dir)
 
-    provider = resolve_llm(ctx.config.providers["llm"])
+    provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
     prompt = "\n\n".join([
         INSTRUCTIONS,
         f"Creator brief:\n{brief}" if brief.strip() else "",
@@ -107,6 +109,18 @@ def plan(ctx: StageContext) -> Timeline:
         ],
     )
     ctx.store.write("05a-storyplan", story, fingerprint="derived")
+
+    # A hallucinated phrase id is the likeliest failure at this stage; letting
+    # `build_timeline` raise a bare KeyError would say nothing about where it
+    # came from.
+    known = {segment.phrase_id for segment in analysis.segments}
+    for section in story.sections:
+        for phrase_id in section.phrase_ids:
+            if phrase_id not in known:
+                raise RuntimeError(
+                    f"planner referenced unknown phrase id {phrase_id!r} in section "
+                    f"{section.name!r}: no such phrase exists in 04-analysis"
+                )
 
     timeline = build_timeline(
         story,
