@@ -9,7 +9,7 @@ import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import load_config
 from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir
 from videoai.core.registry import StageContext
-from videoai.core.runner import ordered_stages, run_pipeline, stale_downstream
+from videoai.core.runner import StageFailure, ordered_stages, run_pipeline, stale_downstream
 from videoai.core.store import ArtifactStore, hash_parts
 
 app = typer.Typer(add_completion=False, help="Automated video pipeline.")
@@ -57,6 +57,7 @@ def run(
     config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
     stage_id: str | None = typer.Option(None, "--stage", help="Run a single stage by id"),
     force: bool = typer.Option(False, "--force", help="Ignore the cache and re-run"),
+    debug: bool = typer.Option(False, "--debug", help="Re-raise stage failures with their traceback"),
 ) -> None:
     """Run the pipeline over a project folder."""
     clip_dir = resolve_clip_dir(project)
@@ -85,13 +86,25 @@ def run(
     media_fingerprint = _media_fingerprint(project)
     brief_fingerprint = _brief_fingerprint(project)
 
-    executed = run_pipeline(
-        ctx,
-        only=stage_id,
-        force=force,
-        media_fingerprint=media_fingerprint,
-        brief_fingerprint=brief_fingerprint,
-    )
+    try:
+        executed = run_pipeline(
+            ctx,
+            only=stage_id,
+            force=force,
+            media_fingerprint=media_fingerprint,
+            brief_fingerprint=brief_fingerprint,
+        )
+    except StageFailure as failure:
+        typer.echo(f"Stage '{failure.stage_id}' failed: {failure.cause}", err=True)
+        typer.echo(
+            "Artifacts from earlier stages are kept, so fix the cause and re-run just "
+            f"this stage:\n  videoai run {project} --stage {failure.stage_id}",
+            err=True,
+        )
+        if debug:
+            raise
+        typer.echo("Run again with --debug for the full traceback.", err=True)
+        raise typer.Exit(1) from failure
     if executed:
         typer.echo("Executed: " + ", ".join(executed))
     else:

@@ -35,7 +35,10 @@ projects/my-review/
 
 Clips may also sit directly in the project folder with no `video/`/`input/`
 subfolder at all. Everything the pipeline needs to know about is either video
-files or text: it never touches anything else in the project folder.
+files or text: it never touches anything else in the project folder. Loose clips
+and per-camera subfolders can be mixed — loose ones become the camera `main` —
+and the pipeline's own `work/` and `output/` folders are never mistaken for
+cameras, so a flat project keeps working after it has produced a draft.
 
 `project.yaml` is the only file worth writing by hand. See
 [`docs/project-yaml-example.yaml`](docs/project-yaml-example.yaml) for a
@@ -57,16 +60,24 @@ open projects/my-review/output/draft.mp4
 ```
 
 `videoai run` only re-runs what actually changed. Editing `project.yaml`,
-`notes.md` or `description/` re-runs `analyze` and `plan` (and the render that
-depends on the plan) but leaves `ingest`, `quality`, `sync` and `transcribe`
-alone — they don't read the brief, so their cached artifacts are reused as-is.
-Editing a clip, or adding/removing one, invalidates from `ingest` onward.
+`notes.md` or `description/` re-runs `analyze` and `plan` but leaves `ingest`,
+`quality`, `sync` and `transcribe` alone — they don't read the brief, so their
+cached artifacts are reused as-is. Editing a clip, or adding/removing one,
+invalidates from `ingest` onward. Changing a setting in `config.yaml` re-runs the
+stages that read that setting, and editing a prompt re-runs the stage that sends
+it.
+
+A stage re-runs when the artifacts it depends on actually *change*, not merely
+when they get rewritten: re-running `plan` that produces the same timeline leaves
+the draft alone, while a hand-edited artifact under `work/` re-runs everything
+downstream of it.
 
 Useful commands:
 
 ```bash
 uv run videoai stages                              # pipeline order
 uv run videoai run projects/my-review --stage plan --force   # re-run one stage
+uv run videoai run projects/my-review --debug      # keep the traceback on failure
 uv run videoai config                              # effective configuration
 ```
 

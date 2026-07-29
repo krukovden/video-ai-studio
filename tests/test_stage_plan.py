@@ -81,10 +81,16 @@ def test_plan_stage_rejects_failed_validation(tmp_path: Path, monkeypatch):
 
 
 def test_plan_stage_rejects_unknown_phrase_id(tmp_path: Path, monkeypatch):
+    """A hallucinated phrase id is the likeliest LLM failure here; it must name the
+    id and the section rather than escaping as a bare KeyError from the timeline."""
     payload = {
         "title": "T", "description": "D", "tags": [],
         "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-77#001"]}],
     }
     ctx = _context(tmp_path, monkeypatch, payload)
-    with pytest.raises(KeyError, match="clip-77#001"):
+    with pytest.raises(RuntimeError) as error:
         plan(ctx)
+
+    assert "clip-77#001" in str(error.value)
+    assert "Hook" in str(error.value)
+    assert not isinstance(error.value, KeyError)
