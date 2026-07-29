@@ -353,3 +353,45 @@ def test_keyframes_cap_is_respected(tmp_path: Path, make_clip):
 
     assert len(frames) == 2
     assert truncated is True
+
+
+# --- Finding C1: cached keyframes must be keyed by source identity, not by the
+# phrase ordinals that shift whenever the transcript or the clip numbering moves ---
+
+
+def test_cached_keyframes_are_not_reused_across_sources(tmp_path: Path, make_clip):
+    """`clip-01#001` names a different moment of a different file once a clip that
+    sorts earlier is added. Reusing the cached frame would show the model footage
+    from the wrong source."""
+    from videoai.core.ffmpeg import probe
+    from videoai.core.store import source_key
+
+    four_three = make_clip("a.mp4", seconds=3.0, size="320x240")
+    wide = make_clip("b.mp4", seconds=3.0, size="640x360")
+    (tmp_path / "work").mkdir(exist_ok=True)
+    ctx = StageContext(
+        project_dir=tmp_path,
+        input_dir=tmp_path,
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path,
+        config=Config(),
+        store=ArtifactStore(tmp_path / "work"),
+    )
+    index = PhraseIndex(phrases=[
+        Phrase(phrase_id="clip-01#001", clip_id="clip-01", start=0.0, end=1.0,
+               text="hi", word_start=0, word_end=1),
+    ])
+
+    def _manifest_for(source: Path, width: int, height: int) -> Manifest:
+        return Manifest(clips=[ClipInfo(
+            clip_id="clip-01", path=str(source), duration=3.0, width=width, height=height,
+            fps=30.0, has_audio=True, source_key=source_key(source),
+        )])
+
+    before, _ = _keyframes(ctx, _manifest_for(four_three, 320, 240), index, ctx.config.analyze)
+    assert probe(before[0]).width == 480  # 4:3 scaled to height 360
+
+    after, _ = _keyframes(ctx, _manifest_for(wide, 640, 360), index, ctx.config.analyze)
+
+    assert probe(after[0]).width == 640  # 16:9 scaled to height 360
+    assert after[0] != before[0]

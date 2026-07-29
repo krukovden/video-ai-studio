@@ -22,6 +22,18 @@ def hash_parts(*parts: str) -> str:
     return digest.hexdigest()[:16]
 
 
+def source_key(path: Path) -> str:
+    """Short digest identifying a source file by path, size and mtime.
+
+    Derived media (audio, proxies, keyframes) must be keyed by this rather than
+    by a positional `clip-NN` id: clip ids are assigned by sort order, so adding
+    a clip that sorts earlier renumbers everything and would otherwise hand one
+    clip's cached audio and proxy to a different source.
+    """
+    stat = path.stat()
+    return hash_parts(str(path.resolve()), str(stat.st_size), str(int(stat.st_mtime)))
+
+
 class ArtifactStore:
     def __init__(self, work_dir: Path) -> None:
         self.work_dir = work_dir
@@ -41,6 +53,7 @@ class ArtifactStore:
     def write(self, name: str, model: BaseModel, fingerprint: str) -> Path:
         target = self.path(name)
         meta_target = self._meta_path(name)
+        payload = model.model_dump_json(indent=2)
 
         # Write artifact atomically: temp file + os.replace() ensures durability.
         # If a crash occurs before both files are in place, the fingerprint will be absent
@@ -50,7 +63,7 @@ class ArtifactStore:
             with tempfile.NamedTemporaryFile(
                 mode="w", dir=self.work_dir, delete=False, encoding="utf-8"
             ) as tmp:
-                tmp.write(model.model_dump_json(indent=2))
+                tmp.write(payload)
                 tmp_artifact = tmp.name
             os.replace(tmp_artifact, target)
         finally:
@@ -63,7 +76,9 @@ class ArtifactStore:
             with tempfile.NamedTemporaryFile(
                 mode="w", dir=self.meta_dir, delete=False, encoding="utf-8"
             ) as tmp:
-                json.dump({"fingerprint": fingerprint}, tmp)
+                json.dump(
+                    {"fingerprint": fingerprint, "content_hash": hash_parts(payload)}, tmp
+                )
                 tmp_meta = tmp.name
             os.replace(tmp_meta, meta_target)
         finally:
@@ -83,3 +98,24 @@ class ArtifactStore:
         if not meta.exists():
             return None
         return json.loads(meta.read_text(encoding="utf-8")).get("fingerprint")
+
+    def content_hash(self, name: str) -> str | None:
+        """Digest of the artifact as it currently sits on disk.
+
+        Read from the file rather than from the sidecar written at `write` time,
+        so that hand-editing an artifact — which this project's file-based
+        workflow invites — invalidates everything downstream of it. The sidecar
+        keeps the hash as of the last write, which is what tells a reader whether
+        the file has been edited since.
+        """
+        target = self.path(name)
+        if not target.exists():
+            return None
+        return hash_parts(target.read_text(encoding="utf-8"))
+
+    def recorded_content_hash(self, name: str) -> str | None:
+        """The content hash recorded when this artifact was last written by a stage."""
+        meta = self._meta_path(name)
+        if not meta.exists():
+            return None
+        return json.loads(meta.read_text(encoding="utf-8")).get("content_hash")

@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -114,6 +115,77 @@ def test_ingest_raises_when_no_clips_found(tmp_path: Path):
         assert "no video files" in str(error)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def _media_duration(path: Path) -> float:
+    """Duration of any media file, including the audio-only WAVs (`probe` insists
+    on a video stream)."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(json.loads(result.stdout)["format"]["duration"])
+
+
+# --- Finding C1: derived media must be keyed by source identity, not by position ---
+
+
+def test_derived_media_follows_its_source_when_a_clip_sorts_in_front(tmp_path: Path, make_clip):
+    """Adding a clip that sorts first renumbers every clip id. Positional cache
+    names would then serve the first clip's audio and proxy under the second
+    clip's entry, and ASR would transcribe the wrong footage."""
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("b_second.mp4", seconds=4.0, tone_hz=440).rename(clips / "b_second.mp4")
+    ctx = _context(project)
+
+    first = ingest(ctx)
+    assert [Path(clip.path).name for clip in first.clips] == ["b_second.mp4"]
+
+    make_clip("a_first.mp4", seconds=1.5, tone_hz=880).rename(clips / "a_first.mp4")
+    second = ingest(ctx)
+
+    assert [clip.clip_id for clip in second.clips] == ["clip-01", "clip-02"]
+    assert [Path(clip.path).name for clip in second.clips] == ["a_first.mp4", "b_second.mp4"]
+    for clip in second.clips:
+        source_duration = _media_duration(Path(clip.path))
+        assert abs(_media_duration(Path(clip.audio_path)) - source_duration) < 0.3, clip.path
+        assert abs(_media_duration(Path(clip.proxy_path)) - source_duration) < 0.3, clip.path
+
+
+def test_derived_media_is_rebuilt_when_the_source_file_changes(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=4.0).rename(clips / "a.mp4")
+    ctx = _context(project)
+
+    first = ingest(ctx)
+
+    # Same name, different footage: a re-export of the same take.
+    (clips / "a.mp4").unlink()
+    make_clip("a.mp4", seconds=1.5).rename(clips / "a.mp4")
+    second = ingest(ctx)
+
+    assert second.clips[0].proxy_path != first.clips[0].proxy_path
+    assert abs(_media_duration(Path(second.clips[0].proxy_path)) - 1.5) < 0.3
+
+
+def test_ingest_records_a_stable_source_key_per_clip(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+    make_clip("b.mp4", seconds=3.0).rename(clips / "b.mp4")
+    ctx = _context(project)
+
+    manifest = ingest(ctx)
+
+    keys = [clip.source_key for clip in manifest.clips]
+    assert all(keys)
+    assert len(set(keys)) == 2
+    assert [clip.source_key for clip in ingest(ctx).clips] == keys
 
 
 def test_ingest_labels_clips_with_their_camera(tmp_path: Path, make_clip):

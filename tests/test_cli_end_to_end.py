@@ -8,6 +8,23 @@ from videoai.cli import app
 runner = CliRunner()
 
 
+def _sidecar_for(project: Path, clip_id: str) -> Path:
+    """Where the mock ASR expects this clip's words: next to the extracted audio.
+
+    Derived media is named after the SOURCE's identity, not after the positional
+    clip id, so the manifest is the only place that knows the file name.
+    """
+    manifest = json.loads((project / "work" / "01-manifest.json").read_text(encoding="utf-8"))
+    clip = next(entry for entry in manifest["clips"] if entry["clip_id"] == clip_id)
+    return Path(clip["audio_path"]).with_suffix(".words.json")
+
+
+def _write_words(project: Path, clip_id: str, words: list[dict]) -> Path:
+    sidecar = _sidecar_for(project, clip_id)
+    sidecar.write_text(json.dumps(words), encoding="utf-8")
+    return sidecar
+
+
 def test_run_produces_draft_from_a_folder_of_clips(tmp_path: Path, make_clip, monkeypatch):
     project = tmp_path / "project"
     (project / "input").mkdir(parents=True)
@@ -48,8 +65,7 @@ def test_run_produces_draft_from_a_folder_of_clips(tmp_path: Path, make_clip, mo
     # creates on the first run; seed it by running ingest alone first.
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
     assert result.exit_code == 0, result.output
-    sidecar = project / "work" / "media" / "clip-01.words.json"
-    sidecar.write_text(json.dumps(words_payload), encoding="utf-8")
+    _write_words(project, "clip-01", words_payload)
 
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
 
@@ -77,11 +93,8 @@ def test_second_run_skips_cached_stages(tmp_path: Path, make_clip, monkeypatch):
     monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
 
     runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
-    (project / "work" / "media" / "clip-01.words.json").write_text(
-        json.dumps([{"text": "hello", "start": 0.5, "end": 0.9},
-                    {"text": "everyone", "start": 0.95, "end": 1.5}]),
-        encoding="utf-8",
-    )
+    _write_words(project, "clip-01", [{"text": "hello", "start": 0.5, "end": 0.9},
+                                      {"text": "everyone", "start": 0.95, "end": 1.5}])
     runner.invoke(app, ["run", str(project), "--config", str(config_path)])
 
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -139,8 +152,7 @@ def test_run_with_video_folder_layout_produces_draft(tmp_path: Path, make_clip, 
 
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
     assert result.exit_code == 0, result.output
-    sidecar = project / "work" / "media" / "clip-01.words.json"
-    sidecar.write_text(json.dumps(words_payload), encoding="utf-8")
+    _write_words(project, "clip-01", words_payload)
 
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
 
@@ -187,6 +199,41 @@ def test_run_fails_with_no_video_files_anywhere(tmp_path: Path):
     assert "video/" in normalized
 
 
+# --- Finding I5: a stage failure must name the stage and how to re-run it,
+# instead of surfacing as a raw traceback ---
+
+
+def test_stage_failure_names_the_stage_and_exits_non_zero(tmp_path: Path, make_clip, monkeypatch):
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=3.0).rename(project / "video" / "a.mp4")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+
+    # No mock ASR sidecar exists, so `transcribe` raises FileNotFoundError.
+    result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+
+    assert result.exit_code != 0
+    combined = result.output + (result.stderr if result.stderr_bytes else "")
+    assert "transcribe" in combined
+    assert "--stage transcribe" in combined
+    assert "Traceback" not in combined
+
+
+def test_debug_flag_keeps_the_traceback(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=3.0).rename(project / "video" / "a.mp4")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["run", str(project), "--config", str(config_path), "--debug"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, Exception)
+    assert "transcribe" in str(result.exception)
+
+
 def _executed_stages(output: str) -> set[str]:
     for line in output.splitlines():
         if line.startswith("Executed: "):
@@ -222,11 +269,8 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
     monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
 
     runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
-    (project / "work" / "media" / "clip-01.words.json").write_text(
-        json.dumps([{"text": "hello", "start": 0.5, "end": 0.9},
-                    {"text": "everyone", "start": 0.95, "end": 1.5}]),
-        encoding="utf-8",
-    )
+    _write_words(project, "clip-01", [{"text": "hello", "start": 0.5, "end": 0.9},
+                                      {"text": "everyone", "start": 0.95, "end": 1.5}])
 
     first = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert first.exit_code == 0, first.output
@@ -242,6 +286,15 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
     # Different length so the fingerprint changes even if the filesystem's mtime
     # resolution is too coarse to register the edit within the same test run.
     notes.write_text("A much longer brief that changes the creative direction entirely.\n", encoding="utf-8")
+    # A different brief produces a different edit; the mock LLM has to say so,
+    # otherwise the identical timeline it returns correctly leaves the render cached.
+    llm_path.write_text(json.dumps({
+        "segments": [{"phrase_id": "clip-01#001", "content": "a different reading", "delivery_score": 7,
+                      "visual_score": 8, "emotion": "calm", "is_failed_take": False,
+                      "shorts_candidate": False}],
+        "title": "T2", "description": "D2", "tags": [],
+        "sections": [{"name": "Opening", "goal": "open differently", "phrase_ids": ["clip-01#001"]}],
+    }), encoding="utf-8")
 
     after_brief_edit = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert after_brief_edit.exit_code == 0, after_brief_edit.output
@@ -281,11 +334,8 @@ def test_adding_a_video_file_reruns_every_stage(tmp_path: Path, make_clip, monke
     runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
     manifest = json.loads((project / "work" / "01-manifest.json").read_text(encoding="utf-8"))
     primary_clip_id = next(c["clip_id"] for c in manifest["clips"] if c["camera"] == "cam-a")
-    (project / "work" / "media" / f"{primary_clip_id}.words.json").write_text(
-        json.dumps([{"text": "hello", "start": 0.5, "end": 0.9},
-                    {"text": "everyone", "start": 0.95, "end": 1.5}]),
-        encoding="utf-8",
-    )
+    _write_words(project, primary_clip_id, [{"text": "hello", "start": 0.5, "end": 0.9},
+                                            {"text": "everyone", "start": 0.95, "end": 1.5}])
 
     first = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert first.exit_code == 0, first.output
@@ -304,6 +354,44 @@ def test_adding_a_video_file_reruns_every_stage(tmp_path: Path, make_clip, monke
 
     assert after_new_clip.exit_code == 0, after_new_clip.output
     assert _executed_stages(after_new_clip.output) == ALL_STAGE_IDS
+
+
+def test_changing_a_render_setting_reruns_only_the_render(tmp_path: Path, make_clip, monkeypatch):
+    """Finding I1 end to end: a setting a stage reads is one of its inputs. Before
+    the fix `draft_crf` was invisible to every fingerprint and the pipeline said
+    "nothing to do"."""
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    llm_path = tmp_path / "llm.json"
+    llm_path.write_text(json.dumps({
+        "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
+                      "visual_score": 8, "emotion": "excited", "is_failed_take": False,
+                      "shorts_candidate": False}],
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
+    }), encoding="utf-8")
+    monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
+
+    runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
+    _write_words(project, "clip-01", [{"text": "hello", "start": 0.5, "end": 0.9},
+                                      {"text": "everyone", "start": 0.95, "end": 1.5}])
+    first = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert first.exit_code == 0, first.output
+    cached = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert "nothing to do" in cached.output.lower()
+
+    config_path.write_text(
+        "providers:\n  asr: mock\n  llm: mock\nrender:\n  draft_crf: 30\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert _executed_stages(result.output) == {"render_draft"}
 
 
 def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, make_clip, monkeypatch):
@@ -327,11 +415,8 @@ def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, ma
     monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
 
     runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
-    (project / "work" / "media" / "clip-01.words.json").write_text(
-        json.dumps([{"text": "hello", "start": 0.5, "end": 0.9},
-                    {"text": "everyone", "start": 0.95, "end": 1.5}]),
-        encoding="utf-8",
-    )
+    _write_words(project, "clip-01", [{"text": "hello", "start": 0.5, "end": 0.9},
+                                      {"text": "everyone", "start": 0.95, "end": 1.5}])
 
     full = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert full.exit_code == 0, full.output
@@ -351,7 +436,6 @@ def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, ma
     # Add a clip (changes the media fingerprint), then re-run only ingest instead of
     # the full pipeline: everything downstream of the manifest is now stale.
     make_clip("b.mp4", seconds=2.0).rename(project / "video" / "b.mp4")
-    sidecar_for_new_clip = project / "work" / "media" / "clip-02.words.json"
 
     single_stage = runner.invoke(
         app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"]
@@ -362,5 +446,5 @@ def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, ma
     for stage_id in ("quality", "sync", "transcribe", "analyze", "plan", "render_draft"):
         assert stage_id in single_stage.output
     # The notice only names stale stages; it must not run them itself.
-    assert not sidecar_for_new_clip.exists()
+    assert not _sidecar_for(project, "clip-02").exists()
     assert _executed_stages(single_stage.output) == {"ingest"}

@@ -17,6 +17,7 @@ from videoai.core.models import (
 )
 from videoai.core.project import read_brief
 from videoai.core.registry import StageContext, stage
+from videoai.core.store import hash_parts
 from videoai.logic.phrases import build_phrases, pack_transcript
 from videoai.logic.takes import detect_take_groups
 from videoai.providers.base import resolve_llm
@@ -88,6 +89,11 @@ def _keyframes(
     Returns the frame paths plus whether the cap cut the list short, so the
     caller can tell the model it is looking at a sample rather than everything.
     `keyframes_per_phrase == 0` disables extraction entirely.
+
+    Cached frames are keyed by the source clip's identity plus the timestamp, not
+    by phrase id: phrase ordinals shift whenever the transcript changes, so a
+    phrase-id key would serve a frame taken from a different moment (or, after a
+    clip renumbering, from a different clip entirely).
     """
     if settings.keyframes_per_phrase <= 0:
         return [], False
@@ -99,11 +105,13 @@ def _keyframes(
             truncated = True
             break
         clip = manifest.by_id(phrase.clip_id)
-        target = frames_dir / f"{phrase.phrase_id.replace('#', '-')}.jpg"
+        at = (phrase.start + phrase.end) / 2
+        key = clip.source_key or hash_parts(clip.path)
+        target = frames_dir / f"{key}-{round(at * 1000):08d}.jpg"
         if not target.exists():
             source = Path(clip.proxy_path or clip.path)
             if source.exists():
-                extract_frame(source, at=(phrase.start + phrase.end) / 2, dst=target)
+                extract_frame(source, at=at, dst=target)
         if target.exists():
             paths.append(target)
     return paths, truncated
@@ -188,6 +196,14 @@ def _score_segment(phrase: Phrase, item: dict | None, takes: TakeGroups) -> Segm
     provider_key="llm",
     model=Analysis,
     uses_brief=True,
+    config_keys=(
+        "transcribe.phrase_gap_seconds",
+        "transcribe.max_words_per_phrase",
+        "analyze.keyframes_per_phrase",
+        "analyze.max_keyframes",
+        "analyze.llm_model",
+    ),
+    prompt=INSTRUCTIONS,
 )
 def analyze(ctx: StageContext) -> Analysis:
     manifest = ctx.store.read("01-manifest", Manifest)
@@ -200,7 +216,7 @@ def analyze(ctx: StageContext) -> Analysis:
     ctx.store.write("03b-phrases", index, fingerprint="derived")
     ctx.store.write("03c-takes", takes, fingerprint="derived")
 
-    provider = resolve_llm(ctx.config.providers["llm"])
+    provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
     prompt = build_analysis_prompt(pack_transcript(index), takes, quality, read_brief(ctx.project_dir))
     frames, truncated = _keyframes(ctx, manifest, index, ctx.config.analyze)
     if truncated:

@@ -14,6 +14,10 @@ class ClipInfo(BaseModel):
     has_audio: bool
     camera: str = "main"
     recorded_at: float | None = None
+    # Digest of the source file's identity (path, size, mtime). `clip_id` is
+    # positional and shifts when clips are added; this does not, so every piece
+    # of derived media is keyed by it.
+    source_key: str = ""
     audio_path: str | None = None
     proxy_path: str | None = None
 
