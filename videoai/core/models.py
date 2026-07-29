@@ -205,3 +205,9 @@ class Timeline(BaseModel):
     @property
     def duration(self) -> float:
         return sum(clip.dur for clip in self.clips)
+
+
+class DraftResult(BaseModel):
+    path: str
+    duration: float
+    segment_count: int

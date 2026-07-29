@@ -26,6 +26,11 @@ def _ordered_stages() -> list[StageSpec]:
     return ordered
 
 
+def ordered_stages() -> list[StageSpec]:
+    """Public alias for `_ordered_stages`, for callers outside this module (e.g. the CLI)."""
+    return _ordered_stages()
+
+
 def _fingerprint(spec: StageSpec, ctx: StageContext, extra_fingerprint: str) -> str:
     parts = [spec.id, spec.version, extra_fingerprint]
     if spec.provider_key:
