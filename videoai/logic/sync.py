@@ -126,14 +126,27 @@ def build_sync_map(
 
     placements: dict[str, tuple[float, str]] = {}
     for camera, clips in cameras.items():
-        if all(clip.recorded_at is not None for clip in clips):
-            for clip in clips:
-                placements[clip.clip_id] = (float(clip.recorded_at), "metadata")
-        else:
+        if not any(clip.recorded_at is not None for clip in clips):
             cursor = 0.0
             for clip in clips:
                 placements[clip.clip_id] = (cursor, "sequential")
                 cursor += clip.duration
+            continue
+
+        # Placement is per clip, not per camera: a clip losing its `creation_time`
+        # tag (re-encoded, AirDropped, edited) must not discard every other real
+        # timestamp on the same camera and fall back to manifest/filename order,
+        # which is demonstrably not recording order. Tagged clips are placed by
+        # their own `recorded_at`; untagged ones fill the gap right after
+        # whichever clip was placed immediately before them.
+        cursor = 0.0
+        for clip in clips:
+            if clip.recorded_at is not None:
+                start, method = float(clip.recorded_at), "metadata"
+            else:
+                start, method = cursor, "sequential"
+            placements[clip.clip_id] = (start, method)
+            cursor = start + clip.duration
 
     corrections: dict[str, float] = {name: 0.0 for name in cameras}
     methods: dict[str, str] = {}

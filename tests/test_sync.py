@@ -64,6 +64,19 @@ def test_estimate_offset_reports_low_confidence_for_unrelated_audio(tmp_path: Pa
     assert confidence < 2.0
 
 
+def test_estimate_offset_confidence_stays_low_for_unrelated_audio_across_seeds(tmp_path: Path):
+    # Guards the peak-to-runner-up confidence formula against silent regression:
+    # a single fixed seed passing is not proof the formula generalises.
+    reference = audio_envelope(_write_wav(tmp_path / "ref.wav", _bursts(8.0, [1.0, 2.0, 3.0])))
+    for seed in range(5):
+        other = _write_wav(
+            tmp_path / f"other-{seed}.wav",
+            np.random.default_rng(seed).normal(0, 0.3, 16000 * 8),
+        )
+        _, confidence = estimate_offset(reference, audio_envelope(other))
+        assert confidence < 2.0, f"seed={seed} produced confidence={confidence}"
+
+
 def _clip(clip_id: str, camera: str, recorded_at: float | None, duration: float = 10.0) -> ClipInfo:
     return ClipInfo(
         clip_id=clip_id, path=f"/tmp/{clip_id}.mov", duration=duration, width=1920,
@@ -95,6 +108,41 @@ def test_missing_recorded_at_falls_back_to_sequential_placement():
     assert sync.by_id("clip-01").global_start == 0.0
     assert sync.by_id("clip-02").global_start == 10.0
     assert sync.by_id("clip-02").method == "sequential"
+
+
+def test_metadata_placement_wins_over_manifest_order():
+    # clip-01 comes first in the manifest but recorded later; its own
+    # recorded_at must place it after clip-02, not before.
+    manifest = Manifest(clips=[
+        _clip("clip-01", "main", 2000.0, duration=10.0),
+        _clip("clip-02", "main", 1000.0, duration=10.0),
+    ])
+
+    sync = build_sync_map(manifest, envelope_of=lambda clip: None)
+
+    assert sync.by_id("clip-02").global_start == 0.0
+    assert sync.by_id("clip-01").global_start == 1000.0
+    assert sync.by_id("clip-01").method == "metadata"
+    assert sync.by_id("clip-02").method == "metadata"
+
+
+def test_untagged_clip_is_placed_sequentially_without_discarding_tagged_neighbours():
+    # A clip with no recorded_at (re-encoded, AirDropped, edited) must not throw
+    # away the real timestamps on its camera's other clips.
+    manifest = Manifest(clips=[
+        _clip("clip-01", "main", 1000.0, duration=10.0),
+        _clip("clip-02", "main", None, duration=5.0),
+        _clip("clip-03", "main", 1100.0, duration=10.0),
+    ])
+
+    sync = build_sync_map(manifest, envelope_of=lambda clip: None)
+
+    assert sync.by_id("clip-01").global_start == 0.0
+    assert sync.by_id("clip-01").method == "metadata"
+    assert sync.by_id("clip-02").global_start == 10.0
+    assert sync.by_id("clip-02").method == "sequential"
+    assert sync.by_id("clip-03").global_start == 100.0
+    assert sync.by_id("clip-03").method == "metadata"
 
 
 def test_two_cameras_are_aligned_by_audio_when_clocks_disagree():
