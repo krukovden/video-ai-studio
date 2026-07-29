@@ -74,6 +74,10 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
             Config(analyze=AnalyzeSettings(insert_max_words_per_second=0.2)),
             {"analyze"},
         ),
+        (
+            Config(analyze=AnalyzeSettings(describe_inserts=False)),
+            {"analyze"},
+        ),
         (Config(render=RenderSettings(audio_fade_seconds=0.5)), {"render_draft"}),
         (Config(render=RenderSettings(draft_crf=30)), {"render_draft"}),
         (Config(plan=PlanSettings(exclude_phrases=["clip-01#004"])), {"plan"}),

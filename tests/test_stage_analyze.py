@@ -9,6 +9,7 @@ from videoai.core.models import (
     ClipInfo,
     ClipQuality,
     ClipTranscript,
+    InsertClip,
     Manifest,
     Phrase,
     PhraseIndex,
@@ -18,7 +19,14 @@ from videoai.core.models import (
 )
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
-from videoai.stages.s04_analyze import _keyframes, analyze, build_analysis_prompt
+from videoai.stages.s04_analyze import (
+    _describe_inserts,
+    _insert_keyframes,
+    _keyframes,
+    analyze,
+    build_analysis_prompt,
+    build_insert_description_prompt,
+)
 
 
 def _context(tmp_path: Path, monkeypatch, llm_payload: dict) -> StageContext:
@@ -487,3 +495,179 @@ def test_insert_threshold_is_configurable(tmp_path: Path, monkeypatch):
 
     # Only the wordless clip survives a threshold below clip-01's 0.3 words/s.
     assert [insert.clip_id for insert in result.inserts] == ["clip-10"]
+
+
+# --- Insert descriptions: the planner cannot see a silent clip's content, so the
+# model is shown its keyframes and asked to name what is physically happening ---
+
+
+def _seed_with_a_describable_insert(ctx: StageContext, insert_path: Path, duration: float) -> None:
+    ctx.store.write(
+        "01-manifest",
+        Manifest(clips=[
+            ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=10.0, width=320,
+                     height=240, fps=30.0, has_audio=True),
+            ClipInfo(clip_id="clip-10", path=str(insert_path), duration=duration,
+                     width=320, height=240, fps=30.0, has_audio=True),
+        ]),
+        fingerprint="fp",
+    )
+    ctx.store.write(
+        "02-quality",
+        QualityReport(clips=[
+            ClipQuality(clip_id=clip_id, blur=0.1, motion=0.2, black_ratio=0.0, usable=True)
+            for clip_id in ("clip-01", "clip-10")
+        ]),
+        fingerprint="fp",
+    )
+    words = [
+        Word(text="Look", start=0.0, end=0.3),
+        Word(text="here", start=0.35, end=0.7),
+        Word(text="Wow", start=2.0, end=2.4),
+    ]
+    ctx.store.write(
+        "03-transcript",
+        Transcript(provider="mock", clips=[
+            ClipTranscript(clip_id="clip-01", words=words),
+            ClipTranscript(clip_id="clip-10", words=[]),  # silent: the insert
+        ]),
+        fingerprint="fp",
+    )
+
+
+def _segments_payload_for_clip_01() -> list[dict]:
+    return [
+        {"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 8,
+         "visual_score": 7, "emotion": "excited", "is_failed_take": False,
+         "shorts_candidate": True},
+        {"phrase_id": "clip-01#002", "content": "reaction", "delivery_score": 5,
+         "visual_score": 6, "emotion": "calm", "is_failed_take": False,
+         "shorts_candidate": False},
+    ]
+
+
+def test_insert_description_reaches_analysis_inserts(tmp_path: Path, monkeypatch, make_clip):
+    clip_path = make_clip("insert.mp4", seconds=6.0)
+    payload = {
+        "segments": _segments_payload_for_clip_01(),
+        "descriptions": {"clip-10": "Filling the toy with paint using the syringe."},
+    }
+    ctx = _context(tmp_path, monkeypatch, payload)
+    _seed_with_a_describable_insert(ctx, clip_path, duration=6.0)
+
+    result = analyze(ctx)
+
+    insert = next(i for i in result.inserts if i.clip_id == "clip-10")
+    assert insert.description == "Filling the toy with paint using the syringe."
+
+
+def test_clip_missing_from_description_reply_ends_up_empty_and_stage_succeeds(
+    tmp_path: Path, monkeypatch, make_clip
+):
+    clip_path = make_clip("insert.mp4", seconds=6.0)
+    payload = {
+        "segments": _segments_payload_for_clip_01(),
+        "descriptions": {},  # the model never answered about clip-10
+    }
+    ctx = _context(tmp_path, monkeypatch, payload)
+    _seed_with_a_describable_insert(ctx, clip_path, duration=6.0)
+
+    result = analyze(ctx)
+
+    insert = next(i for i in result.inserts if i.clip_id == "clip-10")
+    assert insert.description == ""
+
+
+def _insert_manifest_and_context(tmp_path: Path, clip_path: Path, config: Config) -> tuple[Manifest, StageContext]:
+    manifest = Manifest(clips=[ClipInfo(
+        clip_id="clip-10", path=str(clip_path), duration=6.0,
+        width=320, height=240, fps=30.0, has_audio=True,
+    )])
+    (tmp_path / "work").mkdir(exist_ok=True)
+    ctx = StageContext(
+        project_dir=tmp_path, input_dir=tmp_path, work_dir=tmp_path / "work",
+        output_dir=tmp_path, config=config, store=ArtifactStore(tmp_path / "work"),
+    )
+    return manifest, ctx
+
+
+def test_insert_keyframes_extracted_even_when_keyframes_per_phrase_zero(tmp_path: Path, make_clip):
+    clip_path = make_clip("insert.mp4", seconds=6.0)
+    manifest, ctx = _insert_manifest_and_context(
+        tmp_path, clip_path, Config(analyze=AnalyzeSettings(keyframes_per_phrase=0))
+    )
+    inserts = [InsertClip(clip_id="clip-10", duration=6.0, speech_density=0.0)]
+
+    frames_by_clip = _insert_keyframes(ctx, manifest, inserts, ctx.config.analyze)
+
+    assert len(frames_by_clip["clip-10"]) == 3
+
+
+def test_insert_keyframes_not_extracted_when_describe_inserts_false(tmp_path: Path, make_clip):
+    clip_path = make_clip("insert.mp4", seconds=6.0)
+    manifest, ctx = _insert_manifest_and_context(
+        tmp_path, clip_path, Config(analyze=AnalyzeSettings(describe_inserts=False))
+    )
+    inserts = [InsertClip(clip_id="clip-10", duration=6.0, speech_density=0.0)]
+
+    frames_by_clip = _insert_keyframes(ctx, manifest, inserts, ctx.config.analyze)
+
+    assert frames_by_clip == {}
+    assert not (ctx.work_dir / "keyframes").exists()
+
+
+def test_insert_keyframes_already_present_are_not_re_extracted(
+    tmp_path: Path, make_clip, monkeypatch
+):
+    clip_path = make_clip("insert.mp4", seconds=6.0)
+    manifest, ctx = _insert_manifest_and_context(tmp_path, clip_path, Config())
+    inserts = [InsertClip(clip_id="clip-10", duration=6.0, speech_density=0.0)]
+
+    first = _insert_keyframes(ctx, manifest, inserts, ctx.config.analyze)
+    assert len(first["clip-10"]) == 3
+
+    import videoai.stages.s04_analyze as s04
+
+    calls: list[object] = []
+    real_extract_frame = s04.extract_frame
+
+    def _counting_extract_frame(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_extract_frame(*args, **kwargs)
+
+    monkeypatch.setattr(s04, "extract_frame", _counting_extract_frame)
+
+    second = _insert_keyframes(ctx, manifest, inserts, ctx.config.analyze)
+
+    assert second["clip-10"] == first["clip-10"]
+    assert calls == []  # every frame was already cached on disk
+
+
+def test_build_insert_description_prompt_lists_frame_paths_per_clip():
+    inserts = [
+        InsertClip(clip_id="clip-09", duration=5.0, speech_density=0.0),
+        InsertClip(clip_id="clip-10", duration=7.0, speech_density=0.0),
+    ]
+    frames_by_clip = {
+        "clip-09": [Path("/tmp/kf/a1.jpg"), Path("/tmp/kf/a2.jpg"), Path("/tmp/kf/a3.jpg")],
+        "clip-10": [Path("/tmp/kf/b1.jpg"), Path("/tmp/kf/b2.jpg"), Path("/tmp/kf/b3.jpg")],
+    }
+
+    prompt = build_insert_description_prompt(inserts, frames_by_clip, brief="A pop-toy review.")
+
+    assert "clip-09" in prompt
+    assert "/tmp/kf/a1.jpg" in prompt
+    assert "clip-10" in prompt
+    assert "/tmp/kf/b3.jpg" in prompt
+    assert "A pop-toy review." in prompt
+
+
+def test_describe_inserts_returns_empty_when_no_inserts(tmp_path: Path):
+    manifest = Manifest(clips=[])
+    (tmp_path / "work").mkdir(exist_ok=True)
+    ctx = StageContext(
+        project_dir=tmp_path, input_dir=tmp_path, work_dir=tmp_path / "work",
+        output_dir=tmp_path, config=Config(), store=ArtifactStore(tmp_path / "work"),
+    )
+
+    assert _describe_inserts(ctx, manifest, [], "brief") == {}

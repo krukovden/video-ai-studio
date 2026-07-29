@@ -321,3 +321,48 @@ def test_insert_listing_reaches_the_prompt(tmp_path: Path, monkeypatch):
     assert "Silent visual inserts" in seen[0]
     assert "insert:clip-10" in seen[0]
     assert "no narration" in seen[0]
+
+
+def test_insert_description_reaches_the_plan_prompt(tmp_path: Path, monkeypatch):
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#001"]}],
+    }
+    described_insert = InsertClip(
+        clip_id="clip-10", duration=7.0, speech_density=0.0,
+        description="The bubbles are already formed and a hand is reaching in to pop them.",
+    )
+    ctx = _context(tmp_path, monkeypatch, payload,
+                   extra_clips=[_silent_clip()], inserts=[described_insert])
+    from videoai.providers.llm_mock import MockLLM
+
+    seen: list[str] = []
+    original = MockLLM.complete_json
+
+    def _capture(self, prompt, images, timeout):
+        seen.append(prompt)
+        return original(self, prompt, images, timeout)
+
+    monkeypatch.setattr(MockLLM, "complete_json", _capture)
+
+    plan(ctx)
+
+    assert "The bubbles are already formed and a hand is reaching in to pop them." in seen[0]
+
+
+def test_inserts_view_includes_description_when_present():
+    from videoai.stages.s05_plan import _inserts_view
+
+    analysis = Analysis(
+        provider="mock",
+        segments=[],
+        inserts=[InsertClip(
+            clip_id="clip-10", duration=7.0, speech_density=0.0,
+            description="Filling the toy with paint using the syringe.",
+        )],
+    )
+    sync = SyncMap(clips=[ClipSync(clip_id="clip-10", camera="main", global_start=0.0, method="metadata")])
+
+    view = _inserts_view(analysis, sync, set())
+
+    assert "Filling the toy with paint using the syringe." in view

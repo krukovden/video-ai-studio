@@ -55,12 +55,19 @@ Rules:
 
 Silent visual inserts:
 - Some clips carry no narration at all. They are listed separately below, under
-  "Silent visual inserts", with their length and where they sit in the recording
-  relative to the narrated phrases. Nobody speaks on them: they are what the
-  camera saw, usually shot close up.
+  "Silent visual inserts", with their length, where they sit in the recording
+  relative to the narrated phrases, and — where available — a one-sentence
+  description of what the clip actually shows. Nobody speaks on them: they are
+  what the camera saw, usually shot close up.
 - They exist to be cut in where they show what the child is talking about. A
   close-up of the thing happening is often worth more than another line about it,
-  so use them.
+  so use them. Match an insert to what is being said or shown around it using its
+  description, not just its position: a close-up of the syringe filling the toy
+  belongs where the child talks about filling it, a close-up of a bubble being
+  popped belongs in the popping section, even if that section is not where the
+  clip happens to sit chronologically.
+- Prefer placing an insert immediately AFTER the line it illustrates rather than
+  before it, so the viewer hears what is coming and then sees it happen.
 - Place one by putting "insert:<clip_id>" into a section's phrase_ids, at the
   position in the sequence where it should appear — for example
   "phrase_ids": ["clip-01#004", "insert:clip-10", "clip-01#005"].
@@ -136,9 +143,10 @@ def _inserts_view(analysis: Analysis, sync: SyncMap, excluded: set[str]) -> str:
                 parts.append(f"before {after[0]}")
             if parts:
                 where = "recorded " + " and ".join(parts)
+        shows = f' - shows: "{insert.description}"' if insert.description else ""
         lines.append(
             f"insert:{insert.clip_id} ({insert.duration:.1f}s, "
-            f"{insert.speech_density:.2f} words/s) - {where}"
+            f"{insert.speech_density:.2f} words/s) - {where}{shows}"
         )
     return "\n".join(lines)
 

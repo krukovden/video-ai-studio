@@ -7,6 +7,7 @@ from videoai.config import AnalyzeSettings
 from videoai.core.ffmpeg import extract_frame
 from videoai.core.models import (
     Analysis,
+    InsertClip,
     Manifest,
     Phrase,
     PhraseIndex,
@@ -80,6 +81,112 @@ def build_analysis_prompt(
     sections.append("Technical quality per clip:\n" + "\n".join(quality_lines))
     sections.append(f"Transcript:\n{packed}")
     return "\n\n".join(sections)
+
+
+INSERT_DESCRIPTION_INSTRUCTIONS = """You are looking at silent visual insert clips from a
+child's toy review video: shots with no narration on them at all. For each clip below,
+three frames are listed, taken near its start, middle and end. Open each file path with
+your file tools and look at what is actually happening.
+
+Reply with one JSON document:
+
+{"descriptions": {"clip-09": "one short sentence naming the action", "clip-10": "..."}}
+
+Rules:
+- Include every clip id listed below, using its exact id.
+- One short sentence per clip, naming the specific physical action (e.g. filling,
+  popping, squeezing) so that visually similar clips can be told apart from each other.
+- Use the creator's own vocabulary for the toy where the brief below gives one.
+- No preamble, no extra keys, no commentary outside the JSON document.
+"""
+
+
+def build_insert_description_prompt(
+    inserts: list[InsertClip], frames_by_clip: dict[str, list[Path]], brief: str
+) -> str:
+    sections = [INSERT_DESCRIPTION_INSTRUCTIONS]
+    if brief.strip():
+        sections.append(f"Creator brief:\n{brief.strip()}")
+    clip_blocks = []
+    for insert in inserts:
+        frames = frames_by_clip.get(insert.clip_id)
+        if not frames:
+            continue
+        listing = "\n".join(str(path) for path in frames)
+        clip_blocks.append(f"{insert.clip_id} ({insert.duration:.1f}s):\n{listing}")
+    sections.append("Clips:\n\n" + "\n\n".join(clip_blocks))
+    return "\n\n".join(sections)
+
+
+def _insert_keyframes(
+    ctx: StageContext,
+    manifest: Manifest,
+    inserts: list[InsertClip],
+    settings: AnalyzeSettings,
+) -> dict[str, list[Path]]:
+    """Three cached frames per insert clip, at 20%/50%/80% of its duration.
+
+    Keyed by source identity plus timestamp, exactly like `_keyframes`: an insert
+    clip has no phrase to hang a key off, but the same renumbering hazard applies,
+    so the key must not depend on the clip's ordinal id either.
+    `describe_inserts=False` disables extraction entirely, the same way
+    `keyframes_per_phrase == 0` does for phrase keyframes - the two settings are
+    independent of each other on purpose.
+    """
+    if not settings.describe_inserts:
+        return {}
+    frames_dir = ctx.work_dir / "keyframes"
+    by_clip: dict[str, list[Path]] = {}
+    for insert in inserts:
+        clip = manifest.by_id(insert.clip_id)
+        key = clip.source_key or hash_parts(clip.path)
+        source = Path(clip.proxy_path or clip.path)
+        paths: list[Path] = []
+        for fraction in (0.2, 0.5, 0.8):
+            at = insert.duration * fraction
+            target = frames_dir / f"{key}-{round(at * 1000):08d}.jpg"
+            if not target.exists() and source.exists():
+                extract_frame(source, at=at, dst=target)
+            if target.exists():
+                paths.append(target)
+        if paths:
+            by_clip[insert.clip_id] = paths
+    return by_clip
+
+
+def _describe_inserts(
+    ctx: StageContext, manifest: Manifest, inserts: list[InsertClip], brief: str
+) -> dict[str, str]:
+    """One batched model call describing every insert clip from its keyframes.
+
+    The planner cannot otherwise see what a silent clip shows and has been
+    observed placing it in the wrong section. A missing or unparsable reply
+    degrades to an empty description per clip rather than failing the stage:
+    a worse placement is not the same failure as a broken pipeline.
+    """
+    if not inserts:
+        return {}
+    frames_by_clip = _insert_keyframes(ctx, manifest, inserts, ctx.config.analyze)
+    if not frames_by_clip:
+        return {}
+    provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
+    prompt = build_insert_description_prompt(inserts, frames_by_clip, brief)
+    all_frames = [frame for frames in frames_by_clip.values() for frame in frames]
+    try:
+        response = provider.complete_json(
+            prompt, all_frames, ctx.config.analyze.llm_timeout_seconds
+        )
+    except Exception:
+        return {}
+    raw = response.get("descriptions")
+    if not isinstance(raw, dict):
+        return {}
+    descriptions: dict[str, str] = {}
+    for insert in inserts:
+        value = raw.get(insert.clip_id)
+        if isinstance(value, str) and value.strip():
+            descriptions[insert.clip_id] = value.strip()
+    return descriptions
 
 
 def _keyframes(
@@ -204,6 +311,7 @@ def _score_segment(phrase: Phrase, item: dict | None, takes: TakeGroups) -> Segm
         "analyze.max_keyframes",
         "analyze.llm_model",
         "analyze.insert_max_words_per_second",
+        "analyze.describe_inserts",
     ),
     prompt=INSTRUCTIONS,
 )
@@ -218,8 +326,9 @@ def analyze(ctx: StageContext) -> Analysis:
     ctx.store.write("03b-phrases", index, fingerprint="derived")
     ctx.store.write("03c-takes", takes, fingerprint="derived")
 
+    brief = read_brief(ctx.project_dir)
     provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
-    prompt = build_analysis_prompt(pack_transcript(index), takes, quality, read_brief(ctx.project_dir))
+    prompt = build_analysis_prompt(pack_transcript(index), takes, quality, brief)
     frames, truncated = _keyframes(ctx, manifest, index, ctx.config.analyze)
     if truncated:
         prompt += (
@@ -267,4 +376,9 @@ def analyze(ctx: StageContext) -> Analysis:
     inserts = detect_inserts(
         manifest, transcript, ctx.config.analyze.insert_max_words_per_second
     )
+    descriptions = _describe_inserts(ctx, manifest, inserts, brief)
+    inserts = [
+        insert.model_copy(update={"description": descriptions.get(insert.clip_id, "")})
+        for insert in inserts
+    ]
     return Analysis(provider=provider.name, segments=segments, inserts=inserts)

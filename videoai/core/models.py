@@ -175,6 +175,11 @@ class InsertClip(BaseModel):
     duration: float
     recorded_at: float | None = None
     speech_density: float = 0.0
+    # One short sentence naming what the clip physically shows, from the LLM
+    # looking at its keyframes. Empty when description generation is disabled
+    # or the model's reply did not cover this clip; a missing description
+    # degrades placement in the plan stage, it does not block anything.
+    description: str = ""
 
 
 class Analysis(BaseModel):

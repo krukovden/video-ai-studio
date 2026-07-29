@@ -32,6 +32,11 @@ class AnalyzeSettings(BaseModel):
     # footage with no narration to select it by, offered to the planner as a shot
     # rather than as a line.
     insert_max_words_per_second: float = 0.5
+    # Describe each insert clip from its keyframes so the planner can place it by
+    # what it shows rather than guessing from chronology alone. Independent of
+    # `keyframes_per_phrase`: turning phrase keyframes off must not silently turn
+    # this off too, since insert descriptions are the whole point of an insert.
+    describe_inserts: bool = True
 
 
 class RenderSettings(BaseModel):
