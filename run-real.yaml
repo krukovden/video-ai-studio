@@ -1,0 +1,24 @@
+providers:
+  asr: parakeet
+  llm: claude_cli
+transcribe:
+  phrase_gap_seconds: 0.5
+  max_words_per_phrase: 30
+  cut_padding_seconds: 0.15
+analyze:
+  keyframes_per_phrase: 1
+  insert_max_words_per_second: 0.5
+  llm_model: sonnet
+  llm_timeout_seconds: 1800
+render:
+  draft_height: 540
+  draft_crf: 26
+  audio_fade_seconds: 0.03
+sync:
+  primary_camera:
+plan:
+  exclude_phrases:
+    - clip-04#002        # an adult walks in front of the camera during this shot
+  gain_db_by_beat: {}
+  reject_adult_in_frame: true
+  reject_unusable_shots: true

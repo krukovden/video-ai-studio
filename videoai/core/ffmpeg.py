@@ -20,6 +20,39 @@ class ProbeResult:
     fps: float
     has_audio: bool
     created_at: float | None = None
+    # Degrees from the container's display matrix. iPhone footage records
+    # landscape frames plus a quarter turn rather than portrait frames, so
+    # `width`/`height` alone describe a sideways picture.
+    rotation: float = 0.0
+
+    @property
+    def quarter_turned(self) -> bool:
+        return round(abs(self.rotation)) % 180 == 90
+
+    @property
+    def display_width(self) -> int:
+        return self.height if self.quarter_turned else self.width
+
+    @property
+    def display_height(self) -> int:
+        return self.width if self.quarter_turned else self.height
+
+
+def _stream_rotation(video: dict) -> float:
+    """Rotation in degrees from either place ffprobe reports it."""
+    for entry in video.get("side_data_list") or []:
+        if "rotation" in entry:
+            try:
+                return float(entry["rotation"])
+            except (TypeError, ValueError):
+                return 0.0
+    raw = (video.get("tags") or {}).get("rotate")
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
 
 
 def run_ffmpeg(args: list[str]) -> None:
@@ -92,6 +125,7 @@ def probe(path: Path) -> ProbeResult:
         fps=fps,
         has_audio=any(s.get("codec_type") == "audio" for s in streams),
         created_at=created_at,
+        rotation=_stream_rotation(video),
     )
 
 
@@ -113,6 +147,42 @@ def _has_videotoolbox_encoder() -> bool:
         ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True
     )
     return "h264_videotoolbox" in result.stdout
+
+
+def videotoolbox_available() -> bool:
+    """True when this build can hand H.264 encoding — and HEVC decoding — to the
+    Apple media engine. One check covers both: `--enable-videotoolbox` brings in
+    the hwaccel and the encoder together."""
+    return _has_videotoolbox_encoder()
+
+
+# libx264 counts quality in quantiser steps (0 lossless .. 51 unwatchable);
+# VideoToolbox counts it as a percentage running the other way. Converting one to
+# the other keeps a single `crf` setting meaningful whichever encoder answers.
+QP_RANGE = 51
+
+
+def h264_encode_args(crf: int, hardware: bool) -> list[str]:
+    """Encoder arguments for one H.264 output at the quality `crf` asks for.
+
+    VideoToolbox is minutes-per-clip faster than libx264 on this footage, so it
+    is preferred when the caller allows it and the build has it; `-b:v 0` is what
+    puts it in constant-quality mode rather than its default bitrate target.
+    """
+    if hardware and _has_videotoolbox_encoder():
+        quality = max(1, min(100, round((QP_RANGE - crf) / QP_RANGE * 100)))
+        return ["-c:v", "h264_videotoolbox", "-q:v", str(quality), "-b:v", "0"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf)]
+
+
+def hardware_decode_args() -> list[str]:
+    """Input arguments that decode through the media engine when it is there.
+
+    Only a speed choice: the frames land back in system memory either way, so
+    every filter downstream — including the rotation ffmpeg inserts itself —
+    behaves identically.
+    """
+    return ["-hwaccel", "videotoolbox"] if _has_videotoolbox_encoder() else []
 
 
 def _run_ffmpeg_to(args: list[str], dst: Path) -> None:

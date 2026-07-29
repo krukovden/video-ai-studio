@@ -1,0 +1,34 @@
+{
+  "sections": [
+    {
+      "name": "Hook",
+      "goal": "Open with the single most engaging moment to grab viewer attention",
+      "phrase_ids": [
+        "clip-06#001"
+      ]
+    },
+    {
+      "name": "Intro",
+      "goal": "Introduce the toy by name and hype its size now that attention is hooked",
+      "phrase_ids": [
+        "clip-03#001"
+      ]
+    },
+    {
+      "name": "Wheels Feature",
+      "goal": "Highlight the standout wheel detail as the closing review beat",
+      "phrase_ids": [
+        "clip-05#001"
+      ]
+    }
+  ],
+  "title": "Hot Wheels Mega Wrex: Huge Wheels & Backflip Trick!",
+  "description": "A quick kid-powered review of the Hot Wheels Mega Wrex monster truck, opening on its perfect backflip before introducing the truck and zooming in on its massive grippy wheels. The brief also called for the launcher accessory to be shown, but no usable footage of that beat exists in the source clips.",
+  "tags": [
+    "Hot Wheels",
+    "Mega Wrex",
+    "Monster Truck",
+    "Toy Review",
+    "Kids Review"
+  ]
+}

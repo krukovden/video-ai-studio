@@ -78,12 +78,21 @@ def _context(tmp_path: Path, settings: PolishSettings | None = None) -> StageCon
     )
 
 
-def _seed(ctx: StageContext, source: Path, beats: list[str], title: str = "A Test Review") -> None:
-    """A manifest, a timeline of 3-second clips carrying `beats`, and a story plan."""
+def _seed(
+    ctx: StageContext, source: Path, beats: list[str], title: str = "A Test Review",
+    proxy: Path | None = None,
+) -> None:
+    """A manifest, a timeline of 3-second clips carrying `beats`, and a story plan.
+
+    `proxy` defaults to the source itself, which is enough for the tests that only
+    care about what polish assembles. The tests that care where the pixels came
+    from pass a real, smaller proxy.
+    """
     duration = 3.0 * len(beats) + 3.0
     ctx.store.write("01-manifest", Manifest(clips=[
         ClipInfo(clip_id="clip-01", path=str(source), duration=duration, width=320,
-                 height=240, fps=30.0, has_audio=True, proxy_path=str(source)),
+                 height=240, fps=30.0, has_audio=True,
+                 proxy_path=str(proxy or source)),
     ]), fingerprint="fp")
     ctx.store.write("05-timeline", Timeline(fps=30.0, width=320, height=240, clips=[
         TimelineClip(src="clip-01", offset=3.0 * index, dur=3.0, start=3.0 * index, beat=beat)
@@ -113,6 +122,173 @@ def project(tmp_path: Path, make_clip):
         return ctx, _render(ctx)
 
     return _build
+
+
+def _scale_to(source: Path, dst: Path, height: int) -> Path:
+    """A proxy of `source` the way ingest builds one: scaled down and re-encoded."""
+    subprocess.run([
+        "ffmpeg", "-y", "-loglevel", "error", "-i", str(source),
+        "-vf", f"scale=-2:{height}", "-c:v", "libx264", "-preset", "veryfast",
+        "-crf", "28", "-c:a", "aac", "-b:a", "128k", str(dst),
+    ], check=True)
+    return dst
+
+
+def _turned(source: Path, dst: Path, degrees: int) -> Path:
+    """A copy carrying a display matrix, the way an iPhone records a portrait clip:
+    landscape frames plus a quarter turn, with nothing rotated in the pixels."""
+    subprocess.run([
+        "ffmpeg", "-y", "-loglevel", "error", "-display_rotation", str(degrees),
+        "-i", str(source), "-c", "copy", str(dst),
+    ], check=True)
+    return dst
+
+
+def _video_bitrate(path: Path) -> float:
+    """The picture's bitrate, not the file's. Both files carry the same 160 kbit/s
+    of audio, which in a 180p draft is most of the container's bitrate and would
+    swamp the very difference being measured."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=bit_rate", "-of", "default=nw=1:nk=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(result.stdout.strip())
+
+
+def _make_detailed_clip(path: Path, seconds: float, size: str) -> Path:
+    """`testsrc2` rather than the shared `make_clip`'s `testsrc`: it carries fine
+    detail and real motion, so scaling it to proxy height genuinely destroys
+    picture the way it does with the creator's footage."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "lavfi", "-i", f"testsrc2=size={size}:rate=30:duration={seconds}",
+        "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest", str(path),
+    ], check=True)
+    return path
+
+
+@pytest.fixture
+def delivery(tmp_path: Path):
+    """A project whose original is big and whose proxy is small.
+
+    That gap is the whole point: while the manifest's `path` and `proxy_path`
+    point at the same file, a final built from the proxy and a final built from
+    the source are indistinguishable, and the defect this stage was rewritten to
+    fix would pass every assertion.
+    """
+    def _build(
+        beats: list[str], *, size: str = "1280x720", proxy_height: int = 180,
+        source: Path | None = None, **overrides,
+    ) -> tuple[StageContext, Path, Path, DraftResult]:
+        # No music: these tests measure the picture, and a bed only slows them.
+        overrides.setdefault("music_dir", str(tmp_path / "no-music"))
+        overrides.setdefault("output_height", 720)
+        ctx = _context(tmp_path, PolishSettings(**overrides))
+        original = source or _make_detailed_clip(
+            tmp_path / "original.mp4", 3.0 * len(beats) + 3.0, size
+        )
+        proxy = _scale_to(original, tmp_path / "proxy.mp4", proxy_height)
+        _seed(ctx, original, beats, proxy=proxy)
+        return ctx, original, proxy, _render(ctx)
+
+    return _build
+
+
+def test_the_final_is_cut_at_delivery_height_while_the_draft_stays_at_proxy_height(delivery):
+    ctx, _, proxy, draft = delivery(["Hook", "Middle"])
+
+    result = polish(ctx)
+
+    assert probe(proxy).height == 180
+    assert probe(Path(draft.path)).height == 180, "the review draft must stay cheap"
+    final = probe(Path(result.path))
+    assert (final.width, final.height) == (1280, 720)
+    assert (result.width, result.height) == (1280, 720)
+
+
+def test_the_final_is_materially_better_than_the_draft(delivery):
+    """Resolution and bitrate, not file size: the final is longer than the draft by
+    the intro, so a bigger file on its own would prove nothing."""
+    ctx, _, _, draft = delivery(["Hook", "Middle"])
+
+    result = polish(ctx)
+
+    draft_height = probe(Path(draft.path)).height
+    final_height = probe(Path(result.path)).height
+    assert final_height >= draft_height * 4
+
+    draft_bitrate = _video_bitrate(Path(draft.path))
+    final_bitrate = _video_bitrate(Path(result.path))
+    assert final_bitrate > draft_bitrate * 8, (
+        f"final {final_bitrate / 1e6:.2f} Mbit/s against draft "
+        f"{draft_bitrate / 1e6:.2f} Mbit/s: the final is still proxy-grade"
+    )
+
+
+def test_the_delivered_audio_still_matches_the_draft(delivery):
+    """The concat homogeneity invariant: raising the picture must not move the
+    audio target, which the draft and every segment already agree on."""
+    ctx, _, _, draft = delivery(["Hook", "Middle"])
+
+    result = polish(ctx)
+
+    final_audio = next(
+        s for s in _probe_streams(Path(result.path)) if s["codec_type"] == "audio"
+    )
+    draft_audio = next(
+        s for s in _probe_streams(Path(draft.path)) if s["codec_type"] == "audio"
+    )
+    assert final_audio["codec_name"] == draft_audio["codec_name"] == DRAFT_AUDIO_CODEC
+    assert int(final_audio["sample_rate"]) == DRAFT_AUDIO_SAMPLE_RATE
+    assert int(draft_audio["sample_rate"]) == DRAFT_AUDIO_SAMPLE_RATE
+    assert int(final_audio["channels"]) == int(draft_audio["channels"]) == DRAFT_AUDIO_CHANNELS
+
+
+def test_output_height_2160_delivers_true_4k(delivery):
+    ctx, _, _, _ = delivery(
+        ["Hook"], size="3840x2160", proxy_height=540, output_height=2160,
+        intro_seconds=0.5, title_seconds=0.5,
+    )
+
+    result = polish(ctx)
+
+    assert probe(Path(result.path)).height == 2160
+    assert result.height == 2160
+
+
+def test_a_missing_original_is_refused_by_name_instead_of_falling_back_to_the_proxy(delivery):
+    """Silently delivering the proxy is the defect. A source that has moved has to
+    stop the stage and say which file it is."""
+    ctx, original, proxy, _ = delivery(["Hook", "Middle"])
+    original.unlink()
+    assert proxy.is_file(), "the proxy is still there, and must not be used"
+
+    with pytest.raises(RuntimeError, match="original.mp4"):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "final.mp4").exists()
+
+
+def test_a_turned_original_is_delivered_upright(delivery, tmp_path: Path, make_clip):
+    """iPhone portrait footage is landscape frames plus a display matrix. The
+    proxies had the turn baked in by their scale operation; the originals have
+    not, so the final has to come out of the source upright rather than sideways."""
+    landscape = make_clip("landscape.mov", seconds=9.0, size="640x480")
+    turned = _turned(landscape, tmp_path / "turned.mov", 90)
+    assert probe(turned).rotation == 90
+    ctx, _, _, _ = delivery(["Hook", "Middle"], source=turned, output_height=240)
+
+    result = polish(ctx)
+
+    final = probe(Path(result.path))
+    assert (final.width, final.height) == (180, 240), "delivered sideways"
+    # ffmpeg's autorotation resolves the turn into the pixels, so the finished
+    # file carries no display matrix a player could apply a second time.
+    assert final.rotation == 0
 
 
 def test_final_is_the_draft_plus_the_intro(project):

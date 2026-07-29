@@ -1,26 +1,48 @@
 """s08 polish: turn the reviewed cut into something a viewer would watch.
 
 The draft is deliberately bare — it exists to check edit decisions, and it stays
-exactly as it was. This stage builds a second file beside it with the things a
-finished video has and an edit review does not: a title card, a lower third when
-the story moves to a new section, a music bed ducked under the child's voice, and
-a soft dissolve where one section becomes the next.
+exactly as it was: cut from the 540p proxies, fast, disposable. This stage builds
+a second file beside it with the things a finished video has and an edit review
+does not: a title card, a lower third when the story moves to a new section, a
+music bed ducked under the child's voice, and a soft dissolve where one section
+becomes the next.
+
+It does not build any of that on top of the draft. The draft is a sixteenth of
+the source's pixels, and a deliverable made from it would be a 540p video with
+titles on it. The timeline's in and out points are exact and the manifest still
+names the original files, so this stage cuts its own segments straight from those
+originals at delivery resolution — nothing here is ever upscaled.
 
 Assembly is a single ffmpeg invocation: the cross-dissolves, the title card, the
 overlays and the music mix all happen in one filter graph, so the picture is
-encoded once more rather than once per element. The one thing that cannot be done
-inside that graph is slicing the draft — see `_cut_runs`.
+encoded once more rather than once per element. What cannot happen inside that
+graph is the cutting itself — see `_cut_segment`.
 """
 from __future__ import annotations
 
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-from videoai.core.ffmpeg import probe, run_ffmpeg
-from videoai.core.models import DraftResult, FinalResult, StoryPlan, Timeline
+from videoai.core.ffmpeg import (
+    ProbeResult,
+    h264_encode_args,
+    hardware_decode_args,
+    probe,
+    run_ffmpeg,
+    videotoolbox_available,
+)
+from videoai.core.models import (
+    DraftResult,
+    FinalResult,
+    Manifest,
+    StoryPlan,
+    Timeline,
+    TimelineClip,
+)
 from videoai.core.registry import StageContext, stage
 from videoai.core.text import (
     drawtext_available,
@@ -36,12 +58,14 @@ from videoai.stages.s06_render_draft import (
     DRAFT_AUDIO_CHANNELS,
     DRAFT_AUDIO_CODEC,
     DRAFT_AUDIO_SAMPLE_RATE,
+    SILENT_AUDIO_SOURCE,
+    _audio_filter_chain,
 )
 
-FINAL_CRF = 20
-# The run cuts are an intermediate that is immediately re-encoded into the final,
-# so they are kept visually transparent rather than small.
-RUN_CRF = 16
+# The cut segments are an intermediate that is immediately re-encoded into the
+# final, so they are held a few quantiser steps above the delivery target: two
+# encodes at the same CRF would show the second one's loss.
+SEGMENT_CRF_MARGIN = 4
 INTRO_BACKGROUND = "0x111a2b"
 INTRO_ACCENT = "0xe8c46a"
 INTRO_FADE_SECONDS = 0.4
@@ -113,28 +137,17 @@ def _draft_path(ctx: StageContext, draft: DraftResult) -> Path:
     raise RuntimeError(f"draft not found at {recorded} or {beside}")
 
 
-def segment_starts(ctx: StageContext, timeline: Timeline, draft_duration: float) -> list[float]:
-    """Where each timeline clip begins inside the rendered draft.
+def cumulative_starts(durations: list[float]) -> list[float]:
+    """Where each segment begins in the concatenated body.
 
-    Rendered segments are whole numbers of frames, so each is a frame or so longer
-    than the timeline asked for and the error accumulates across twenty-odd cuts —
-    enough to put a dissolve on the wrong side of a cut. The segment files carry
-    the truth and are measured when the render stage's work directory still holds
-    them; otherwise the timeline's own starts are stretched onto the draft's
-    measured length, which spreads the same drift rather than ignoring it.
+    Measured, not planned: a rendered segment is a whole number of frames, so it
+    is a frame or so longer than the timeline asked for and the error accumulates
+    across twenty-odd cuts — enough to put a lower third on the wrong side of a
+    dissolve.
     """
-    segments = sorted((ctx.work_dir / "segments").glob("seg-*.mp4"))
     starts = [0.0]
-    if len(segments) == len(timeline.clips):
-        for path in segments[:-1]:
-            starts.append(starts[-1] + probe(path).duration)
-        return starts
-    planned = timeline.duration
-    scale = draft_duration / planned if planned > 0 else 1.0
-    running = 0.0
-    for clip in timeline.clips[:-1]:
-        running += clip.dur
-        starts.append(running * scale)
+    for duration in durations[:-1]:
+        starts.append(starts[-1] + duration)
     return starts
 
 
@@ -178,37 +191,125 @@ def write_attribution(output_dir: Path, line: str) -> bool:
     return True
 
 
-def _cut_runs(
-    source: Path, bounds: list[tuple[float, float]], work_dir: Path, fps: float
-) -> list[Path]:
-    """One normalised file per stretch of the draft between section dissolves.
+def _source_path(project_dir: Path, raw_path: str, clip_id: str) -> Path:
+    """The original file behind a timeline clip, or a refusal naming it.
 
-    The draft cannot be sliced inside the assembly graph. It is a concat of
-    twenty-odd separately encoded segments, each rounded up to a whole frame, so
-    it carries a slightly variable frame rate and a video stream that starts a
-    frame late — and against a file like that neither the input `-t` option nor
-    the `trim` filter cuts where it is asked to (measured: `-ss 55.158 -t 58.837`
-    reads 127 seconds, and `trim=end=58.837` keeps 29). Output-side `-t` is exact,
-    so each run is cut and re-encoded to constant frame rate here, and the
-    assembly graph then only ever sees files that behave.
+    The manifest stores the path ingest was handed, which is relative whenever the
+    CLI was invoked with a relative project directory — so it is tried as recorded
+    and then under the project folder, the same fallback the draft path uses.
 
-    A single run needs no cut: with nothing to slice, the draft goes straight in.
+    A miss is fatal on purpose. The proxy is sitting right there and using it
+    would produce a final that renders, plays, and is quietly a sixteenth of the
+    resolution the creator shot: exactly the defect this stage was rewritten to
+    remove. Better to stop and name the file.
     """
-    if len(bounds) < 2:
-        return [source]
-    paths: list[Path] = []
-    for index, (start, end) in enumerate(bounds):
-        target = work_dir / f"run-{index:02d}.mp4"
-        args = ["-ss", f"{start:.3f}", "-i", str(source)]
-        if index < len(bounds) - 1:
-            args += ["-t", f"{end - start:.3f}"]
+    recorded = Path(raw_path)
+    candidates = [recorded] if recorded.is_absolute() else [recorded, project_dir / recorded]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    looked = ", ".join(str(candidate) for candidate in candidates)
+    raise RuntimeError(
+        f"polish cuts the final from the original footage, but the source for "
+        f"{clip_id} is missing: {raw_path} (looked in {looked}). Restore the file "
+        f"or re-run ingest; the final is not rendered from the proxy."
+    )
+
+
+def delivery_frame(source: ProbeResult, output_height: int) -> tuple[int, int]:
+    """The finished frame: `output_height` tall, at the source's display aspect.
+
+    Display, not coded: a portrait iPhone clip is stored as landscape frames plus
+    a quarter turn, so its recorded width and height describe a sideways picture
+    and would hand the final a landscape frame to letterbox the upright footage
+    into. Both dimensions are even, which yuv420p requires.
+    """
+    height = max(2, output_height // 2 * 2)
+    ratio = source.display_width / max(1, source.display_height)
+    width = max(2, round(ratio * height / 2) * 2)
+    return width, height
+
+
+def _cut_segment(
+    source: Path, clip: TimelineClip, frame: tuple[int, int], fps: float, fade: float,
+    has_audio: bool, crf: int, hardware: bool, dst: Path,
+) -> None:
+    """One timeline clip, cut from the original at the delivery frame.
+
+    Rotation needs no filter of its own. ffmpeg autorotates on decode whenever the
+    output goes through a filter chain, so a turned source arrives here already
+    upright and `force_original_aspect_ratio` measures the picture a viewer would
+    see (measured: a 640x480 clip carrying a 90-degree display matrix lands as
+    180x240 through `scale=-2:240`, and as a sideways 320x240 only under
+    `-noautorotate`).
+
+    Every segment is normalised to the same frame, rate, pixel format and audio
+    layout, which is what lets the runs below be concatenated with `-c copy` — and
+    what keeps the final's audio identical to the draft's.
+    """
+    width, height = frame
+    video_filter = (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+        f"fps={fps},format=yuv420p,setsar=1"
+    )
+    video_args = h264_encode_args(crf, hardware)
+    audio_args = [
+        "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
+        "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
+    ]
+    # Input-side `-ss` so the decoder seeks rather than decoding from zero, which
+    # on a three-minute 4K HEVC clip is the difference between seconds and minutes.
+    seek = [*hardware_decode_args(), "-ss", f"{clip.offset:.3f}", "-i", str(source)]
+    if has_audio:
         run_ffmpeg([
-            *args,
-            "-vf", f"fps={fps},format=yuv420p,setsar=1",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(RUN_CRF),
-            "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
-            "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
-            str(target),
+            *seek, "-t", f"{clip.dur:.3f}",
+            "-filter:v", video_filter,
+            *video_args, *audio_args,
+            "-af", _audio_filter_chain(fade, clip.dur, clip.gain_db),
+            "-avoid_negative_ts", "make_zero",
+            str(dst),
+        ])
+    else:
+        # A silent original still has to arrive with an audio track: the concat
+        # below copies streams, and a video-only run would break its layout.
+        run_ffmpeg([
+            *seek,
+            "-f", "lavfi", "-i", SILENT_AUDIO_SOURCE,
+            "-t", f"{clip.dur:.3f}",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-filter:v", video_filter,
+            *video_args, *audio_args,
+            "-avoid_negative_ts", "make_zero",
+            str(dst),
+        ])
+
+
+def _build_runs(
+    segments: list[Path], splits: list[int], work_dir: Path
+) -> list[Path]:
+    """One file per stretch of segments between section dissolves.
+
+    `splits` are segment indices where a run ends and the next begins. Segments
+    are homogeneous by construction, so a run is a stream copy rather than a
+    re-encode — the delivery picture is encoded exactly twice on its way out (once
+    into the segments, once out of the assembly graph), never three times.
+    """
+    bounds = list(zip([0, *splits], [*splits, len(segments)]))
+    paths: list[Path] = []
+    for index, (first, last) in enumerate(bounds):
+        members = segments[first:last]
+        if len(members) == 1:
+            paths.append(members[0])
+            continue
+        list_file = work_dir / f"run-{index:02d}.txt"
+        list_file.write_text(
+            "\n".join(f"file '{path.name}'" for path in members) + "\n", encoding="utf-8"
+        )
+        target = work_dir / f"run-{index:02d}.mp4"
+        run_ffmpeg([
+            "-f", "concat", "-safe", "0", "-i", str(list_file),
+            "-c", "copy", str(target),
         ])
         paths.append(target)
     return paths
@@ -267,9 +368,10 @@ def _overlay_inputs(
 @stage(
     id="polish",
     produces="08-final",
-    # "01-manifest" is declared rather than read: it is what pins this stage to
-    # the set of clips the draft was cut from, so replacing a source clip
-    # invalidates the final as well as everything between.
+    # "01-manifest" names the original files this stage cuts from. "06-draft" is
+    # required for its ordering rather than its pixels: the draft is the review
+    # the final is only worth building after, and it is what `polish.enabled:
+    # false` copies through.
     requires=("01-manifest", "05-timeline", "05a-storyplan", "06-draft"),
     model=FinalResult,
     config_keys=(
@@ -281,47 +383,77 @@ def _overlay_inputs(
         "polish.transition_frames",
         "polish.music_track",
         "polish.music_dir",
+        "polish.output_height",
+        "polish.output_crf",
+        "polish.hardware_encode",
+        # Read, not inherited: the final does its own cutting now, and the fade at
+        # each cut has to be the one the draft was reviewed with.
+        "render.audio_fade_seconds",
     ),
 )
 def polish(ctx: StageContext) -> FinalResult:
+    started = time.monotonic()
     settings = ctx.config.polish
     draft = ctx.store.read("06-draft", DraftResult)
-    source = _draft_path(ctx, draft)
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
     output = ctx.output_dir / "final.mp4"
 
     if not settings.enabled:
         # The draft is copied rather than re-encoded: "polish off" must cost the
-        # picture nothing, and a re-encode is not nothing.
+        # picture nothing, and a re-encode is not nothing. This is the one path
+        # that ships proxy resolution, and it says so.
+        source = _draft_path(ctx, draft)
         shutil.copyfile(source, output)
+        copied = probe(output)
         return FinalResult(
             path=str(output),
-            duration=probe(output).duration,
+            duration=copied.duration,
+            width=copied.width,
+            height=copied.height,
+            render_seconds=time.monotonic() - started,
             notes=["polish.enabled is false: final.mp4 is a copy of the draft"],
         )
 
-    info = probe(source)
-    if not info.has_audio:
-        raise RuntimeError(
-            f"draft {source} has no audio stream; the render stage guarantees one"
-        )
-
+    manifest = ctx.store.read("01-manifest", Manifest)
     timeline = ctx.store.read("05-timeline", Timeline)
+    if not timeline.clips:
+        raise RuntimeError("cannot polish an empty timeline")
     story = (
         ctx.store.read("05a-storyplan", StoryPlan)
         if ctx.store.exists("05a-storyplan")
         else StoryPlan()
     )
 
-    # The timeline's rate, not the draft's: `probe` reads `r_frame_rate`, which a
-    # concatenated file reports as the largest rate any of its parts could carry
-    # (120 for a 30 fps draft), and that number would end up as the final's own
-    # frame rate and shrink every transition to a quarter of its length.
-    fps = timeline.fps if timeline.fps > 0 else info.fps
-    width, height = info.width, info.height
+    fps = timeline.fps if timeline.fps > 0 else manifest.by_id(timeline.clips[0].src).fps
     work_dir = ctx.work_dir / "polish"
     work_dir.mkdir(parents=True, exist_ok=True)
     notes: list[str] = []
+
+    # --- the cut, at delivery quality, from the originals -----------------------
+    sources = [
+        _source_path(ctx.project_dir, manifest.by_id(clip.src).path, clip.src)
+        for clip in timeline.clips
+    ]
+    frame = delivery_frame(probe(sources[0]), settings.output_height)
+    width, height = frame
+    hardware = settings.hardware_encode and videotoolbox_available()
+    if settings.hardware_encode and not hardware:
+        notes.append(
+            "polish.hardware_encode is on but this ffmpeg build has no VideoToolbox "
+            "encoder; the final was encoded with libx264"
+        )
+    segment_crf = max(0, settings.output_crf - SEGMENT_CRF_MARGIN)
+    fade = ctx.config.render.audio_fade_seconds
+
+    segments: list[Path] = []
+    for index, (clip, clip_source) in enumerate(zip(timeline.clips, sources)):
+        target = work_dir / f"seg-{index:03d}.mp4"
+        _cut_segment(
+            clip_source, clip, frame, fps, fade,
+            manifest.by_id(clip.src).has_audio, segment_crf, hardware, target,
+        )
+        segments.append(target)
+    segment_durations = [probe(path).duration for path in segments]
 
     use_drawtext = drawtext_available()
     if not use_drawtext:
@@ -334,22 +466,25 @@ def polish(ctx: StageContext) -> FinalResult:
 
     # --- where the dissolves go -------------------------------------------------
     transition = max(0.0, settings.transition_frames) / fps
-    starts = segment_starts(ctx, timeline, info.duration)
+    starts = cumulative_starts(segment_durations)
+    body_total = sum(segment_durations)
     changes = section_changes(timeline)
 
+    # A dissolve lands on a segment boundary, so it is recorded as the index of
+    # the segment that opens the next run and as the time that index sits at.
+    split_indices: list[int] = []
     splits: list[float] = []
     if transition > 0:
         minimum = max(transition * MIN_RUN_FACTOR, 2.0 / fps)
         previous = 0.0
         for index in changes:
             at = starts[index]
-            if at - previous >= minimum and info.duration - at >= minimum:
+            if at - previous >= minimum and body_total - at >= minimum:
+                split_indices.append(index)
                 splits.append(at)
                 previous = at
-    run_bounds = list(zip([0.0, *splits], [*splits, info.duration]))
-    run_sources = _cut_runs(source, run_bounds, work_dir, fps)
-    run_lengths = [probe(path).duration for path in run_sources] if len(run_sources) > 1 \
-        else [info.duration]
+    run_sources = _build_runs(segments, split_indices, work_dir)
+    run_lengths = [probe(path).duration for path in run_sources]
     body_duration = sum(run_lengths) - len(splits) * transition
 
     # --- the intro card ---------------------------------------------------------
@@ -387,17 +522,13 @@ def polish(ctx: StageContext) -> FinalResult:
             beat = timeline.clips[index].beat.strip()
             if not beat:
                 continue
-            at = starts[index]
-            run = sum(1 for split in splits if split <= at + 1e-6)
-            # A cut that became a dissolve reads at the middle of that dissolve;
-            # one that stayed a hard cut reads where it always was. Both are
-            # measured on the assembled body, which is shorter than the draft by
-            # one transition per dissolve.
-            body_at = sum(run_lengths[:run]) - run * transition
-            if any(abs(split - at) < 1e-6 for split in splits):
+            # Measured on the assembled body, which is shorter than the cut by one
+            # transition per dissolve. A cut that became a dissolve reads at the
+            # middle of it; one that stayed a hard cut reads where it always was.
+            run = sum(1 for split in split_indices if split <= index)
+            body_at = starts[index] - run * transition
+            if index in split_indices:
                 body_at += transition / 2
-            else:
-                body_at += at - (splits[run - 1] if run else 0.0)
             start = body_at + intro_offset
             if start < 0 or start + title_duration > total:
                 continue
@@ -587,7 +718,7 @@ def polish(ctx: StageContext) -> FinalResult:
         *args,
         "-filter_complex", ";".join(chains),
         "-map", video_label, "-map", audio_label,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(FINAL_CRF),
+        *h264_encode_args(settings.output_crf, hardware),
         "-pix_fmt", "yuv420p",
         "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
         "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
@@ -595,9 +726,20 @@ def polish(ctx: StageContext) -> FinalResult:
         str(output),
     ])
 
+    measured = probe(output)
+    elapsed = time.monotonic() - started
+    encoder = "h264_videotoolbox" if hardware else "libx264"
+    notes.append(
+        f"cut {len(segments)} segments from the original sources at {width}x{height} "
+        f"(crf {settings.output_crf}, {encoder}) in {elapsed:.1f}s"
+    )
+
     return FinalResult(
         path=str(output),
-        duration=probe(output).duration,
+        duration=measured.duration,
+        width=measured.width,
+        height=measured.height,
+        render_seconds=elapsed,
         intro=intro_duration > 0,
         intro_title=intro_title,
         title_count=len(title_overlays),

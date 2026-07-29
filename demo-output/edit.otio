@@ -1,0 +1,1527 @@
+{
+    "OTIO_SCHEMA": "Timeline.1",
+    "metadata": {},
+    "name": "VideoAI edit",
+    "global_start_time": null,
+    "tracks": {
+        "OTIO_SCHEMA": "Stack.1",
+        "metadata": {},
+        "name": "tracks",
+        "source_range": null,
+        "effects": [],
+        "markers": [],
+        "enabled": true,
+        "color": null,
+        "children": [
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {},
+                "name": "V1",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "color": null,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "First Reaction",
+                                "is_insert": false,
+                                "quote": "Give me the box. Let's see what this is. Fidget adult fidget toy. Okay. It's a squishy man. This is surely squishy. Ooh. It got a shot in it. Some",
+                                "reason": "opens box, reveals pimple-popping squishy toy and syringe"
+                            }
+                        },
+                        "name": "clip-04 (First Reaction)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 796.4999999999999
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 713.1000000000001
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "First Reaction",
+                                        "is_insert": false,
+                                        "quote": "Give me the box. Let's see what this is. Fidget adult fidget toy. Okay. It's a squishy man. This is surely squishy. Ooh. It got a shot in it. Some",
+                                        "reason": "opens box, reveals pimple-popping squishy toy and syringe"
+                                    }
+                                },
+                                "name": "First Reaction",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 796.4999999999999
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: First Reaction\nquote: \"Give me the box. Let's see what this is. Fidget adult fidget toy. Okay. It's a squishy man. This is surely squishy. Ooh. It got a shot in it. Some\"\nreason: opens box, reveals pimple-popping squishy toy and syringe"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5665.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Meet the Toy",
+                                "is_insert": false,
+                                "quote": "uh gloves. And",
+                                "reason": "notes gloves are included"
+                            }
+                        },
+                        "name": "clip-04 (Meet the Toy)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 136.49999999999991
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 1509.6
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Meet the Toy",
+                                        "is_insert": false,
+                                        "quote": "uh gloves. And",
+                                        "reason": "notes gloves are included"
+                                    }
+                                },
+                                "name": "Meet the Toy",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 136.49999999999991
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Meet the Toy\nquote: \"uh gloves. And\"\nreason: notes gloves are included"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5665.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Meet the Toy",
+                                "is_insert": false,
+                                "quote": "some paint. Get this box for the inside. Put this right here. Right here. Let's open him up. Oh my gosh, this is so satisfying. Okay, now I'm putting on",
+                                "reason": "shows paint, reacts 'this is so satisfying'"
+                            }
+                        },
+                        "name": "clip-04 (Meet the Toy)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 647.7
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 1661.1000000000001
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Meet the Toy",
+                                        "is_insert": false,
+                                        "quote": "some paint. Get this box for the inside. Put this right here. Right here. Let's open him up. Oh my gosh, this is so satisfying. Okay, now I'm putting on",
+                                        "reason": "shows paint, reacts 'this is so satisfying'"
+                                    }
+                                },
+                                "name": "Meet the Toy",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 647.7
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Meet the Toy\nquote: \"some paint. Get this box for the inside. Put this right here. Right here. Let's open him up. Oh my gosh, this is so satisfying. Okay, now I'm putting on\"\nreason: shows paint, reacts 'this is so satisfying'"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5665.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Meet the Toy",
+                                "is_insert": false,
+                                "quote": "the gloves.",
+                                "reason": "finishes putting on gloves"
+                            }
+                        },
+                        "name": "clip-04 (Meet the Toy)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 69.30000000000007
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 2308.7999999999997
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Meet the Toy",
+                                        "is_insert": false,
+                                        "quote": "the gloves.",
+                                        "reason": "finishes putting on gloves"
+                                    }
+                                },
+                                "name": "Meet the Toy",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 69.30000000000007
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Meet the Toy\nquote: \"the gloves.\"\nreason: finishes putting on gloves"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5665.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Fill It Up",
+                                "is_insert": false,
+                                "quote": "try. So now I'm gonna give him shots. I'm gonna start off with the color red. Yo, this is some cool paint. Opening the shot up. Okay, got it. Now",
+                                "reason": "starts filling toy with red paint via syringe"
+                            }
+                        },
+                        "name": "clip-05 (Fill It Up)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 760.1999999999999
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 115.5
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Fill It Up",
+                                        "is_insert": false,
+                                        "quote": "try. So now I'm gonna give him shots. I'm gonna start off with the color red. Yo, this is some cool paint. Opening the shot up. Okay, got it. Now",
+                                        "reason": "starts filling toy with red paint via syringe"
+                                    }
+                                },
+                                "name": "Fill It Up",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 760.1999999999999
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Fill It Up\nquote: \"try. So now I'm gonna give him shots. I'm gonna start off with the color red. Yo, this is some cool paint. Opening the shot up. Okay, got it. Now\"\nreason: starts filling toy with red paint via syringe"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5666.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Fill It Up",
+                                "is_insert": true,
+                                "quote": "",
+                                "reason": "visual insert: loading the syringe with paint, showing the colours, and explaining how to put paint in and pump it back out"
+                            }
+                        },
+                        "name": "clip-12 (Fill It Up)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 120.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 60.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Fill It Up",
+                                        "is_insert": true,
+                                        "quote": "",
+                                        "reason": "visual insert: loading the syringe with paint, showing the colours, and explaining how to put paint in and pump it back out"
+                                    }
+                                },
+                                "name": "insert",
+                                "color": "PURPLE",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 120.0
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Fill It Up\nvisual insert (no speech)\nreason: visual insert: loading the syringe with paint, showing the colours, and explaining how to put paint in and pump it back out"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_8205.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Fill It Up",
+                                "is_insert": false,
+                                "quote": "Green. We're doing green, I guess. Hope it has enough.",
+                                "reason": "settles on green paint"
+                            }
+                        },
+                        "name": "clip-08 (Fill It Up)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 203.39999999999918
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 9894.3
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Fill It Up",
+                                        "is_insert": false,
+                                        "quote": "Green. We're doing green, I guess. Hope it has enough.",
+                                        "reason": "settles on green paint"
+                                    }
+                                },
+                                "name": "Fill It Up",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 203.39999999999918
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Fill It Up\nquote: \"Green. We're doing green, I guess. Hope it has enough.\"\nreason: settles on green paint"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Fill It Up",
+                                "is_insert": false,
+                                "quote": "putting it in. I think that's how you do it.",
+                                "reason": "injects paint, unsure of technique"
+                            }
+                        },
+                        "name": "clip-05 (Fill It Up)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 176.99999999999986
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 878.7
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Fill It Up",
+                                        "is_insert": false,
+                                        "quote": "putting it in. I think that's how you do it.",
+                                        "reason": "injects paint, unsure of technique"
+                                    }
+                                },
+                                "name": "Fill It Up",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 176.99999999999986
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Fill It Up\nquote: \"putting it in. I think that's how you do it.\"\nreason: injects paint, unsure of technique"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5666.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Fill It Up",
+                                "is_insert": false,
+                                "quote": "I actually like this toy because like if you just squish the bubble a lot the bubble just starts disappearing",
+                                "reason": "explains squishing bubble makes it disappear"
+                            }
+                        },
+                        "name": "clip-08 (Fill It Up)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 222.60000000000048
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 3779.1
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Fill It Up",
+                                        "is_insert": false,
+                                        "quote": "I actually like this toy because like if you just squish the bubble a lot the bubble just starts disappearing",
+                                        "reason": "explains squishing bubble makes it disappear"
+                                    }
+                                },
+                                "name": "Fill It Up",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 222.60000000000048
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Fill It Up\nquote: \"I actually like this toy because like if you just squish the bubble a lot the bubble just starts disappearing\"\nreason: explains squishing bubble makes it disappear"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Fill It Up",
+                                "is_insert": false,
+                                "quote": "And it's not like a permanent toy that you just have permanent bubbles you could always suck the bubbles back in for like it was not a big problem Oh",
+                                "reason": "explains toy is reusable, bubble pops again"
+                            }
+                        },
+                        "name": "clip-08 (Fill It Up)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 275.4000000000002
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 4055.0999999999995
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Fill It Up",
+                                        "is_insert": false,
+                                        "quote": "And it's not like a permanent toy that you just have permanent bubbles you could always suck the bubbles back in for like it was not a big problem Oh",
+                                        "reason": "explains toy is reusable, bubble pops again"
+                                    }
+                                },
+                                "name": "Fill It Up",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 275.4000000000002
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Fill It Up\nquote: \"And it's not like a permanent toy that you just have permanent bubbles you could always suck the bubbles back in for like it was not a big problem Oh\"\nreason: explains toy is reusable, bubble pops again"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Bubbles Everywhere",
+                                "is_insert": false,
+                                "quote": "Yes, I did it. I did it, guys. Look, I made the bubble bigger. The one bubble that you guys didn't see earlier. I made it bigger. Just",
+                                "reason": "excitedly succeeds, 'Yes I did it'"
+                            }
+                        },
+                        "name": "clip-08 (Bubbles Everywhere)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 289.79999999999734
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 15245.1
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Bubbles Everywhere",
+                                        "is_insert": false,
+                                        "quote": "Yes, I did it. I did it, guys. Look, I made the bubble bigger. The one bubble that you guys didn't see earlier. I made it bigger. Just",
+                                        "reason": "excitedly succeeds, 'Yes I did it'"
+                                    }
+                                },
+                                "name": "Bubbles Everywhere",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 289.79999999999734
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Bubbles Everywhere\nquote: \"Yes, I did it. I did it, guys. Look, I made the bubble bigger. The one bubble that you guys didn't see earlier. I made it bigger. Just\"\nreason: excitedly succeeds, 'Yes I did it'"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Bubbles Everywhere",
+                                "is_insert": false,
+                                "quote": "if y'all see it, I got even bigger. Now it's actually",
+                                "reason": "shows bubble got even bigger"
+                            }
+                        },
+                        "name": "clip-08 (Bubbles Everywhere)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 128.99999999999864
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 15749.1
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Bubbles Everywhere",
+                                        "is_insert": false,
+                                        "quote": "if y'all see it, I got even bigger. Now it's actually",
+                                        "reason": "shows bubble got even bigger"
+                                    }
+                                },
+                                "name": "Bubbles Everywhere",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 128.99999999999864
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Bubbles Everywhere\nquote: \"if y'all see it, I got even bigger. Now it's actually\"\nreason: shows bubble got even bigger"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Bubbles Everywhere",
+                                "is_insert": true,
+                                "quote": "",
+                                "reason": "visual insert: close-up: many injections make bubbles all over the toy"
+                            }
+                        },
+                        "name": "clip-10 (Bubbles Everywhere)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 216.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Bubbles Everywhere",
+                                        "is_insert": true,
+                                        "quote": "",
+                                        "reason": "visual insert: close-up: many injections make bubbles all over the toy"
+                                    }
+                                },
+                                "name": "insert",
+                                "color": "PURPLE",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 216.0
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Bubbles Everywhere\nvisual insert (no speech)\nreason: visual insert: close-up: many injections make bubbles all over the toy"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_8203.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Bubbles Everywhere",
+                                "is_insert": false,
+                                "quote": "oh the back is actually fun. Just gonna get some big bubbles and then show it to y'all. Pazo. Pow so",
+                                "reason": "enjoys making bubbles on the back, silly sounds"
+                            }
+                        },
+                        "name": "clip-08 (Bubbles Everywhere)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 299.39999999999714
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 12342.300000000001
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Bubbles Everywhere",
+                                        "is_insert": false,
+                                        "quote": "oh the back is actually fun. Just gonna get some big bubbles and then show it to y'all. Pazo. Pow so",
+                                        "reason": "enjoys making bubbles on the back, silly sounds"
+                                    }
+                                },
+                                "name": "Bubbles Everywhere",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 299.39999999999714
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Bubbles Everywhere\nquote: \"oh the back is actually fun. Just gonna get some big bubbles and then show it to y'all. Pazo. Pow so\"\nreason: enjoys making bubbles on the back, silly sounds"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Bubbles Everywhere",
+                                "is_insert": false,
+                                "quote": "his eyes blowing up. You guys see that. Oh, it's gone. I'm just gonna make it bigger and bigger until y'all see it.",
+                                "reason": "inflates bubble on eye area"
+                            }
+                        },
+                        "name": "clip-08 (Bubbles Everywhere)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 328.5000000000001
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 2721.6
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Bubbles Everywhere",
+                                        "is_insert": false,
+                                        "quote": "his eyes blowing up. You guys see that. Oh, it's gone. I'm just gonna make it bigger and bigger until y'all see it.",
+                                        "reason": "inflates bubble on eye area"
+                                    }
+                                },
+                                "name": "Bubbles Everywhere",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 328.5000000000001
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Bubbles Everywhere\nquote: \"his eyes blowing up. You guys see that. Oh, it's gone. I'm just gonna make it bigger and bigger until y'all see it.\"\nreason: inflates bubble on eye area"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Pop Time",
+                                "is_insert": false,
+                                "quote": "And just now let's start popping popping.",
+                                "reason": "announces starting to pop bubbles"
+                            }
+                        },
+                        "name": "clip-08 (Pop Time)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 105.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 13291.5
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Pop Time",
+                                        "is_insert": false,
+                                        "quote": "And just now let's start popping popping.",
+                                        "reason": "announces starting to pop bubbles"
+                                    }
+                                },
+                                "name": "Pop Time",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 105.0
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Pop Time\nquote: \"And just now let's start popping popping.\"\nreason: announces starting to pop bubbles"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Pop Time",
+                                "is_insert": false,
+                                "quote": "oh I just gave got him another bubble since they're all white the bubbles well just pop one that's how you pop them just",
+                                "reason": "explains white bubbles are ready to pop"
+                            }
+                        },
+                        "name": "clip-08 (Pop Time)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 258.59999999999843
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 8928.300000000001
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Pop Time",
+                                        "is_insert": false,
+                                        "quote": "oh I just gave got him another bubble since they're all white the bubbles well just pop one that's how you pop them just",
+                                        "reason": "explains white bubbles are ready to pop"
+                                    }
+                                },
+                                "name": "Pop Time",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 258.59999999999843
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Pop Time\nquote: \"oh I just gave got him another bubble since they're all white the bubbles well just pop one that's how you pop them just\"\nreason: explains white bubbles are ready to pop"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Pop Time",
+                                "is_insert": false,
+                                "quote": "gently press them that's how you pop them",
+                                "reason": "explains gently pressing pops the bubbles"
+                            }
+                        },
+                        "name": "clip-08 (Pop Time)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 68.99999999999864
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 9218.7
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Pop Time",
+                                        "is_insert": false,
+                                        "quote": "gently press them that's how you pop them",
+                                        "reason": "explains gently pressing pops the bubbles"
+                                    }
+                                },
+                                "name": "Pop Time",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 68.99999999999864
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Pop Time\nquote: \"gently press them that's how you pop them\"\nreason: explains gently pressing pops the bubbles"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Pop Time",
+                                "is_insert": true,
+                                "quote": "",
+                                "reason": "visual insert: close-up: popping the bubbles"
+                            }
+                        },
+                        "name": "clip-11 (Pop Time)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 150.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 90.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Pop Time",
+                                        "is_insert": true,
+                                        "quote": "",
+                                        "reason": "visual insert: close-up: popping the bubbles"
+                                    }
+                                },
+                                "name": "insert",
+                                "color": "PURPLE",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 150.0
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Pop Time\nvisual insert (no speech)\nreason: visual insert: close-up: popping the bubbles"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_8204.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Pop Time",
+                                "is_insert": false,
+                                "quote": "it just popped again",
+                                "reason": "bubble pops again, quick reaction"
+                            }
+                        },
+                        "name": "clip-08 (Pop Time)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 56.99999999999932
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 4326.3
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Pop Time",
+                                        "is_insert": false,
+                                        "quote": "it just popped again",
+                                        "reason": "bubble pops again, quick reaction"
+                                    }
+                                },
+                                "name": "Pop Time",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 56.99999999999932
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Pop Time\nquote: \"it just popped again\"\nreason: bubble pops again, quick reaction"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Pop Time",
+                                "is_insert": false,
+                                "quote": "I blew his eye up",
+                                "reason": "reacts to inflating the eye"
+                            }
+                        },
+                        "name": "clip-08 (Pop Time)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 59.399999999997135
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 8306.7
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Pop Time",
+                                        "is_insert": false,
+                                        "quote": "I blew his eye up",
+                                        "reason": "reacts to inflating the eye"
+                                    }
+                                },
+                                "name": "Pop Time",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 59.399999999997135
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Pop Time\nquote: \"I blew his eye up\"\nreason: reacts to inflating the eye"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "videoai": {
+                                "beat": "Pop Time",
+                                "is_insert": false,
+                                "quote": "y'all see it right here",
+                                "reason": "points out the eye bubble"
+                            }
+                        },
+                        "name": "clip-08 (Pop Time)",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 88.19999999999823
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 30.0,
+                                "value": 8397.9
+                            }
+                        },
+                        "effects": [],
+                        "markers": [
+                            {
+                                "OTIO_SCHEMA": "Marker.2",
+                                "metadata": {
+                                    "videoai": {
+                                        "beat": "Pop Time",
+                                        "is_insert": false,
+                                        "quote": "y'all see it right here",
+                                        "reason": "points out the eye bubble"
+                                    }
+                                },
+                                "name": "Pop Time",
+                                "color": "GREEN",
+                                "marked_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 88.19999999999823
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 30.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "comment": "beat: Pop Time\nquote: \"y'all see it right here\"\nreason: points out the eye bubble"
+                            }
+                        ],
+                        "enabled": true,
+                        "color": null,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "",
+                                "available_range": null,
+                                "available_image_bounds": null,
+                                "target_url": "/Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    }
+                ],
+                "kind": "Video"
+            }
+        ]
+    }
+}

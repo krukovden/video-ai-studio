@@ -20,6 +20,7 @@ from videoai.core.models import (
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
 from videoai.stages.s04_analyze import (
+    INSTRUCTIONS,
     _describe_inserts,
     _insert_keyframes,
     _keyframes,
@@ -671,3 +672,17 @@ def test_describe_inserts_returns_empty_when_no_inserts(tmp_path: Path):
     )
 
     assert _describe_inserts(ctx, manifest, [], "brief") == {}
+
+
+# --- The prompt must tell the model that a phrase addressed to the camera
+# operator (pause/stop/cut/restart/delete) is a failed take even when the
+# recogniser garbles the words - this is fingerprint material, so dropping it
+# silently would not be caught by any artifact-shape test above. ---
+
+
+def test_prompt_instructs_model_to_reject_operator_instructions():
+    lowered = INSTRUCTIONS.lower()
+    assert "pause" in lowered
+    assert "camera" in lowered or "filming" in lowered
+    assert "garbled" in lowered or "mangled" in lowered or "mangles" in lowered
+    assert "delete" in lowered

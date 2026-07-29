@@ -47,6 +47,18 @@ Rules:
   the thing itself.
 - A beat the brief asks for that has no usable footage is worth reporting: name it
   in the description field rather than silently dropping it.
+- The video needs an ending. The last section must be a closing: the presenter
+  wrapping up, giving a verdict, saying goodbye, or otherwise signalling that the
+  video is over. Ending on a fragment or mid-thought, with no sign-off, is a
+  failure even if every beat in the creator's arc was otherwise covered. This does
+  not require a specific beat name — the creator's arc still governs the body of
+  the video — only that whatever closes it out actually closes it out.
+- Closing language is usually one of the last things filmed, so look for it near
+  the END of the shoot in recording order (phrase ids and timestamps run in
+  recording order within a clip, and clips are numbered in shooting order) rather
+  than assuming it sits wherever the arc's last beat happens to fall.
+- If no closing material exists anywhere in the footage, do not invent one or end
+  arbitrarily: say so plainly in the description field instead.
 - Aim for the target duration in the brief if one is given.
 - title is punchy and under 70 characters; description is two or three sentences.
 - Some phrases the creator has already reviewed and rejected are withheld from

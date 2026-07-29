@@ -1,0 +1,40 @@
+{
+  "fps": 30.0,
+  "width": 640,
+  "height": 360,
+  "clips": [
+    {
+      "src": "clip-06",
+      "offset": 0.0,
+      "dur": 3.800998,
+      "start": 0.0,
+      "quote": "Okay now watch this, it can do a backflip and land it perfectly.",
+      "reason": "child hypes up and shows the truck landing a backflip",
+      "beat": "Hook",
+      "angles": [],
+      "core_dur": 3.7600000000000002
+    },
+    {
+      "src": "clip-03",
+      "offset": 0.0,
+      "dur": 5.266984,
+      "start": 3.800998,
+      "quote": "Hi everyone, welcome back, this is the Mega Rex Monster Truck, and it is huge.",
+      "reason": "child gives full energetic intro calling the truck huge",
+      "beat": "Intro",
+      "angles": [],
+      "core_dur": 5.2
+    },
+    {
+      "src": "clip-05",
+      "offset": 0.0,
+      "dur": 3.567982,
+      "start": 9.067982,
+      "quote": "Look at how big these wheels are, they are enormous and super grippy.",
+      "reason": "child describes the wheels as enormous and grippy",
+      "beat": "Wheels Feature",
+      "angles": [],
+      "core_dur": 3.52
+    }
+  ]
+}

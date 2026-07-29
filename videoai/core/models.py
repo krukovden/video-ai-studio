@@ -284,6 +284,13 @@ class FinalResult(BaseModel):
 
     path: str
     duration: float
+    # The delivered frame, and how long it took to build. Both are recorded
+    # because the final is cut from the originals rather than from the draft:
+    # the resolution is the thing that used to be silently wrong, and the cost of
+    # getting it right is what a creator needs to know before re-rendering.
+    width: int = 0
+    height: int = 0
+    render_seconds: float = 0.0
     intro: bool = False
     intro_title: str = ""
     title_count: int = 0

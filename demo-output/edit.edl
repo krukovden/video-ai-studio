@@ -1,0 +1,112 @@
+TITLE: VideoAI edit
+
+001  IMG5665  V     C        00:00:23:23 00:00:50:09 00:00:00:00 00:00:26:16
+* FROM CLIP NAME:  clip-04 (First Reaction)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5665.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5665.MOV
+* LOC: 00:00:00:00 GREEN   FIRST REACTION
+002  IMG5665  V     C        00:00:50:09 00:00:54:26 00:00:26:16 00:00:31:02
+* FROM CLIP NAME:  clip-04 (Meet the Toy)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5665.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5665.MOV
+* LOC: 00:00:00:00 GREEN   MEET THE TOY
+003  IMG5665  V     C        00:00:55:11 00:01:16:28 00:00:31:02 00:00:52:20
+* FROM CLIP NAME:  clip-04 (Meet the Toy)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5665.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5665.MOV
+* LOC: 00:00:00:00 GREEN   MEET THE TOY
+004  IMG5665  V     C        00:01:16:28 00:01:19:08 00:00:52:20 00:00:55:00
+* FROM CLIP NAME:  clip-04 (Meet the Toy)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5665.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5665.MOV
+* LOC: 00:00:00:00 GREEN   MEET THE TOY
+005  IMG5666  V     C        00:00:03:25 00:00:29:05 00:00:55:00 00:01:20:10
+* FROM CLIP NAME:  clip-05 (Fill It Up)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5666.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5666.MOV
+* LOC: 00:00:00:00 GREEN   FILL IT UP
+006  IMG8205  V     C        00:00:02:00 00:00:06:00 00:01:20:10 00:01:24:10
+* FROM CLIP NAME:  clip-12 (Fill It Up)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_8205.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_8205.MOV
+* LOC: 00:00:00:00 PURPLE  INSERT
+007  IMG5669  V     C        00:05:29:24 00:05:36:17 00:01:24:10 00:01:31:03
+* FROM CLIP NAME:  clip-08 (Fill It Up)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   FILL IT UP
+008  IMG5666  V     C        00:00:29:08 00:00:35:05 00:01:31:03 00:01:37:00
+* FROM CLIP NAME:  clip-05 (Fill It Up)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5666.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5666.MOV
+* LOC: 00:00:00:00 GREEN   FILL IT UP
+009  IMG5669  V     C        00:02:05:29 00:02:13:11 00:01:37:00 00:01:44:13
+* FROM CLIP NAME:  clip-08 (Fill It Up)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   FILL IT UP
+010  IMG5669  V     C        00:02:15:05 00:02:24:10 00:01:44:13 00:01:53:18
+* FROM CLIP NAME:  clip-08 (Fill It Up)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   FILL IT UP
+011  IMG5669  V     C        00:08:28:05 00:08:37:24 00:01:53:18 00:02:03:08
+* FROM CLIP NAME:  clip-08 (Bubbles Everywhere)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   BUBBLES EVERYWHERE
+012  IMG5669  V     C        00:08:44:29 00:08:49:08 00:02:03:08 00:02:07:17
+* FROM CLIP NAME:  clip-08 (Bubbles Everywhere)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   BUBBLES EVERYWHERE
+013  IMG8203  V     C        00:00:00:00 00:00:07:06 00:02:07:17 00:02:14:23
+* FROM CLIP NAME:  clip-10 (Bubbles Everywhere)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_8203.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_8203.MOV
+* LOC: 00:00:00:00 PURPLE  INSERT
+014  IMG5669  V     C        00:06:51:12 00:07:01:11 00:02:14:23 00:02:24:22
+* FROM CLIP NAME:  clip-08 (Bubbles Everywhere)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   BUBBLES EVERYWHERE
+015  IMG5669  V     C        00:01:30:21 00:01:41:20 00:02:24:22 00:02:35:21
+* FROM CLIP NAME:  clip-08 (Bubbles Everywhere)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   BUBBLES EVERYWHERE
+016  IMG5669  V     C        00:07:23:01 00:07:26:16 00:02:35:21 00:02:39:06
+* FROM CLIP NAME:  clip-08 (Pop Time)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   POP TIME
+017  IMG5669  V     C        00:04:57:18 00:05:06:06 00:02:39:06 00:02:47:24
+* FROM CLIP NAME:  clip-08 (Pop Time)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   POP TIME
+018  IMG5669  V     C        00:05:07:08 00:05:09:17 00:02:47:24 00:02:50:03
+* FROM CLIP NAME:  clip-08 (Pop Time)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   POP TIME
+019  IMG8204  V     C        00:00:03:00 00:00:08:00 00:02:50:03 00:02:55:03
+* FROM CLIP NAME:  clip-11 (Pop Time)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_8204.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_8204.MOV
+* LOC: 00:00:00:00 PURPLE  INSERT
+020  IMG5669  V     C        00:02:24:06 00:02:26:03 00:02:55:03 00:02:57:00
+* FROM CLIP NAME:  clip-08 (Pop Time)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   POP TIME
+021  IMG5669  V     C        00:04:36:26 00:04:38:26 00:02:57:00 00:02:59:00
+* FROM CLIP NAME:  clip-08 (Pop Time)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   POP TIME
+022  IMG5669  V     C        00:04:39:27 00:04:42:26 00:02:59:00 00:03:01:28
+* FROM CLIP NAME:  clip-08 (Pop Time)
+* FROM CLIP: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/1.Toy_Pimple_Popping/video/IMG_5669.MOV
+* OTIO TRUNCATED REEL NAME FROM: IMG_5669.MOV
+* LOC: 00:00:00:00 GREEN   POP TIME

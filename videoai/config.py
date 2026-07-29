@@ -86,6 +86,17 @@ class PolishSettings(BaseModel):
     # An explicit filename inside `music_dir`, which overrides the automatic pick.
     music_track: str | None = None
     music_dir: str = "assets/Music"
+    # Delivery, as opposed to review. The draft is cut from the 540p proxies so a
+    # human can check edit decisions in seconds; the final is cut from the
+    # original files and these three settings govern what comes out of that.
+    # 1080 because a clean downscale from 4K looks excellent and keeps the file
+    # manageable; 2160 delivers the source resolution untouched. The frame keeps
+    # the source's aspect — only the height is named here.
+    output_height: int = 1080
+    # Visually near-lossless, against the draft's 26.
+    output_crf: int = 18
+    # VideoToolbox when the build has it, libx264 when it does not.
+    hardware_encode: bool = True
 
 
 class Config(BaseModel):

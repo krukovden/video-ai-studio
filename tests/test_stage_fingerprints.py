@@ -79,7 +79,9 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
             Config(analyze=AnalyzeSettings(describe_inserts=False)),
             {"analyze"},
         ),
-        (Config(render=RenderSettings(audio_fade_seconds=0.5)), {"render_draft"}),
+        # Both stages cut their own segments now — the draft from the proxies and
+        # the final from the originals — so both fade at each cut.
+        (Config(render=RenderSettings(audio_fade_seconds=0.5)), {"render_draft", "polish"}),
         (Config(render=RenderSettings(draft_crf=30)), {"render_draft"}),
         (Config(plan=PlanSettings(exclude_phrases=["clip-01#004"])), {"plan"}),
         (Config(plan=PlanSettings(gain_db_by_beat={"Popping": -6.0})), {"plan"}),
@@ -93,6 +95,11 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(polish=PolishSettings(transition_frames=2)), {"polish"}),
         (Config(polish=PolishSettings(music_track="bensound-energy.mp3")), {"polish"}),
         (Config(polish=PolishSettings(music_dir="assets/Other")), {"polish"}),
+        # Delivery quality. These re-render the final and must touch nothing
+        # upstream: the draft is a review copy and is not affected by them.
+        (Config(polish=PolishSettings(output_height=2160)), {"polish"}),
+        (Config(polish=PolishSettings(output_crf=14)), {"polish"}),
+        (Config(polish=PolishSettings(hardware_encode=False)), {"polish"}),
     ],
 )
 def test_changing_a_setting_invalidates_exactly_the_stages_that_read_it(

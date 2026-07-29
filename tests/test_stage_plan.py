@@ -21,7 +21,7 @@ from videoai.core.models import (
 )
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
-from videoai.stages.s05_plan import plan
+from videoai.stages.s05_plan import INSTRUCTIONS, plan
 
 
 def _context(
@@ -458,3 +458,18 @@ def test_no_rejection_file_withholds_nothing(tmp_path: Path, monkeypatch):
     timeline = plan(ctx)
 
     assert len(timeline.clips) == 2
+
+
+# --- The prompt must tell the model the video needs a proper ending: this is
+# fingerprint material, so dropping it silently would not be caught by any
+# artifact-shape test above. ---
+
+
+def test_prompt_instructs_model_that_the_video_needs_an_ending():
+    lowered = INSTRUCTIONS.lower()
+    assert "closing" in lowered or "close it out" in lowered
+    assert "end of the shoot" in lowered or "end of recording" in lowered or (
+        "end" in lowered and "recording order" in lowered
+    )
+    assert "mid-thought" in lowered or "fragment" in lowered
+    assert "no closing material" in lowered or "description field" in lowered

@@ -45,6 +45,17 @@ Rules:
 - is_failed_take is true for restarts, cut-off sentences, obvious mistakes, and
   anything said while the shot is clearly not usable. Most of this footage is
   outtakes, so be willing to mark a lot of it failed.
+- is_failed_take is also true for a phrase addressed to whoever is holding the
+  camera rather than to the audience — asking them to pause, stop, cut, wait,
+  hold on, start over, do it again, or delete that. This is the seam between
+  takes, not content, and must never reach the finished video. The speech
+  recogniser regularly mangles these words into nonsense (a real example: the
+  child saying "Pause. Pause." was transcribed as "Pazo. Pow so"), so do not
+  rely on matching specific words. Judge by intent and context instead: a
+  phrase that reads as garbled nonsense sitting between two otherwise coherent
+  sentences is very often a mangled instruction to the person filming, and
+  should be marked failed even though the exact words make no sense on their
+  own.
 - speaker: an adult sometimes helps off or on camera. Mark who carries the line.
   "helper" is not automatically bad — a helper question that sets up the child's
   answer earns its place — but the child leads the video.

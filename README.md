@@ -307,8 +307,28 @@ Cost: $0.
 
 Builds `output/final.mp4` beside the draft: the draft is what you watch to
 check edit decisions, the final is what someone would actually sit through.
-The draft itself is never touched. Four things are added, in one ffmpeg
-invocation so the picture is encoded once rather than once per element:
+The draft itself is never touched.
+
+**The final is cut from the original footage, not from the draft.** The draft
+is assembled out of the 540p proxies because a review copy should be ready in
+seconds; building the deliverable on top of it would ship a video with a
+sixteenth of the pixels you shot. This stage has the manifest's original paths
+and the timeline's exact in and out points, so it re-cuts every segment
+straight from the source files at `polish.output_height` (1080 by default, a
+clean downscale from 4K; set `2160` for true 4K) and `polish.output_crf` (18,
+visually near-lossless, against the draft's 26), through VideoToolbox when
+`polish.hardware_encode` is on and the build has it. Nothing is ever upscaled,
+the finished frame keeps the source's aspect, and an original that has moved
+stops the stage by name rather than quietly falling back to its proxy. Turned
+footage needs no special handling: ffmpeg autorotates on decode whenever the
+output goes through a filter chain, so a portrait clip stored as landscape
+frames plus a display matrix arrives upright and is delivered upright.
+
+The audio target is unchanged — AAC, 44100 Hz, mono, exactly what the draft
+settled on — because the concat step depends on every segment agreeing on it.
+
+Four things are then added, in one ffmpeg invocation so the picture is encoded
+once rather than once per element:
 
 - **A title card** of `polish.intro_seconds`, carrying the title the planner
   wrote into `05a-storyplan`, cross-dissolving into the first segment.
@@ -335,10 +355,13 @@ in which case titles are rasterised and overlaid as images instead) all still
 produce a video, and the artifact says what was left out. `polish.enabled:
 false` copies the draft through untouched.
 
-Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `06-draft`. Writes
-`output/final.mp4`, the credit in `output/metadata.md`, and `08-final.json`
-(path, duration, which elements were applied, the chosen track and its
-attribution). Runs locally with `ffmpeg`. Cost: $0.
+Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `06-draft`. Writes its own
+delivery cuts under `work/polish/`, `output/final.mp4`, the credit in
+`output/metadata.md`, and `08-final.json` (path, duration, the delivered frame,
+the wall-clock render time, which elements were applied, the chosen track and
+its attribution). Runs locally with `ffmpeg`. Cost: $0 in money and real time
+in minutes — cutting twenty-two segments out of 4K HEVC is slower than cutting
+them out of proxies, which is why the artifact records how long it took.
 
 
 ## Caching
@@ -366,7 +389,12 @@ Concretely:
 - **Changing a config value** re-runs only the stages that declare reading it.
   Most settings are scoped to one stage, but `render.draft_height` is read by
   both `ingest` (it sets the proxy's build height) and `render_draft`, so
-  changing the draft resolution rebuilds every proxy, not just the final cut.
+  changing the draft resolution rebuilds every proxy, not just the final cut —
+  and `render.audio_fade_seconds` is read by `render_draft` and `polish` alike,
+  since both do their own cutting and have to fade a cut the same way. The
+  three delivery settings (`polish.output_height`, `polish.output_crf`,
+  `polish.hardware_encode`) re-render `output/final.mp4` and touch nothing
+  upstream: they are about the deliverable, not about the review copy.
 - **Editing a prompt** in the stage source re-runs that stage, because the
   prompt text itself is mixed into its fingerprint.
 - **Hand-editing an artifact under `work/`** — this project's file-based
