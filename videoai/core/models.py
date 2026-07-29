@@ -29,9 +29,10 @@ class Manifest(BaseModel):
 class ClipQuality(BaseModel):
     clip_id: str
     blur: float
-    shake: float
+    motion: float
     black_ratio: float
     usable: bool
+    scored: bool = True
 
 
 class QualityReport(BaseModel):

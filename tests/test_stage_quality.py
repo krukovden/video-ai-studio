@@ -2,7 +2,7 @@ import subprocess
 from pathlib import Path
 
 from videoai.config import Config
-from videoai.core.models import Manifest, QualityReport
+from videoai.core.models import ClipInfo, Manifest, QualityReport
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
 from videoai.stages.s01_ingest import ingest
@@ -86,3 +86,32 @@ def test_every_clip_appears_in_report(tmp_path: Path, make_clip):
     report = quality(ctx)
 
     assert {c.clip_id for c in report.clips} == {c.clip_id for c in manifest.clips}
+
+
+def test_undecodable_proxy_is_marked_not_scored_not_raised(tmp_path: Path):
+    ctx = _context(tmp_path)
+    bad_proxy = ctx.work_dir / "garbage.mp4"
+    bad_proxy.write_bytes(b"this is not a video file")
+    manifest = Manifest(
+        clips=[
+            ClipInfo(
+                clip_id="clip-01",
+                path=str(bad_proxy),
+                duration=2.0,
+                width=320,
+                height=240,
+                fps=30.0,
+                has_audio=False,
+                audio_path=None,
+                proxy_path=str(bad_proxy),
+            )
+        ]
+    )
+    ctx.store.write("01-manifest", manifest, fingerprint="fp")
+
+    report = quality(ctx)
+
+    assert len(report.clips) == 1
+    clip = report.by_id("clip-01")
+    assert clip.scored is False
+    assert clip.usable is False
