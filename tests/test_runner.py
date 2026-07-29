@@ -1,0 +1,120 @@
+from pathlib import Path
+
+import pytest
+from pydantic import BaseModel
+
+from videoai.config import Config
+from videoai.core.registry import REGISTRY, StageContext, StageSpec, stage
+from videoai.core.runner import run_pipeline
+from videoai.core.store import ArtifactStore
+
+
+class Payload(BaseModel):
+    value: int
+
+
+@pytest.fixture
+def clean_registry():
+    saved = dict(REGISTRY)
+    REGISTRY.clear()
+    yield REGISTRY
+    REGISTRY.clear()
+    REGISTRY.update(saved)
+
+
+@pytest.fixture
+def ctx(tmp_path: Path) -> StageContext:
+    for name in ("input", "work", "output"):
+        (tmp_path / name).mkdir()
+    return StageContext(
+        project_dir=tmp_path,
+        input_dir=tmp_path / "input",
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
+        config=Config(),
+        store=ArtifactStore(tmp_path / "work"),
+    )
+
+
+def _register_two_stages(calls: list[str]) -> None:
+    @stage(id="first", produces="01-first", requires=(), model=Payload)
+    def first(ctx: StageContext) -> Payload:
+        calls.append("first")
+        return Payload(value=1)
+
+    @stage(id="second", produces="02-second", requires=("01-first",), model=Payload)
+    def second(ctx: StageContext) -> Payload:
+        calls.append("second")
+        previous = ctx.store.read("01-first", Payload)
+        return Payload(value=previous.value + 1)
+
+
+def test_stages_run_in_dependency_order(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+    _register_two_stages(calls)
+    executed = run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    assert calls == ["first", "second"]
+    assert executed == ["first", "second"]
+    assert ctx.store.read("02-second", Payload).value == 2
+
+
+def test_second_run_skips_everything_when_inputs_unchanged(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+    _register_two_stages(calls)
+    run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    executed = run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    assert executed == []
+    assert calls == ["first", "second"]
+
+
+def test_changed_source_fingerprint_reruns_all(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+    _register_two_stages(calls)
+    run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    executed = run_pipeline(ctx, only=None, force=False, extra_fingerprint="src-changed")
+    assert executed == ["first", "second"]
+
+
+def test_force_reruns_even_when_cached(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+    _register_two_stages(calls)
+    run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    executed = run_pipeline(ctx, only=None, force=True, extra_fingerprint="src")
+    assert executed == ["first", "second"]
+
+
+def test_only_runs_a_single_stage(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+    _register_two_stages(calls)
+    run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    calls.clear()
+    executed = run_pipeline(ctx, only="second", force=True, extra_fingerprint="src")
+    assert executed == ["second"]
+    assert calls == ["second"]
+
+
+def test_only_with_unknown_stage_id_raises(clean_registry, ctx: StageContext):
+    _register_two_stages([])
+    with pytest.raises(KeyError, match="unknown stage"):
+        run_pipeline(ctx, only="nope", force=False, extra_fingerprint="src")
+
+
+def test_provider_change_invalidates_stage(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+
+    @stage(id="only", produces="01-only", requires=(), provider_key="asr", model=Payload)
+    def only_stage(ctx: StageContext) -> Payload:
+        calls.append("only")
+        return Payload(value=1)
+
+    run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    switched = StageContext(
+        project_dir=ctx.project_dir,
+        input_dir=ctx.input_dir,
+        work_dir=ctx.work_dir,
+        output_dir=ctx.output_dir,
+        config=Config(providers={"asr": "mock", "llm": "claude_cli"}),
+        store=ctx.store,
+    )
+    executed = run_pipeline(switched, only=None, force=False, extra_fingerprint="src")
+    assert executed == ["only"]
