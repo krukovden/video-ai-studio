@@ -98,7 +98,8 @@ def run(
         typer.echo(f"Stage '{failure.stage_id}' failed: {failure.cause}", err=True)
         typer.echo(
             "Artifacts from earlier stages are kept, so fix the cause and re-run just "
-            f"this stage:\n  videoai run {project} --stage {failure.stage_id}",
+            f"this stage:\n  videoai run {project} --config {config_path} "
+            f"--stage {failure.stage_id}",
             err=True,
         )
         if debug:

@@ -220,6 +220,27 @@ def test_stage_failure_names_the_stage_and_exits_non_zero(tmp_path: Path, make_c
     assert "Traceback" not in combined
 
 
+def test_stage_failure_re_run_command_includes_the_custom_config_path(
+    tmp_path: Path, make_clip
+):
+    """Following the suggested re-run command verbatim after a run made with a
+    custom --config must not silently fall back to config.yaml's defaults, which
+    select different (and more expensive) providers."""
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=3.0).rename(project / "video" / "a.mp4")
+    config_path = tmp_path / "custom-config.yaml"
+    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+
+    # No mock ASR sidecar exists, so `transcribe` raises FileNotFoundError.
+    result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+
+    assert result.exit_code != 0
+    combined = result.output + (result.stderr if result.stderr_bytes else "")
+    assert f"--config {config_path}" in combined
+    assert "--stage transcribe" in combined
+
+
 def test_debug_flag_keeps_the_traceback(tmp_path: Path, make_clip):
     project = tmp_path / "project"
     (project / "video").mkdir(parents=True)
