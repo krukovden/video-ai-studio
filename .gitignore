@@ -16,5 +16,8 @@ node_modules/
 projects/*/work/
 projects/*/output/
 
+# Source footage and music — gigabytes of media, never in git
+assets/
+
 # macOS
 .DS_Store
