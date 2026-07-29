@@ -67,12 +67,23 @@ def _load_model(model_name: str):
 class ParakeetASR:
     name = "parakeet"
 
-    def __init__(self, model_name: str = DEFAULT_MODEL) -> None:
+    def __init__(
+        self,
+        model_name: str = DEFAULT_MODEL,
+        chunk_duration_seconds: float = 120.0,
+        overlap_duration_seconds: float = 15.0,
+    ) -> None:
         self.model_name = model_name
+        self.chunk_duration_seconds = chunk_duration_seconds
+        self.overlap_duration_seconds = overlap_duration_seconds
 
     def transcribe(self, audio_path: Path) -> list[Word]:
         model = _load_model(self.model_name)
-        result = model.transcribe(str(audio_path))
+        result = model.transcribe(
+            str(audio_path),
+            chunk_duration=self.chunk_duration_seconds,
+            overlap_duration=self.overlap_duration_seconds,
+        )
         words: list[Word] = []
         for sentence in result.sentences:
             words.extend(merge_tokens_to_words(sentence.tokens))

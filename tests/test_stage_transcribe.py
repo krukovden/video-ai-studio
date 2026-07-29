@@ -170,6 +170,51 @@ def test_only_the_primary_camera_is_transcribed(tmp_path: Path, make_clip):
     assert result.by_id(secondary.clip_id).words == []
 
 
+def test_transcribe_stage_resolves_the_asr_provider_with_the_configured_chunking(
+    tmp_path: Path, make_clip, monkeypatch
+):
+    """The stage, not just `resolve_asr`, has to hand chunk/overlap settings over."""
+    from videoai.config import Config, TranscribeSettings
+    from videoai.providers.asr_mock import MockASR
+    from videoai.stages import s03_transcribe
+
+    seen: list[tuple[str, float | None, float | None]] = []
+
+    def fake_resolve_asr(name, chunk_duration_seconds=None, overlap_duration_seconds=None):
+        seen.append((name, chunk_duration_seconds, overlap_duration_seconds))
+        return MockASR()
+
+    monkeypatch.setattr(s03_transcribe, "resolve_asr", fake_resolve_asr)
+
+    for name in ("input", "work", "output"):
+        (tmp_path / name).mkdir(exist_ok=True)
+    ctx = StageContext(
+        project_dir=tmp_path,
+        input_dir=tmp_path / "input",
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
+        config=Config(
+            providers={"asr": "mock", "llm": "mock"},
+            transcribe=TranscribeSettings(
+                chunk_duration_seconds=45.0, overlap_duration_seconds=5.0
+            ),
+        ),
+        store=ArtifactStore(tmp_path / "work"),
+    )
+    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "a.mp4")
+    from videoai.stages.s01_ingest import ingest
+
+    manifest = ingest(ctx)
+    ctx.store.write("01-manifest", manifest, fingerprint="fp")
+    ctx.store.write("01b-sync", SyncMap(clips=[], primary_camera="main"), fingerprint="fp")
+    sidecar = Path(manifest.clips[0].audio_path).with_suffix(".words.json")
+    sidecar.write_text(json.dumps(_words(("Look", 0.2, 0.5))), encoding="utf-8")
+
+    s03_transcribe.transcribe(ctx)
+
+    assert seen == [("mock", 45.0, 5.0)]
+
+
 def test_merge_tokens_to_words_uses_first_and_last_token_boundaries():
     tokens = [
         _FakeToken(" re", 1.0, 1.1),

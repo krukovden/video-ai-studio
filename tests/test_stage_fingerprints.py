@@ -52,6 +52,14 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         ),
         (Config(transcribe=TranscribeSettings(max_words_per_phrase=12)), {"analyze"}),
         (Config(transcribe=TranscribeSettings(cut_padding_seconds=0.4)), {"plan"}),
+        (
+            Config(transcribe=TranscribeSettings(chunk_duration_seconds=60.0)),
+            {"transcribe"},
+        ),
+        (
+            Config(transcribe=TranscribeSettings(overlap_duration_seconds=5.0)),
+            {"transcribe"},
+        ),
         (Config(analyze=AnalyzeSettings(keyframes_per_phrase=0)), {"analyze"}),
         (Config(analyze=AnalyzeSettings(max_keyframes=10)), {"analyze"}),
         (Config(analyze=AnalyzeSettings(llm_model="opus")), {"analyze", "plan"}),

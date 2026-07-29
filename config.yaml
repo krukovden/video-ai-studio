@@ -8,6 +8,10 @@ transcribe:
   phrase_gap_seconds: 0.5
   max_words_per_phrase: 30
   cut_padding_seconds: 0.15
+  # Long clips are chunked so parakeet-mlx stays inside the GPU's unified-memory
+  # buffer limit instead of allocating the whole file as one buffer.
+  chunk_duration_seconds: 120.0
+  overlap_duration_seconds: 15.0
 
 analyze:
   keyframes_per_phrase: 1

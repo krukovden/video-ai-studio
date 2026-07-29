@@ -17,6 +17,8 @@ class TranscribeSettings(BaseModel):
     phrase_gap_seconds: float = 0.5
     max_words_per_phrase: int = 30
     cut_padding_seconds: float = 0.15
+    chunk_duration_seconds: float = 120.0
+    overlap_duration_seconds: float = 15.0
 
 
 class AnalyzeSettings(BaseModel):

@@ -20,7 +20,14 @@ class LLMProvider(Protocol):
     def complete_json(self, prompt: str, images: list[Path], timeout: int) -> dict: ...
 
 
-def resolve_asr(name: str) -> ASRProvider:
+def resolve_asr(
+    name: str,
+    chunk_duration_seconds: float | None = None,
+    overlap_duration_seconds: float | None = None,
+) -> ASRProvider:
+    """`chunk_duration_seconds`/`overlap_duration_seconds` are the configured
+    `transcribe.chunk_duration_seconds`/`transcribe.overlap_duration_seconds`;
+    providers that have no chunking (the mock) ignore them."""
     if name == "mock":
         from videoai.providers.asr_mock import MockASR
 
@@ -28,7 +35,12 @@ def resolve_asr(name: str) -> ASRProvider:
     if name == "parakeet":
         from videoai.providers.asr_parakeet import ParakeetASR
 
-        return ParakeetASR()
+        kwargs = {}
+        if chunk_duration_seconds is not None:
+            kwargs["chunk_duration_seconds"] = chunk_duration_seconds
+        if overlap_duration_seconds is not None:
+            kwargs["overlap_duration_seconds"] = overlap_duration_seconds
+        return ParakeetASR(**kwargs)
     raise ValueError(f"unknown asr provider: {name}")
 
 
