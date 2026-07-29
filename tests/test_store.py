@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from videoai.core.store import ArtifactStore, hash_parts
+from videoai.core.store import ArtifactStore, hash_parts, source_key
 
 
 class Sample(BaseModel):
@@ -58,6 +58,59 @@ def test_hash_parts_is_stable_and_order_sensitive():
     assert hash_parts("a", "b") == hash_parts("a", "b")
     assert hash_parts("a", "b") != hash_parts("b", "a")
     assert len(hash_parts("a")) == 16
+
+
+# --- Finding C3: the store has to expose artifact CONTENT so a stage can chain
+# on what its inputs actually say, not on how they were fingerprinted ---
+
+
+def test_content_hash_is_none_before_write(tmp_path: Path):
+    assert ArtifactStore(tmp_path).content_hash("01-sample") is None
+
+
+def test_content_hash_tracks_content_not_fingerprint(tmp_path: Path):
+    store = ArtifactStore(tmp_path)
+    store.write("01-sample", Sample(name="a", value=1), fingerprint="fp1")
+    same_content = store.content_hash("01-sample")
+
+    # Same content, different fingerprint: the content hash must not move.
+    store.write("01-sample", Sample(name="a", value=1), fingerprint="fp2")
+    assert store.content_hash("01-sample") == same_content
+
+    # Different content, same fingerprint: the content hash must move.
+    store.write("01-sample", Sample(name="a", value=2), fingerprint="fp2")
+    assert store.content_hash("01-sample") != same_content
+
+
+def test_content_hash_sees_a_hand_edited_artifact(tmp_path: Path):
+    store = ArtifactStore(tmp_path)
+    store.write("01-sample", Sample(name="a", value=1), fingerprint="fp1")
+    written = store.content_hash("01-sample")
+
+    store.path("01-sample").write_text(
+        Sample(name="a", value=99).model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    assert store.content_hash("01-sample") != written
+    # The sidecar still reports the hash as of the last write, which is what makes
+    # the hand edit detectable.
+    assert store.recorded_content_hash("01-sample") == written
+
+
+def test_source_key_changes_with_size_and_stays_stable_otherwise(tmp_path: Path):
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"aaa")
+    first = source_key(path)
+
+    assert source_key(path) == first
+    path.write_bytes(b"aaaa")
+    assert source_key(path) != first
+    assert source_key(tmp_path / "clip.mp4") != source_key(_copy(path, tmp_path / "other.mp4"))
+
+
+def _copy(source: Path, target: Path) -> Path:
+    target.write_bytes(source.read_bytes())
+    return target
 
 
 def test_float_round_trip_fidelity(tmp_path: Path):

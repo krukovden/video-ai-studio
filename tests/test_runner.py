@@ -176,6 +176,9 @@ def test_missing_artifact_with_stale_fingerprint_reruns(clean_registry, ctx: Sta
 
 
 def _register_media_and_brief_stages(calls: list[str]) -> None:
+    # Not `calls`: the tests clear that list between runs.
+    runs: list[int] = []
+
     @stage(id="media_only", produces="01-media", requires=(), model=Payload)
     def media_only(ctx: StageContext) -> Payload:
         calls.append("media_only")
@@ -183,8 +186,11 @@ def _register_media_and_brief_stages(calls: list[str]) -> None:
 
     @stage(id="brief_reader", produces="02-brief", requires=(), model=Payload, uses_brief=True)
     def brief_reader(ctx: StageContext) -> Payload:
+        # Non-deterministic on purpose: `analyze` and `plan` are LLM calls, so a
+        # re-run of a brief reader normally yields different content.
         calls.append("brief_reader")
-        return Payload(value=2)
+        runs.append(1)
+        return Payload(value=100 + len(runs))
 
     @stage(id="downstream", produces="03-downstream", requires=("02-brief",), model=Payload)
     def downstream(ctx: StageContext) -> Payload:
@@ -268,3 +274,79 @@ def test_stale_downstream_reports_nothing_when_single_stage_run_changed_nothing(
     stale = stale_downstream(ctx, "media_only", media_fingerprint="media-1", brief_fingerprint="brief-1")
 
     assert stale == []
+
+
+# --- Finding C3: chain on artifact CONTENT, not on upstream fingerprints ---
+
+
+def _register_nondeterministic_chain(calls: list[str]) -> None:
+    """`analyze` and `plan` are LLM calls: re-running one with identical inputs
+    legitimately produces different content under an identical fingerprint."""
+    runs: list[int] = []
+
+    @stage(id="upstream", produces="01-upstream", requires=(), model=Payload)
+    def upstream(ctx: StageContext) -> Payload:
+        calls.append("upstream")
+        runs.append(1)
+        return Payload(value=len(runs))
+
+    @stage(id="downstream", produces="02-downstream", requires=("01-upstream",), model=Payload)
+    def downstream(ctx: StageContext) -> Payload:
+        calls.append("downstream")
+        return Payload(value=ctx.store.read("01-upstream", Payload).value * 10)
+
+
+def test_single_stage_rerun_of_a_nondeterministic_stage_marks_downstream_stale(
+    clean_registry, ctx: StageContext
+):
+    calls: list[str] = []
+    _register_nondeterministic_chain(calls)
+    run_pipeline(ctx, only=None, force=False, media_fingerprint="media-1")
+    assert ctx.store.read("02-downstream", Payload).value == 10
+
+    run_pipeline(ctx, only="upstream", force=False, media_fingerprint="media-1")
+    assert ctx.store.read("01-upstream", Payload).value == 2
+
+    assert stale_downstream(ctx, "upstream", media_fingerprint="media-1", brief_fingerprint="") == [
+        "downstream"
+    ]
+
+    calls.clear()
+    executed = run_pipeline(ctx, only=None, force=False, media_fingerprint="media-1")
+
+    assert executed == ["downstream"]
+    assert ctx.store.read("02-downstream", Payload).value == 20
+
+
+def test_upstream_rerun_producing_identical_content_leaves_downstream_cached(
+    clean_registry, ctx: StageContext
+):
+    calls: list[str] = []
+    _register_two_stages(calls)
+    run_pipeline(ctx, only=None, force=False, media_fingerprint="media-1")
+
+    run_pipeline(ctx, only="first", force=True, media_fingerprint="media-1")
+    calls.clear()
+
+    assert stale_downstream(ctx, "first", media_fingerprint="media-1", brief_fingerprint="") == []
+    assert run_pipeline(ctx, only=None, force=False, media_fingerprint="media-1") == []
+    assert calls == []
+
+
+def test_hand_edited_artifact_reruns_its_dependents(clean_registry, ctx: StageContext):
+    """Artifacts are readable JSON on purpose, so editing one by hand is a
+    supported move; its dependents must notice."""
+    calls: list[str] = []
+    _register_two_stages(calls)
+    run_pipeline(ctx, only=None, force=False, media_fingerprint="media-1")
+    calls.clear()
+
+    ctx.store.path("01-first").write_text(
+        Payload(value=41).model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    executed = run_pipeline(ctx, only=None, force=False, media_fingerprint="media-1")
+
+    assert executed == ["second"]
+    assert calls == ["second"]
+    assert ctx.store.read("02-second", Payload).value == 42

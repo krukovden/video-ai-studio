@@ -36,6 +36,12 @@ class StageSpec:
     model: type[BaseModel]
     fn: Callable[[StageContext], BaseModel]
     uses_brief: bool = False
+    # Dotted paths into `Config` (e.g. "render.draft_height") whose values this
+    # stage actually reads, and the prompt text it sends to an LLM. Both are
+    # mixed into the stage fingerprint: a setting or prompt a stage reads is an
+    # input, and changing one has to invalidate that stage's cached artifact.
+    config_keys: tuple[str, ...] = ()
+    prompt: str | None = None
 
 
 REGISTRY: dict[str, StageSpec] = {}
@@ -50,6 +56,8 @@ def stage(
     version: str = "1",
     model: type[BaseModel],
     uses_brief: bool = False,
+    config_keys: tuple[str, ...] = (),
+    prompt: str | None = None,
 ):
     def decorator(fn: Callable[[StageContext], BaseModel]):
         if id in REGISTRY:
@@ -69,6 +77,8 @@ def stage(
             model=model,
             fn=fn,
             uses_brief=uses_brief,
+            config_keys=config_keys,
+            prompt=prompt,
         )
         return fn
 
