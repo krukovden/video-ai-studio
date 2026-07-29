@@ -2194,7 +2194,749 @@ git commit -m "feat: phrase segmentation and packed transcript"
 
 ---
 
-### Task 8: Repeated-take detection
+### Task 8: Camera grouping and audio synchronisation
+
+**Files:**
+- Modify: `videoai/core/ffmpeg.py` (creation time in `ProbeResult`), `videoai/core/project.py` (`list_camera_clips`), `videoai/core/models.py` (append sync models, extend `ClipInfo`), `videoai/stages/s01_ingest.py` (camera + recorded_at)
+- Create: `videoai/logic/sync.py`, `videoai/stages/s02b_sync.py`
+- Test: `tests/test_sync.py`, `tests/test_stage_sync.py`, plus updates to `tests/test_ffmpeg.py`, `tests/test_project.py`, `tests/test_stage_ingest.py`
+
+**Why this exists.** The creator shoots with two cameras running at the same time, and only one
+of them carries a microphone worth listening to. Both record enough sound to align on, but only
+one produces a usable transcript. So this task does two things: it puts every clip on one
+timeline using audio cross-correlation, and it names the camera whose audio the pipeline should
+actually transcribe. Naming that camera is what keeps the rest of the pipeline simple — with a
+single transcribed camera there are no duplicated phrases at all, so the take detector sees only
+genuine retakes, and the second camera stays what it is: an alternative angle available at any
+moment the timeline says it was rolling.
+
+**Interfaces:**
+- Consumes: `probe`, `list_video_files` (Task 4); `ClipInfo`, `Manifest`; `ArtifactStore`.
+- Produces:
+  - `ProbeResult` gains `created_at: float | None` — epoch seconds parsed from the container's
+    `creation_time` tag, `None` when absent.
+  - `videoai/core/project.py`: `list_camera_clips(clip_dir: Path) -> dict[str, list[Path]]`.
+    Immediate subdirectories are cameras (`video/cam-a/…` → camera `cam-a`); when there are no
+    subdirectories with video in them, every file directly inside belongs to camera `main`.
+    Camera names are the directory names, sorted; dotfiles ignored.
+  - `ClipInfo` gains `camera: str = "main"` and `recorded_at: float | None = None`.
+  - `videoai/logic/sync.py`: `audio_envelope(wav_path, rate=100) -> np.ndarray`,
+    `estimate_offset(reference, other, rate=100, max_shift_seconds=600.0) -> tuple[float, float]`
+    returning `(offset_seconds, confidence)`, and
+    `build_sync_map(manifest, envelope_of) -> SyncMap`.
+  - Models `ClipSync` (`clip_id`, `camera`, `global_start: float`, `method: str`,
+    `confidence: float`) and `SyncMap` (`clips: list[ClipSync]`, `primary_camera: str`, `by_id`,
+    and `overlaps(clip_a: str, clip_b: str, manifest: Manifest) -> bool`).
+  - Stage id `sync`, artifact `01b-sync`, requires `01-manifest`, model `SyncMap`.
+  - `videoai/stages/s03_transcribe.py` is modified to require `01b-sync` and transcribe only the
+    primary camera's clips; clips from other cameras get an empty `ClipTranscript`.
+  - `Config` gains `sync: SyncSettings` with `primary_camera: str | None = None` — an override
+    for when automatic detection picks wrong.
+
+**Algorithm.** Coarse placement from `recorded_at` (present on iPhone footage, one-second
+precision); clips lacking it fall back to sequential placement within their camera, end to end.
+Refinement: for every pair of clips from different cameras whose coarse ranges overlap, estimate
+the audio offset by cross-correlating 100 Hz loudness envelopes; take the median of the
+high-confidence offsets per camera pair as that camera's clock correction and apply it to all its
+clips. Single-camera projects skip correlation entirely and record `method="metadata"` or
+`"sequential"`.
+
+**Primary camera selection.** `config.sync.primary_camera` wins when set. Otherwise pick the
+camera with the highest mean envelope energy across its clips — the one with the real microphone
+is markedly louder than a camera picking up room ambience. With one camera, it is that camera.
+With no audio anywhere, it is the first camera by name.
+
+- [ ] **Step 1: Write the failing sync-logic tests**
+
+`tests/test_sync.py`:
+
+```python
+import math
+import wave
+from pathlib import Path
+
+import numpy as np
+
+from videoai.core.models import ClipInfo, Manifest
+from videoai.logic.sync import audio_envelope, build_sync_map, estimate_offset
+
+
+def _write_wav(path: Path, samples: np.ndarray, rate: int = 16000) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = np.clip(samples, -1.0, 1.0)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes((data * 32767).astype("<i2").tobytes())
+    return path
+
+
+def _bursts(duration: float, burst_times: list[float], rate: int = 16000) -> np.ndarray:
+    samples = np.zeros(int(duration * rate), dtype=np.float64)
+    for start in burst_times:
+        begin = int(start * rate)
+        end = min(len(samples), begin + int(0.2 * rate))
+        if begin < len(samples):
+            noise = np.random.default_rng(abs(int(start * 1000)) + 1).normal(0, 0.4, end - begin)
+            samples[begin:end] = noise
+    return samples
+
+
+def test_audio_envelope_length_matches_duration(tmp_path: Path):
+    path = _write_wav(tmp_path / "a.wav", _bursts(3.0, [0.5, 1.5]))
+    envelope = audio_envelope(path, rate=100)
+    assert 290 <= len(envelope) <= 310
+
+
+def test_audio_envelope_is_loud_where_the_bursts_are(tmp_path: Path):
+    path = _write_wav(tmp_path / "a.wav", _bursts(3.0, [1.0]))
+    envelope = audio_envelope(path, rate=100)
+    assert envelope[100:120].mean() > envelope[200:280].mean() * 5
+
+
+def test_estimate_offset_recovers_a_known_shift(tmp_path: Path):
+    signal = _bursts(8.0, [1.0, 2.7, 4.1, 6.3])
+    reference = _write_wav(tmp_path / "ref.wav", signal)
+    shifted = _write_wav(tmp_path / "other.wav", np.concatenate([np.zeros(16000 * 2), signal]))
+
+    offset, confidence = estimate_offset(
+        audio_envelope(reference), audio_envelope(shifted)
+    )
+
+    assert math.isclose(offset, -2.0, abs_tol=0.15)
+    assert confidence > 2.0
+
+
+def test_estimate_offset_reports_low_confidence_for_unrelated_audio(tmp_path: Path):
+    first = _write_wav(tmp_path / "a.wav", _bursts(8.0, [1.0, 2.0, 3.0]))
+    second = _write_wav(tmp_path / "b.wav", np.random.default_rng(7).normal(0, 0.3, 16000 * 8))
+
+    _, confidence = estimate_offset(audio_envelope(first), audio_envelope(second))
+
+    assert confidence < 2.0
+
+
+def _clip(clip_id: str, camera: str, recorded_at: float | None, duration: float = 10.0) -> ClipInfo:
+    return ClipInfo(
+        clip_id=clip_id, path=f"/tmp/{clip_id}.mov", duration=duration, width=1920,
+        height=1080, fps=30.0, has_audio=True, camera=camera, recorded_at=recorded_at,
+    )
+
+
+def test_single_camera_places_clips_by_recorded_at():
+    manifest = Manifest(clips=[
+        _clip("clip-01", "main", 1000.0),
+        _clip("clip-02", "main", 1030.0),
+    ])
+
+    sync = build_sync_map(manifest, envelope_of=lambda clip: None)
+
+    assert sync.by_id("clip-01").global_start == 0.0
+    assert sync.by_id("clip-02").global_start == 30.0
+    assert sync.by_id("clip-02").method == "metadata"
+
+
+def test_missing_recorded_at_falls_back_to_sequential_placement():
+    manifest = Manifest(clips=[
+        _clip("clip-01", "main", None, duration=10.0),
+        _clip("clip-02", "main", None, duration=5.0),
+    ])
+
+    sync = build_sync_map(manifest, envelope_of=lambda clip: None)
+
+    assert sync.by_id("clip-01").global_start == 0.0
+    assert sync.by_id("clip-02").global_start == 10.0
+    assert sync.by_id("clip-02").method == "sequential"
+
+
+def test_two_cameras_are_aligned_by_audio_when_clocks_disagree():
+    # cam-b's clock is 5 s fast; its audio proves the true offset is 0.
+    manifest = Manifest(clips=[
+        _clip("clip-01", "cam-a", 1000.0, duration=20.0),
+        _clip("clip-02", "cam-b", 1005.0, duration=20.0),
+    ])
+    rng = np.random.default_rng(3)
+    shared = np.abs(rng.normal(0, 1.0, 2000))
+
+    def envelope_of(clip: ClipInfo):
+        return shared
+
+    sync = build_sync_map(manifest, envelope_of=envelope_of)
+
+    assert abs(sync.by_id("clip-01").global_start - sync.by_id("clip-02").global_start) < 0.2
+    assert sync.by_id("clip-02").method == "audio"
+
+
+def test_primary_camera_is_the_loud_one():
+    from videoai.logic.sync import choose_primary_camera
+
+    manifest = Manifest(clips=[
+        _clip("clip-01", "cam-a", 1000.0),
+        _clip("clip-02", "cam-b", 1000.0),
+    ])
+    quiet = np.full(500, 0.01)
+    loud = np.full(500, 0.4)
+
+    def envelope_of(clip: ClipInfo):
+        return loud if clip.camera == "cam-b" else quiet
+
+    assert choose_primary_camera(manifest, envelope_of) == "cam-b"
+
+
+def test_primary_camera_override_is_honoured_and_validated():
+    from videoai.logic.sync import choose_primary_camera
+
+    manifest = Manifest(clips=[_clip("clip-01", "cam-a", 1000.0), _clip("clip-02", "cam-b", 1000.0)])
+    envelope_of = lambda clip: np.full(10, 0.5)
+
+    assert choose_primary_camera(manifest, envelope_of, override="cam-a") == "cam-a"
+    try:
+        choose_primary_camera(manifest, envelope_of, override="cam-z")
+    except ValueError as error:
+        assert "cam-z" in str(error)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_primary_camera_without_audio_is_the_first_by_name():
+    from videoai.logic.sync import choose_primary_camera
+
+    manifest = Manifest(clips=[_clip("clip-01", "cam-b", None), _clip("clip-02", "cam-a", None)])
+
+    assert choose_primary_camera(manifest, envelope_of=lambda clip: None) == "cam-a"
+
+
+def test_overlaps_is_true_for_simultaneous_angles_and_false_for_sequential_takes():
+    manifest = Manifest(clips=[
+        _clip("clip-01", "cam-a", 1000.0, duration=20.0),
+        _clip("clip-02", "cam-b", 1000.0, duration=20.0),
+        _clip("clip-03", "cam-a", 1100.0, duration=20.0),
+    ])
+
+    sync = build_sync_map(manifest, envelope_of=lambda clip: None)
+
+    assert sync.overlaps("clip-01", "clip-02", manifest) is True
+    assert sync.overlaps("clip-01", "clip-03", manifest) is False
+```
+
+- [ ] **Step 2: Run the sync tests to verify they fail**
+
+Run: `uv run pytest tests/test_sync.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'videoai.logic.sync'`
+
+- [ ] **Step 3: Append the sync models to `videoai/core/models.py` and extend `ClipInfo`**
+
+Add these two fields to the existing `ClipInfo`, after `has_audio`:
+
+```python
+    camera: str = "main"
+    recorded_at: float | None = None
+```
+
+Append at the end of the file:
+
+```python
+class ClipSync(BaseModel):
+    clip_id: str
+    camera: str
+    global_start: float
+    method: str
+    confidence: float = 0.0
+
+
+class SyncMap(BaseModel):
+    clips: list[ClipSync] = Field(default_factory=list)
+    primary_camera: str = "main"
+
+    def clips_of(self, camera: str) -> list[ClipSync]:
+        return [clip for clip in self.clips if clip.camera == camera]
+
+    def by_id(self, clip_id: str) -> ClipSync:
+        for clip in self.clips:
+            if clip.clip_id == clip_id:
+                return clip
+        raise KeyError(f"unknown clip_id: {clip_id}")
+
+    def overlaps(self, clip_a: str, clip_b: str, manifest: "Manifest") -> bool:
+        """True when both clips were recording at the same moment — different
+        angles of one performance rather than two attempts at it."""
+        first, second = self.by_id(clip_a), self.by_id(clip_b)
+        if first.camera == second.camera:
+            return False
+        first_end = first.global_start + manifest.by_id(clip_a).duration
+        second_end = second.global_start + manifest.by_id(clip_b).duration
+        return first.global_start < second_end and second.global_start < first_end
+```
+
+- [ ] **Step 4: Implement `videoai/logic/sync.py`**
+
+```python
+"""Put every clip on one project timeline.
+
+Two cameras rolling at once produce the same words twice. Only a shared timeline
+tells "second angle" apart from "second attempt", so everything downstream that
+compares clips depends on this.
+"""
+from __future__ import annotations
+
+import wave
+from pathlib import Path
+from statistics import median
+from typing import Callable
+
+import numpy as np
+
+from videoai.core.models import ClipInfo, ClipSync, Manifest, SyncMap
+
+MIN_CONFIDENCE = 2.0
+
+
+def audio_envelope(wav_path: Path, rate: int = 100) -> np.ndarray:
+    """Loudness envelope at `rate` Hz. Speech shape survives; pitch does not,
+    which is what makes cross-correlation between different microphones work."""
+    with wave.open(str(wav_path), "rb") as handle:
+        frame_rate = handle.getframerate()
+        frames = handle.readframes(handle.getnframes())
+    samples = np.frombuffer(frames, dtype="<i2").astype(np.float64) / 32768.0
+    block = max(1, frame_rate // rate)
+    usable = len(samples) - (len(samples) % block)
+    if usable <= 0:
+        return np.zeros(0)
+    return np.abs(samples[:usable]).reshape(-1, block).mean(axis=1)
+
+
+def estimate_offset(
+    reference: np.ndarray,
+    other: np.ndarray,
+    rate: int = 100,
+    max_shift_seconds: float = 600.0,
+) -> tuple[float, float]:
+    """Seconds to add to `other` to align it with `reference`, plus a confidence
+    ratio (correlation peak over its own mean). Below MIN_CONFIDENCE, treat the
+    answer as unusable."""
+    if reference.size == 0 or other.size == 0:
+        return 0.0, 0.0
+    first = reference - reference.mean()
+    second = other - other.mean()
+    size = 1 << int(np.ceil(np.log2(len(first) + len(second))))
+    spectrum = np.fft.rfft(first, size) * np.conj(np.fft.rfft(second, size))
+    correlation = np.fft.irfft(spectrum, size)
+    correlation = np.concatenate([correlation[-(len(second) - 1):], correlation[: len(first)]])
+    lags = np.arange(-(len(second) - 1), len(first))
+    limit = int(max_shift_seconds * rate)
+    allowed = np.abs(lags) <= limit
+    if not allowed.any():
+        return 0.0, 0.0
+    window = correlation[allowed]
+    peak = int(np.argmax(window))
+    magnitude = float(window[peak])
+    baseline = float(np.mean(np.abs(window))) or 1e-9
+    return float(lags[allowed][peak]) / rate, abs(magnitude) / baseline
+
+
+def choose_primary_camera(
+    manifest: Manifest,
+    envelope_of: Callable[[ClipInfo], np.ndarray | None],
+    override: str | None = None,
+) -> str:
+    """The camera whose audio is worth transcribing.
+
+    Only one camera carries a real microphone; the other hears the room. Mean
+    envelope energy separates them reliably without any configuration.
+    """
+    cameras = sorted({clip.camera for clip in manifest.clips})
+    if not cameras:
+        return "main"
+    if override:
+        if override not in cameras:
+            raise ValueError(
+                f"config.sync.primary_camera={override!r} is not one of {cameras}"
+            )
+        return override
+    if len(cameras) == 1:
+        return cameras[0]
+
+    loudness: dict[str, float] = {}
+    for camera in cameras:
+        energies = [
+            float(envelope.mean())
+            for clip in manifest.clips
+            if clip.camera == camera
+            and (envelope := envelope_of(clip)) is not None
+            and envelope.size
+        ]
+        if energies:
+            loudness[camera] = sum(energies) / len(energies)
+    if not loudness:
+        return cameras[0]
+    return max(loudness, key=loudness.__getitem__)
+
+
+def build_sync_map(
+    manifest: Manifest,
+    envelope_of: Callable[[ClipInfo], np.ndarray | None],
+    primary_camera: str | None = None,
+) -> SyncMap:
+    cameras: dict[str, list[ClipInfo]] = {}
+    for clip in manifest.clips:
+        cameras.setdefault(clip.camera, []).append(clip)
+
+    placements: dict[str, tuple[float, str]] = {}
+    for camera, clips in cameras.items():
+        if all(clip.recorded_at is not None for clip in clips):
+            for clip in clips:
+                placements[clip.clip_id] = (float(clip.recorded_at), "metadata")
+        else:
+            cursor = 0.0
+            for clip in clips:
+                placements[clip.clip_id] = (cursor, "sequential")
+                cursor += clip.duration
+
+    corrections: dict[str, float] = {name: 0.0 for name in cameras}
+    methods: dict[str, str] = {}
+    names = sorted(cameras)
+    if len(names) > 1:
+        anchor = names[0]
+        anchor_envelopes = {clip.clip_id: envelope_of(clip) for clip in cameras[anchor]}
+        for name in names[1:]:
+            offsets: list[float] = []
+            for clip in cameras[name]:
+                other = envelope_of(clip)
+                if other is None:
+                    continue
+                for anchor_clip in cameras[anchor]:
+                    reference = anchor_envelopes.get(anchor_clip.clip_id)
+                    if reference is None:
+                        continue
+                    coarse_gap = placements[clip.clip_id][0] - placements[anchor_clip.clip_id][0]
+                    if abs(coarse_gap) > max(anchor_clip.duration, clip.duration) + 60.0:
+                        continue
+                    shift, confidence = estimate_offset(reference, other)
+                    if confidence >= MIN_CONFIDENCE:
+                        offsets.append(
+                            placements[anchor_clip.clip_id][0] + shift - placements[clip.clip_id][0]
+                        )
+            if offsets:
+                corrections[name] = median(offsets)
+                methods[name] = "audio"
+
+    origin = min(start for start, _ in placements.values())
+    synced: list[ClipSync] = []
+    for clip in manifest.clips:
+        start, method = placements[clip.clip_id]
+        synced.append(
+            ClipSync(
+                clip_id=clip.clip_id,
+                camera=clip.camera,
+                global_start=start + corrections[clip.camera] - origin,
+                method=methods.get(clip.camera, method),
+                confidence=1.0 if methods.get(clip.camera) == "audio" else 0.0,
+            )
+        )
+    return SyncMap(
+        clips=synced,
+        primary_camera=primary_camera
+        or choose_primary_camera(manifest, envelope_of),
+    )
+```
+
+- [ ] **Step 5: Run the sync tests to verify they pass**
+
+Run: `uv run pytest tests/test_sync.py -v`
+Expected: 8 passed
+
+- [ ] **Step 6: Add creation-time parsing to `videoai/core/ffmpeg.py`**
+
+Add `created_at: float | None = None` as the last field of `ProbeResult`, and inside `probe`,
+after the existing validation, parse the container tag:
+
+```python
+    created_at: float | None = None
+    raw_created = data.get("format", {}).get("tags", {}).get("creation_time")
+    if raw_created:
+        from datetime import datetime
+
+        try:
+            created_at = datetime.fromisoformat(raw_created.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            created_at = None
+```
+
+and pass `created_at=created_at` into the returned `ProbeResult`. A missing or unparseable
+creation time is not an error — sync falls back to sequential placement.
+
+- [ ] **Step 7: Add `list_camera_clips` to `videoai/core/project.py`**
+
+```python
+def list_camera_clips(clip_dir: Path) -> dict[str, list[Path]]:
+    """Camera name to its clips.
+
+    Subdirectories are cameras, which is how a two-camera shoot is handed over;
+    a flat folder of files is a single camera called `main`.
+    """
+    from videoai.core.ffmpeg import list_video_files
+
+    cameras: dict[str, list[Path]] = {}
+    for entry in sorted(clip_dir.iterdir()) if clip_dir.is_dir() else []:
+        if entry.is_dir() and not entry.name.startswith("."):
+            files = list_video_files(entry)
+            if files:
+                cameras[entry.name] = files
+    if cameras:
+        return cameras
+    files = list_video_files(clip_dir)
+    return {"main": files} if files else {}
+```
+
+- [ ] **Step 8: Write the failing camera-grouping tests**
+
+Append to `tests/test_project.py`:
+
+```python
+def test_list_camera_clips_treats_subdirectories_as_cameras(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    (video / "cam-b").mkdir(parents=True)
+    (video / "cam-a").mkdir(parents=True)
+    make_clip("x.mp4", seconds=1.0).rename(video / "cam-a" / "x.mp4")
+    make_clip("y.MOV", seconds=1.0).rename(video / "cam-b" / "y.MOV")
+
+    from videoai.core.project import list_camera_clips
+
+    cameras = list_camera_clips(video)
+
+    assert sorted(cameras) == ["cam-a", "cam-b"]
+    assert [path.name for path in cameras["cam-a"]] == ["x.mp4"]
+
+
+def test_list_camera_clips_falls_back_to_single_main_camera(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    video.mkdir()
+    make_clip("x.mp4", seconds=1.0).rename(video / "x.mp4")
+
+    from videoai.core.project import list_camera_clips
+
+    cameras = list_camera_clips(video)
+
+    assert list(cameras) == ["main"]
+    assert [path.name for path in cameras["main"]] == ["x.mp4"]
+
+
+def test_list_camera_clips_ignores_empty_subdirectories(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    (video / "empty").mkdir(parents=True)
+    make_clip("x.mp4", seconds=1.0).rename(video / "x.mp4")
+
+    from videoai.core.project import list_camera_clips
+
+    assert list(list_camera_clips(video)) == ["main"]
+```
+
+- [ ] **Step 9: Teach ingest about cameras**
+
+In `videoai/stages/s01_ingest.py`, replace the flat `list_video_files(clip_dir)` call with
+`list_camera_clips(clip_dir)`, iterate cameras in sorted order and clips within each camera in
+order, keep `clip-NN` numbering globally sequential across all cameras, and set `camera` and
+`recorded_at=info.created_at` on each `ClipInfo`. The "no video files found" error must still
+fire when no camera yields any clip.
+
+Append this test to `tests/test_stage_ingest.py`:
+
+```python
+def test_ingest_labels_clips_with_their_camera(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    (project / "video" / "cam-a").mkdir(parents=True)
+    (project / "video" / "cam-b").mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(project / "video" / "cam-a" / "a.mp4")
+    make_clip("b.mp4", seconds=2.0).rename(project / "video" / "cam-b" / "b.mp4")
+
+    manifest = ingest(_context(project))
+
+    assert {clip.camera for clip in manifest.clips} == {"cam-a", "cam-b"}
+    assert [clip.clip_id for clip in manifest.clips] == ["clip-01", "clip-02"]
+```
+
+- [ ] **Step 10: Write the failing sync-stage test**
+
+`tests/test_stage_sync.py`:
+
+```python
+from pathlib import Path
+
+from videoai.config import Config
+from videoai.core.models import ClipInfo, Manifest, SyncMap
+from videoai.core.registry import StageContext
+from videoai.core.store import ArtifactStore
+from videoai.stages.s02b_sync import sync
+
+
+def _context(tmp_path: Path) -> StageContext:
+    (tmp_path / "work").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "output").mkdir(parents=True, exist_ok=True)
+    return StageContext(
+        project_dir=tmp_path,
+        input_dir=tmp_path,
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
+        config=Config(),
+        store=ArtifactStore(tmp_path / "work"),
+    )
+
+
+def test_sync_stage_places_every_clip_on_the_timeline(tmp_path: Path):
+    ctx = _context(tmp_path)
+    ctx.store.write("01-manifest", Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mov", duration=10.0, width=1920, height=1080,
+                 fps=30.0, has_audio=False, camera="main", recorded_at=1000.0),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mov", duration=10.0, width=1920, height=1080,
+                 fps=30.0, has_audio=False, camera="main", recorded_at=1020.0),
+    ]), fingerprint="fp")
+
+    result = sync(ctx)
+
+    assert isinstance(result, SyncMap)
+    assert result.by_id("clip-01").global_start == 0.0
+    assert result.by_id("clip-02").global_start == 20.0
+
+
+def test_sync_stage_tolerates_missing_audio_files(tmp_path: Path):
+    ctx = _context(tmp_path)
+    ctx.store.write("01-manifest", Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mov", duration=10.0, width=1920, height=1080,
+                 fps=30.0, has_audio=True, audio_path="/tmp/does-not-exist.wav",
+                 camera="cam-a", recorded_at=1000.0),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mov", duration=10.0, width=1920, height=1080,
+                 fps=30.0, has_audio=True, audio_path="/tmp/also-missing.wav",
+                 camera="cam-b", recorded_at=1000.0),
+    ]), fingerprint="fp")
+
+    result = sync(ctx)
+
+    assert len(result.clips) == 2
+    assert all(clip.method in {"metadata", "sequential"} for clip in result.clips)
+```
+
+- [ ] **Step 11: Implement `videoai/stages/s02b_sync.py`**
+
+```python
+"""s02b sync: one timeline for every camera."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+
+from videoai.core.models import ClipInfo, Manifest, SyncMap
+from videoai.core.registry import StageContext, stage
+from videoai.logic.sync import audio_envelope, build_sync_map
+
+
+@stage(id="sync", produces="01b-sync", requires=("01-manifest",), model=SyncMap)
+def sync(ctx: StageContext) -> SyncMap:
+    manifest = ctx.store.read("01-manifest", Manifest)
+    cache: dict[str, np.ndarray | None] = {}
+
+    def envelope_of(clip: ClipInfo) -> np.ndarray | None:
+        if clip.clip_id not in cache:
+            envelope: np.ndarray | None = None
+            if clip.audio_path and Path(clip.audio_path).exists():
+                computed = audio_envelope(Path(clip.audio_path))
+                envelope = computed if computed.size else None
+            cache[clip.clip_id] = envelope
+        return cache[clip.clip_id]
+
+    return build_sync_map(
+        manifest,
+        envelope_of,
+        primary_camera=choose_primary_camera(
+            manifest, envelope_of, ctx.config.sync.primary_camera
+        ),
+    )
+```
+
+Import `choose_primary_camera` alongside `audio_envelope` and `build_sync_map`.
+
+- [ ] **Step 12: Add the sync settings to `videoai/config.py`**
+
+Add the settings class and wire it into `Config` and `load_config` exactly like the existing
+sections:
+
+```python
+class SyncSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    primary_camera: str | None = None
+```
+
+`Config` gains `sync: SyncSettings = SyncSettings()`, and `load_config` gains
+`sync=SyncSettings(**(raw.get("sync") or {}))`. Add to `config.yaml`:
+
+```yaml
+sync:
+  primary_camera:    # leave empty to detect the camera with the real microphone
+```
+
+- [ ] **Step 13: Transcribe only the primary camera**
+
+Modify `videoai/stages/s03_transcribe.py`: add `"01b-sync"` to the stage's `requires`, read the
+`SyncMap`, and transcribe a clip only when `clip.camera == sync_map.primary_camera`. Clips from
+other cameras still appear in the transcript artifact, with empty `words` and `speech_spans`, so
+downstream stages can address every clip uniformly.
+
+Append this test to `tests/test_stage_transcribe.py`:
+
+```python
+def test_only_the_primary_camera_is_transcribed(tmp_path: Path, make_clip):
+    import json
+
+    from videoai.core.models import ClipInfo, Manifest, SyncMap
+    from videoai.stages.s01_ingest import ingest
+
+    ctx = _context(tmp_path)
+    (ctx.input_dir / "video" / "cam-a").mkdir(parents=True)
+    (ctx.input_dir / "video" / "cam-b").mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "video" / "cam-a" / "a.mp4")
+    make_clip("b.mp4", seconds=2.0).rename(ctx.input_dir / "video" / "cam-b" / "b.mp4")
+
+    manifest: Manifest = ingest(ctx)
+    ctx.store.write("01-manifest", manifest, fingerprint="fp")
+    ctx.store.write(
+        "01b-sync",
+        SyncMap(clips=[], primary_camera="cam-b"),
+        fingerprint="fp",
+    )
+    for clip in manifest.clips:
+        Path(clip.audio_path).with_suffix(".words.json").write_text(
+            json.dumps([{"text": clip.camera, "start": 0.1, "end": 0.4}]), encoding="utf-8"
+        )
+
+    result = transcribe(ctx)
+
+    primary = next(clip for clip in manifest.clips if clip.camera == "cam-b")
+    secondary = next(clip for clip in manifest.clips if clip.camera == "cam-a")
+    assert [word.text for word in result.by_id(primary.clip_id).words] == ["cam-b"]
+    assert result.by_id(secondary.clip_id).words == []
+```
+
+Note the `SyncMap` written here has no per-clip entries on purpose — the transcribe stage must
+only consult `primary_camera`, never require a placement for every clip.
+
+- [ ] **Step 14: Run the whole suite**
+
+Run: `uv run pytest -v`
+Expected: every earlier test still passes plus the new sync, camera, config, ingest and
+transcribe tests.
+
+- [ ] **Step 15: Commit**
+
+```bash
+git add videoai/core/models.py videoai/core/ffmpeg.py videoai/core/project.py videoai/config.py config.yaml videoai/logic/sync.py videoai/stages/s01_ingest.py videoai/stages/s02b_sync.py videoai/stages/s03_transcribe.py tests/test_sync.py tests/test_stage_sync.py tests/test_project.py tests/test_stage_ingest.py tests/test_stage_transcribe.py tests/test_ffmpeg.py tests/test_config.py
+git commit -m "feat: camera grouping, multi-camera audio sync and primary-camera transcription"
+```
+
+---
+
+### Task 9: Repeated-take detection
 
 **Files:**
 - Create: `videoai/logic/takes.py`
@@ -2208,6 +2950,10 @@ git commit -m "feat: phrase segmentation and packed transcript"
   - `detect_take_groups(index: PhraseIndex, similarity: int = 80, window: int = 6) -> TakeGroups`.
 
 Two phrases belong to the same take group when their normalised text similarity (rapidfuzz `token_sort_ratio`) is at least `similarity` and they are within `window` phrases of each other, **including across clips** (clip boundaries are re-take boundaries in this workflow). Group ids are `take-01`, `take-02`, …
+
+**Multi-camera note.** Only the primary camera is transcribed (Task 8), so phrases from a second
+angle never reach this function and cannot be mistaken for retakes. No camera awareness is needed
+here — but do not "optimise" by comparing across cameras later without re-reading Task 8.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2418,7 +3164,7 @@ git commit -m "feat: fuzzy repeated-take detection"
 
 ---
 
-### Task 9: Analysis stage with LLM providers
+### Task 10: Analysis stage with LLM providers
 
 **Files:**
 - Modify: `videoai/core/models.py`
@@ -2854,7 +3600,7 @@ git commit -m "feat: analysis stage with Claude CLI and mock LLM providers"
 
 ---
 
-### Task 10: Story plan, timeline builder and validator
+### Task 11: Story plan, timeline builder and validator
 
 **Files:**
 - Modify: `videoai/core/models.py`
@@ -3090,6 +3836,7 @@ class TimelineClip(BaseModel):
     quote: str = ""
     reason: str = ""
     beat: str = ""
+    angles: list[str] = Field(default_factory=list)
 
 
 class Timeline(BaseModel):
@@ -3448,7 +4195,7 @@ git commit -m "feat: story plan stage with timeline builder and hard-rule valida
 
 ---
 
-### Task 11: Draft render and end-to-end CLI
+### Task 12: Draft render and end-to-end CLI
 
 **Files:**
 - Create: `videoai/stages/s06_render_draft.py`
@@ -3856,7 +4603,7 @@ git commit -m "feat: draft render stage and end-to-end pipeline CLI"
 
 ---
 
-### Task 12: Stack documentation and a real-footage smoke run
+### Task 13: Stack documentation and a real-footage smoke run
 
 **Files:**
 - Create: `docs/state/STACK.md`, `docs/state/UPGRADES.md`, `README.md`
