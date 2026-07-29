@@ -28,3 +28,4 @@ sync:
 
 plan:
   exclude_phrases: []   # phrase ids to ban outright, e.g. clip-03#012
+  gain_db_by_beat: {}   # beat name -> gain in dB, e.g. {Popping: -6}

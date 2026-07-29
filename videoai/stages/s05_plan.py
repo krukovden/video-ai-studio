@@ -87,6 +87,7 @@ def _segments_view(analysis: Analysis, excluded: set[str]) -> str:
         "transcribe.cut_padding_seconds",
         "analyze.llm_model",
         "plan.exclude_phrases",
+        "plan.gain_db_by_beat",
     ),
     prompt=INSTRUCTIONS,
 )
@@ -149,6 +150,7 @@ def plan(ctx: StageContext) -> Timeline:
         transcript,
         padding=ctx.config.transcribe.cut_padding_seconds,
         fps=manifest.clips[0].fps,
+        gain_db_by_beat=ctx.config.plan.gain_db_by_beat,
     )
     violations = validate_timeline(timeline, manifest, transcript)
     if violations:

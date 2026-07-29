@@ -73,6 +73,7 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(render=RenderSettings(audio_fade_seconds=0.5)), {"render_draft"}),
         (Config(render=RenderSettings(draft_crf=30)), {"render_draft"}),
         (Config(plan=PlanSettings(exclude_phrases=["clip-01#004"])), {"plan"}),
+        (Config(plan=PlanSettings(gain_db_by_beat={"Popping": -6.0})), {"plan"}),
     ],
 )
 def test_changing_a_setting_invalidates_exactly_the_stages_that_read_it(

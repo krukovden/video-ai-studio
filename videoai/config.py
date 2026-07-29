@@ -51,6 +51,9 @@ class PlanSettings(BaseModel):
     # that" moment named after reviewing a draft, not something the planner can
     # be argued out of via the brief.
     exclude_phrases: list[str] = Field(default_factory=list)
+    # Story-section name -> gain in dB, applied to every clip in that beat by
+    # `build_timeline`. Unknown beat names are ignored silently.
+    gain_db_by_beat: dict[str, float] = Field(default_factory=dict)
 
 
 class Config(BaseModel):

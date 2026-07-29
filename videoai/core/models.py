@@ -198,6 +198,7 @@ class TimelineClip(BaseModel):
     beat: str = ""
     angles: list[str] = Field(default_factory=list)
     core_dur: float = 0.0
+    gain_db: float = 0.0
 
 
 class Timeline(BaseModel):

@@ -39,10 +39,12 @@ def build_timeline(
     transcript: Transcript,
     padding: float,
     fps: float,
+    gain_db_by_beat: dict[str, float] | None = None,
 ) -> Timeline:
     first_clip = manifest.clips[0]
     timeline = Timeline(fps=fps, width=first_clip.width, height=first_clip.height)
     known_transcripts = {clip.clip_id for clip in transcript.clips}
+    gain_db_by_beat = gain_db_by_beat or {}
 
     position = 0.0
     for section in plan.sections:
@@ -87,6 +89,7 @@ def build_timeline(
                     reason=segment.content or section.goal,
                     beat=section.name,
                     core_dur=core_duration,
+                    gain_db=gain_db_by_beat.get(section.name, 0.0),
                 )
             )
             position += duration

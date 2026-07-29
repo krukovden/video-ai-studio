@@ -33,8 +33,20 @@ SILENT_AUDIO_SOURCE = (
 )
 
 
+def _audio_filter_chain(fade: float, duration: float, gain_db: float) -> str:
+    """Fades at both edges, plus a `volume` stage only when a gain is actually
+    configured — zero must add nothing, so an unchanged timeline renders a
+    bit-identical `-af` argument to before this feature existed."""
+    fade_out_start = max(0.0, duration - fade)
+    chain = f"afade=t=in:st=0:d={fade},afade=t=out:st={fade_out_start:.3f}:d={fade}"
+    if gain_db != 0.0:
+        chain += f",volume={gain_db}dB"
+    return chain
+
+
 def _render_segment(
-    source: Path, offset: float, duration: float, fade: float, crf: int, has_audio: bool, dst: Path
+    source: Path, offset: float, duration: float, fade: float, crf: int, has_audio: bool,
+    gain_db: float, dst: Path,
 ) -> None:
     video_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf)]
     audio_args = [
@@ -42,12 +54,11 @@ def _render_segment(
         "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
     ]
     if has_audio:
-        fade_out_start = max(0.0, duration - fade)
         run_ffmpeg([
             "-ss", f"{offset:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
             *video_args,
             *audio_args,
-            "-af", f"afade=t=in:st=0:d={fade},afade=t=out:st={fade_out_start:.3f}:d={fade}",
+            "-af", _audio_filter_chain(fade, duration, gain_db),
             "-avoid_negative_ts", "make_zero",
             str(dst),
         ])
@@ -89,7 +100,9 @@ def render_draft(ctx: StageContext) -> DraftResult:
         source_info = manifest.by_id(clip.src)
         source = Path(source_info.proxy_path or source_info.path)
         target = segments_dir / f"seg-{index:03d}.mp4"
-        _render_segment(source, clip.offset, clip.dur, fade, crf, source_info.has_audio, target)
+        _render_segment(
+            source, clip.offset, clip.dur, fade, crf, source_info.has_audio, clip.gain_db, target
+        )
         segment_paths.append(target)
 
     list_file = segments_dir / "concat.txt"

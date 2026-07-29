@@ -53,6 +53,7 @@ def test_load_config_overrides_sync_primary_camera(tmp_path: Path):
 def test_load_config_default_plan_settings_are_empty(tmp_path: Path):
     config = load_config(tmp_path / "nope.yaml")
     assert config.plan.exclude_phrases == []
+    assert config.plan.gain_db_by_beat == {}
 
 
 def test_load_config_overrides_plan_exclude_phrases(tmp_path: Path):
@@ -62,6 +63,13 @@ def test_load_config_overrides_plan_exclude_phrases(tmp_path: Path):
     )
     config = load_config(path)
     assert config.plan.exclude_phrases == ["clip-01#004", "clip-02#009"]
+
+
+def test_load_config_overrides_plan_gain_db_by_beat(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    path.write_text("plan:\n  gain_db_by_beat:\n    Popping: -6\n", encoding="utf-8")
+    config = load_config(path)
+    assert config.plan.gain_db_by_beat == {"Popping": -6.0}
 
 
 def test_plan_settings_are_immutable():

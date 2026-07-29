@@ -208,6 +208,32 @@ def test_core_dur_is_unaffected_by_neighbour_word_clamping():
     assert abs(second.core_dur - 4.0) < 1e-6  # 14.0 - 10.0, unchanged by clamping
 
 
+def test_clips_default_to_zero_gain():
+    timeline = build_timeline(_plan(), _analysis(), _manifest(), _transcript(), padding=0.15,
+                               fps=30.0)
+    assert all(clip.gain_db == 0.0 for clip in timeline.clips)
+
+
+def test_gain_db_by_beat_is_applied_to_clips_of_the_named_beat():
+    timeline = build_timeline(
+        _plan(), _analysis(), _manifest(), _transcript(), padding=0.15, fps=30.0,
+        gain_db_by_beat={"Hook": -6.0},
+    )
+    first, second = timeline.clips
+    assert first.beat == "Hook"
+    assert first.gain_db == -6.0
+    assert second.beat == "Body"
+    assert second.gain_db == 0.0
+
+
+def test_unknown_beat_name_in_gain_db_by_beat_is_ignored():
+    timeline = build_timeline(
+        _plan(), _analysis(), _manifest(), _transcript(), padding=0.15, fps=30.0,
+        gain_db_by_beat={"Nonexistent": -12.0},
+    )
+    assert all(clip.gain_db == 0.0 for clip in timeline.clips)
+
+
 def test_unknown_phrase_id_in_plan_raises():
     plan = StoryPlan(
         sections=[PlanSection(name="Hook", goal="x", phrase_ids=["clip-09#001"])],
