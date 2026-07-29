@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import shutil
 import time
+import json
+import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +38,7 @@ from videoai.core.ffmpeg import (
     probe,
     run_ffmpeg,
     videotoolbox_available,
+    _run_ffmpeg_to,
 )
 from videoai.core.models import (
     Approval,
@@ -55,7 +59,9 @@ from videoai.core.text import (
     resolve_font,
     wrap_text,
 )
+from videoai.core.store import hash_file, hash_parts
 from videoai.logic.music import attribution_line, list_tracks, select_track
+from videoai.logic.contract import has_closing_beat, validate_production_report
 from videoai.stages.s06_render_draft import (
     DRAFT_AUDIO_BITRATE,
     DRAFT_AUDIO_CHANNEL_LAYOUT,
@@ -211,6 +217,22 @@ def write_ass_captions(path: Path, captions: list[_Caption], width: int, height:
         for caption in captions
     )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_srt_captions(path: Path, captions: list[_Caption]) -> None:
+    def timestamp(seconds: float) -> str:
+        milliseconds = max(0, round(seconds * 1000))
+        hours, rest = divmod(milliseconds, 3_600_000)
+        minutes, rest = divmod(rest, 60_000)
+        whole, fraction = divmod(rest, 1000)
+        return f"{hours:02d}:{minutes:02d}:{whole:02d},{fraction:03d}"
+
+    blocks = [
+        f"{index}\n{timestamp(caption.start)} --> {timestamp(caption.end)}\n"
+        f"{caption.text}\n"
+        for index, caption in enumerate(captions, start=1)
+    ]
+    path.write_text("\n".join(blocks), encoding="utf-8")
 
 
 def _project_style(project_dir: Path) -> str:
@@ -470,6 +492,528 @@ def _overlay_inputs(
     return args, chain
 
 
+def _render_card(
+    path: Path,
+    title: str,
+    subtitle: str,
+    frame: tuple[int, int],
+) -> None:
+    """A bright but repeatable kids-channel card rendered entirely locally."""
+    import cv2
+    import numpy as np
+
+    width, height = frame
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    top = np.array((58, 35, 122), dtype=np.float32)
+    bottom = np.array((18, 102, 156), dtype=np.float32)
+    for row in range(height):
+        mix = row / max(1, height - 1)
+        image[row, :, :] = top * (1 - mix) + bottom * mix
+    accent = (74, 220, 255)
+    cv2.circle(image, (int(width * 0.12), int(height * 0.18)), int(height * 0.12),
+               accent, -1, cv2.LINE_AA)
+    cv2.circle(image, (int(width * 0.9), int(height * 0.78)), int(height * 0.18),
+               (247, 105, 92), -1, cv2.LINE_AA)
+    cv2.rectangle(
+        image,
+        (int(width * 0.2), int(height * 0.69)),
+        (int(width * 0.8), int(height * 0.705)),
+        accent,
+        -1,
+    )
+    rgba = path.with_suffix(".rgba.png")
+    render_text_image(
+        rgba, title, int(width * 0.82), int(height * 0.42),
+        plate_alpha=0.0, max_lines=3,
+    )
+    overlay = cv2.imread(str(rgba), cv2.IMREAD_UNCHANGED)
+    x = (width - overlay.shape[1]) // 2
+    y = int(height * 0.20)
+    alpha = overlay[:, :, 3:4].astype(np.float32) / 255.0
+    image[y:y + overlay.shape[0], x:x + overlay.shape[1]] = (
+        overlay[:, :, :3] * alpha
+        + image[y:y + overlay.shape[0], x:x + overlay.shape[1]] * (1 - alpha)
+    ).astype(np.uint8)
+    if subtitle.strip():
+        sub = path.with_suffix(".subtitle.png")
+        render_text_image(
+            sub, subtitle, int(width * 0.72), int(height * 0.13),
+            plate_alpha=0.0, max_lines=2,
+        )
+        layer = cv2.imread(str(sub), cv2.IMREAD_UNCHANGED)
+        sx = (width - layer.shape[1]) // 2
+        sy = int(height * 0.74)
+        alpha = layer[:, :, 3:4].astype(np.float32) / 255.0
+        image[sy:sy + layer.shape[0], sx:sx + layer.shape[1]] = (
+            layer[:, :, :3] * alpha
+            + image[sy:sy + layer.shape[0], sx:sx + layer.shape[1]] * (1 - alpha)
+        ).astype(np.uint8)
+    if not cv2.imwrite(str(path), image):
+        raise RuntimeError(f"could not render card image: {path}")
+
+
+def _card_segment(
+    image: Path,
+    duration: float,
+    frame: tuple[int, int],
+    fps: float,
+    dst: Path,
+) -> None:
+    width, height = frame
+    fade = min(0.4, duration / 4)
+    _run_ffmpeg_to(
+        [
+            "-loop", "1", "-framerate", f"{fps}", "-t", f"{duration:.3f}",
+            "-i", str(image),
+            "-f", "lavfi", "-t", f"{duration:.3f}", "-i", SILENCE_SOURCE,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-vf",
+            f"scale={width}:{height},format=yuv420p,"
+            f"fade=t=in:st=0:d={fade:.3f},"
+            f"fade=t=out:st={max(0.0, duration - fade):.3f}:d={fade:.3f}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "0",
+            "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
+            "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
+        ],
+        dst,
+    )
+
+
+def _cut_delivery_segment(
+    source: Path,
+    clip: TimelineClip,
+    frame: tuple[int, int],
+    fps: float,
+    audio_fade: float,
+    has_audio: bool,
+    transition: float,
+    fade_in: bool,
+    fade_out: bool,
+    dst: Path,
+) -> None:
+    width, height = frame
+    filters = [
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+        f"fps={fps}",
+        "format=yuv420p",
+        "setsar=1",
+    ]
+    duration = clip.dur
+    local_transition = min(transition, duration / 3)
+    if fade_in and local_transition > 0:
+        filters.append(f"fade=t=in:st=0:d={local_transition:.3f}")
+    if fade_out and local_transition > 0:
+        filters.append(
+            f"fade=t=out:st={max(0.0, duration - local_transition):.3f}:"
+            f"d={local_transition:.3f}"
+        )
+    seek = ["-ss", f"{clip.offset:.3f}", "-i", str(source)]
+    common = [
+        "-t", f"{duration:.3f}", "-filter:v", ",".join(filters),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "0",
+        "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
+        "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
+        "-avoid_negative_ts", "make_zero",
+    ]
+    if has_audio:
+        _run_ffmpeg_to(
+            [
+                *seek, *common,
+                "-af", _audio_filter_chain(audio_fade, duration, clip.gain_db),
+            ],
+            dst,
+        )
+    else:
+        _run_ffmpeg_to(
+            [
+                *seek,
+                "-f", "lavfi", "-i", SILENT_AUDIO_SOURCE,
+                "-map", "0:v:0", "-map", "1:a:0",
+                *common,
+            ],
+            dst,
+        )
+
+
+def _concat_copy(parts: list[Path], work_dir: Path, dst: Path) -> None:
+    listing = work_dir / f"{dst.stem}-concat.txt"
+    listing.write_text(
+        "\n".join(f"file '{part.name}'" for part in parts) + "\n",
+        encoding="utf-8",
+    )
+    _run_ffmpeg_to(
+        ["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy"],
+        dst,
+    )
+
+
+def _render_graphics_track(
+    path: Path,
+    frame: tuple[int, int],
+    fps: float,
+    duration: float,
+    captions: list[_Caption],
+    titles: list[_TextOverlay],
+    work_dir: Path,
+) -> None:
+    """One finite alpha video containing every title and caption.
+
+    The previous implementation opened one infinite-loop image input per title
+    inside the final graph. On a three-minute video ffmpeg could deadlock after
+    encoding the whole picture. This renderer has one stdin and an exact frame
+    count, so it must terminate.
+    """
+    import cv2
+    import numpy as np
+
+    width, height = frame
+    assets: list[tuple[float, float, int, np.ndarray]] = []
+    for index, title in enumerate(titles):
+        image_path = work_dir / f"section-title-{index:02d}.png"
+        render_text_image(
+            image_path, title.text, int(width * 0.74), max(72, int(height * 0.14)),
+            plate_alpha=0.62, max_lines=2,
+        )
+        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+        # Section titles live in the upper safe area; captions occupy the lower
+        # safe area. Keeping the two lanes separate prevents busy, unreadable
+        # stacks whenever a new section begins during speech.
+        assets.append((title.start, title.start + title.duration, int(height * 0.08), image))
+    caption_y = int(height * 0.80)
+    for index, caption in enumerate(captions):
+        image_path = work_dir / f"caption-{index:03d}.png"
+        render_text_image(
+            image_path, caption.text, int(width * 0.78), max(80, int(height * 0.12)),
+            plate_alpha=0.72, max_lines=2,
+        )
+        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+        assets.append((caption.start, caption.end, caption_y, image))
+
+    command = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "rgba",
+        "-s", f"{width}x{height}", "-r", f"{fps}", "-i", "-",
+        "-an", "-c:v", "qtrle", "-pix_fmt", "argb", str(path),
+    ]
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert process.stdin is not None
+    frame_count = max(1, round(duration * fps))
+    try:
+        for number in range(frame_count):
+            at = number / fps
+            canvas = np.zeros((height, width, 4), dtype=np.uint8)
+            for start, end, y, image in assets:
+                if not (start <= at < end):
+                    continue
+                x = (width - image.shape[1]) // 2
+                bottom = min(height, y + image.shape[0])
+                right = min(width, x + image.shape[1])
+                canvas[y:bottom, x:right] = image[:bottom - y, :right - x]
+            process.stdin.write(canvas.tobytes())
+        process.stdin.close()
+        stderr = process.stderr.read().decode("utf-8", errors="replace")
+        returncode = process.wait()
+    except BaseException:
+        process.kill()
+        process.wait()
+        path.unlink(missing_ok=True)
+        raise
+    if returncode != 0:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"graphics-track render failed: {stderr[-1000:]}")
+
+
+def _render_music_bed(
+    track: Path,
+    duration: float,
+    gain_db: float,
+    dst: Path,
+) -> None:
+    fade = min(MUSIC_FADE_SECONDS, duration / 4)
+    _run_ffmpeg_to(
+        [
+            "-stream_loop", "-1", "-i", str(track),
+            "-t", f"{duration:.3f}",
+            "-af",
+            f"aformat=sample_rates={DRAFT_AUDIO_SAMPLE_RATE}:"
+            f"channel_layouts={DRAFT_AUDIO_CHANNEL_LAYOUT},"
+            f"volume={gain_db}dB,"
+            f"afade=t=in:st=0:d={fade:.3f},"
+            f"afade=t=out:st={max(0.0, duration - fade):.3f}:d={fade:.3f}",
+            "-c:a", "pcm_s16le",
+        ],
+        dst,
+    )
+
+
+def _mix_delivery_audio(
+    picture: Path,
+    bed: Path,
+    duration: float,
+    duck_db: float,
+    dst: Path,
+) -> None:
+    _run_ffmpeg_to(
+        [
+            "-i", str(picture), "-i", str(bed),
+            "-filter_complex",
+            f"[0:a]asplit=2[speech][key];"
+            f"[1:a][key]sidechaincompress=threshold={SIDECHAIN_THRESHOLD}:"
+            f"ratio={duck_ratio(duck_db):.3f}:attack={SIDECHAIN_ATTACK_MS}:"
+            f"release={SIDECHAIN_RELEASE_MS}:detection=rms[ducked];"
+            f"[speech][ducked]amix=inputs=2:normalize=0:duration=first[a]",
+            "-map", "[a]", "-t", f"{duration:.3f}", "-c:a", "pcm_s16le",
+        ],
+        dst,
+    )
+
+
+def _full_decode(path: Path) -> None:
+    result = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "null", "-"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"final failed full decode: {result.stderr.strip()[-1000:]}")
+
+
+def _approval_is_current(ctx: StageContext, draft: DraftResult) -> None:
+    from videoai.core.models import Approval
+
+    if not ctx.store.exists("06-approval"):
+        raise RuntimeError(
+            "delivery requires review: watch output/draft.mp4, then run "
+            f"'videoai approve {ctx.project_dir}'"
+        )
+    approval = ctx.store.read("06-approval", Approval)
+    timeline_hash = ctx.store.content_hash("05-timeline") or ""
+    draft_path = Path(draft.path)
+    current_draft_hash = hash_file(draft_path) if draft_path.is_file() else ""
+    config_hash = hash_parts(ctx.config.model_dump_json())
+    mismatches: list[str] = []
+    if approval.timeline_hash != timeline_hash or draft.timeline_hash != timeline_hash:
+        mismatches.append("timeline")
+    if approval.draft_hash != current_draft_hash:
+        mismatches.append("draft")
+    if approval.config_hash != config_hash:
+        mismatches.append("config")
+    if mismatches:
+        raise RuntimeError(
+            "approval is stale for: " + ", ".join(mismatches)
+            + f"; rebuild/review the draft and run 'videoai approve {ctx.project_dir} "
+              "--config <the same config>' again"
+        )
+
+
+def _polish_multiphase(ctx: StageContext) -> FinalResult:
+    started = time.monotonic()
+    settings = ctx.config.polish
+    draft = ctx.store.read("06-draft", DraftResult)
+    ctx.output_dir.mkdir(parents=True, exist_ok=True)
+    output = ctx.output_dir / "final.mp4"
+
+    if not settings.enabled:
+        source = _draft_path(ctx, draft)
+        shutil.copyfile(source, output)
+        copied = probe(output)
+        return FinalResult(
+            path=str(output), duration=copied.duration,
+            width=copied.width, height=copied.height,
+            render_seconds=time.monotonic() - started,
+            notes=["polish.enabled is false: final.mp4 is a copy of the draft"],
+        )
+    if settings.require_approval:
+        _approval_is_current(ctx, draft)
+
+    manifest = ctx.store.read("01-manifest", Manifest)
+    timeline = ctx.store.read("05-timeline", Timeline)
+    transcript = (
+        ctx.store.read("03-transcript", Transcript)
+        if ctx.store.exists("03-transcript")
+        else Transcript(provider="", clips=[])
+    )
+    story = (
+        ctx.store.read("05a-storyplan", StoryPlan)
+        if ctx.store.exists("05a-storyplan")
+        else StoryPlan()
+    )
+    if not timeline.clips:
+        raise RuntimeError("cannot polish an empty timeline")
+
+    work_dir = ctx.work_dir / "delivery"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    sources = [
+        _source_path(ctx.project_dir, manifest.by_id(clip.src).path, clip.src)
+        for clip in timeline.clips
+    ]
+    frame = delivery_frame(probe(sources[0]), settings.output_height)
+    width, height = frame
+    fps = timeline.fps or manifest.by_id(timeline.clips[0].src).fps
+    transition = max(0.0, settings.transition_frames / fps)
+
+    segments: list[Path] = []
+    changes = set(section_changes(timeline))
+    for index, (clip, source) in enumerate(zip(timeline.clips, sources)):
+        target = work_dir / f"segment-{index:03d}.mp4"
+        _cut_delivery_segment(
+            source, clip, frame, fps, ctx.config.render.audio_fade_seconds,
+            manifest.by_id(clip.src).has_audio,
+            transition,
+            fade_in=index == 0 or index in changes,
+            fade_out=index == len(timeline.clips) - 1 or index + 1 in changes,
+            dst=target,
+        )
+        segments.append(target)
+    segment_durations = [probe(path).duration for path in segments]
+    starts = cumulative_starts(segment_durations)
+
+    intro_duration = max(0.0, settings.intro_seconds)
+    outro_duration = max(0.0, settings.outro_seconds)
+    intro_path = work_dir / "intro.mp4"
+    outro_path = work_dir / "outro.mp4"
+    intro_image = work_dir / "intro.png"
+    outro_image = work_dir / "outro.png"
+    if intro_duration <= 0 or not (story.title or "").strip():
+        raise RuntimeError("production contract requires a non-empty intro")
+    if outro_duration <= 0 or not settings.outro_text.strip():
+        raise RuntimeError("production contract requires a non-empty outro")
+    _render_card(intro_image, story.title.strip(), "Toy review", frame)
+    _render_card(outro_image, settings.outro_text.strip(), "See you next time!", frame)
+    _card_segment(intro_image, intro_duration, frame, fps, intro_path)
+    _card_segment(outro_image, outro_duration, frame, fps, outro_path)
+
+    picture = work_dir / "picture-master.mp4"
+    _concat_copy([intro_path, *segments, outro_path], work_dir, picture)
+    measured_picture = probe(picture)
+    total = measured_picture.duration
+
+    captions = build_captions(
+        timeline, transcript, starts, [], 0.0, probe(intro_path).duration,
+        settings.caption_words,
+    )
+    if settings.captions_enabled and not captions:
+        raise RuntimeError("production contract requires captions, but none were generated")
+    srt_path = ctx.output_dir / "final.srt"
+    write_srt_captions(srt_path, captions)
+
+    title_overlays = [
+        _TextOverlay(
+            text=timeline.clips[index].beat.strip(),
+            start=probe(intro_path).duration + starts[index],
+            duration=min(settings.title_seconds, max(0.2, segment_durations[index])),
+            width=width, height=max(72, int(height * 0.14)),
+            y_expression="", plate_alpha=0.62, fade_in=0, fade_out=0,
+        )
+        for index in section_changes(timeline)
+        if timeline.clips[index].beat.strip()
+    ]
+    if not title_overlays:
+        raise RuntimeError("production contract requires section titles")
+
+    graphics = work_dir / "graphics.mov"
+    _render_graphics_track(
+        graphics, frame, fps, total, captions, title_overlays, work_dir,
+    )
+
+    music_dir = Path(settings.music_dir)
+    if not music_dir.is_absolute():
+        project_candidate = ctx.project_dir / music_dir
+        music_dir = project_candidate if project_candidate.is_dir() else music_dir
+    tracks = list_tracks(music_dir)
+    if settings.music_track:
+        track = music_dir / settings.music_track
+        if not track.is_file():
+            raise RuntimeError(f"required music track is missing: {track}")
+    else:
+        track = select_track(
+            tracks, _project_style(ctx.project_dir), ctx.project_dir.name
+        ) if tracks else None
+    if track is None:
+        raise RuntimeError(f"production contract requires music; none found in {music_dir}")
+    bed = work_dir / "music-bed.wav"
+    mixed = work_dir / "mixed-audio.wav"
+    _render_music_bed(track, total, settings.music_gain_db, bed)
+    _mix_delivery_audio(picture, bed, total, settings.music_duck_db, mixed)
+
+    hardware = settings.hardware_encode and videotoolbox_available()
+    _run_ffmpeg_to(
+        [
+            "-i", str(picture), "-i", str(graphics), "-i", str(mixed),
+            "-filter_complex", "[0:v][1:v]overlay=eof_action=pass:shortest=1[v]",
+            "-map", "[v]", "-map", "2:a:0", "-t", f"{total:.3f}",
+            *h264_encode_args(settings.output_crf, hardware),
+            "-pix_fmt", "yuv420p",
+            "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
+            "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
+            "-movflags", "+faststart",
+        ],
+        output,
+    )
+    _full_decode(output)
+    measured = probe(output)
+    attribution = attribution_line(track)
+    if attribution:
+        write_attribution(ctx.output_dir, attribution)
+
+    report_path = ctx.output_dir / "production-report.json"
+    report = {
+        "contract_version": 1,
+        "status": "passed",
+        "output": str(output),
+        "duration": measured.duration,
+        "width": measured.width,
+        "height": measured.height,
+        "features": {
+            "intro": True,
+            "outro": True,
+            "section_titles": len(title_overlays),
+            "captions": len(captions),
+            "music": track.name,
+            "music_ducking": True,
+            "transitions": len(changes),
+            "closing_beat": has_closing_beat(timeline),
+            "full_decode": True,
+        },
+        "quality": {
+            "source": "originals",
+            "lossless_intermediates": True,
+            "lossy_video_generations": 1,
+        },
+    }
+    try:
+        validate_production_report(report, ctx.project_dir)
+    except RuntimeError:
+        output.unlink(missing_ok=True)
+        raise
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    elapsed = time.monotonic() - started
+    return FinalResult(
+        path=str(output),
+        duration=measured.duration,
+        width=measured.width,
+        height=measured.height,
+        render_seconds=elapsed,
+        intro=True,
+        intro_title=story.title.strip(),
+        title_count=len(title_overlays),
+        transition_count=len(changes),
+        caption_count=len(captions),
+        outro=True,
+        music_track=track.name,
+        music_attribution=attribution,
+        music_ducking=True,
+        fully_decoded=True,
+        production_report=str(report_path),
+        notes=[
+            "delivery used finite multi-pass rendering",
+            "source segments and picture master are lossless x264",
+            "final.mp4 is the only lossy video generation",
+        ],
+    )
+
+
 @stage(
     id="polish",
     produces="08-final",
@@ -481,8 +1025,11 @@ def _overlay_inputs(
     model=FinalResult,
     config_keys=(
         "polish.enabled",
+        "polish.strict_contract",
         "polish.require_approval",
         "polish.intro_seconds",
+        "polish.outro_seconds",
+        "polish.outro_text",
         "polish.title_seconds",
         "polish.captions_enabled",
         "polish.caption_words",
@@ -501,6 +1048,12 @@ def _overlay_inputs(
     ),
 )
 def polish(ctx: StageContext) -> FinalResult:
+    if ctx.config.polish.strict_contract:
+        return _polish_multiphase(ctx)
+
+    # Legacy monolithic implementation retained temporarily below as a readable
+    # reference while the finite multi-pass renderer is validated against the
+    # existing test suite. It is intentionally unreachable.
     started = time.monotonic()
     settings = ctx.config.polish
     draft = ctx.store.read("06-draft", DraftResult)

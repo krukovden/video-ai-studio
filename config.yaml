@@ -41,10 +41,13 @@ plan:
 
 polish:
   enabled: true
+  strict_contract: true
   require_approval: true  # watch draft.mp4, then run: videoai approve <project>
   intro_seconds: 2.5      # the title card, cross-dissolved into the first segment
+  outro_seconds: 2.5
+  outro_text: "Thanks for watching!"
   title_seconds: 2.0      # how long a beat's lower third stays up
-  captions_enabled: true  # word-timed burned-in captions, rendered locally with libass
+  captions_enabled: true  # word-timed burned-in captions, rasterised locally (no libass)
   caption_words: 4        # compact readable chunks rather than full sentences
   music_gain_db: -22.0    # where the bed sits before ducking
   music_duck_db: -12.0    # how much further it drops while the child is talking

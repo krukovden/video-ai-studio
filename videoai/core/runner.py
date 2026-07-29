@@ -78,14 +78,21 @@ def _fingerprint(
     # content under an identical fingerprint, so a fingerprint chain would leave
     # everything downstream silently stale. Hashing the artifact on disk also
     # means a hand-edited artifact invalidates its dependents.
-    for name in spec.requires:
-        parts.append(f"{name}:{ctx.store.content_hash(name) or ''}")
+    if (
+        spec.fingerprint_inputs is not None
+        and all(ctx.store.exists(name) for name in spec.requires)
+    ):
+        parts.extend(f"input:{value}" for value in spec.fingerprint_inputs(ctx))
+    else:
+        for name in spec.requires:
+            parts.append(f"{name}:{ctx.store.content_hash(name) or ''}")
     return hash_parts(*parts)
 
 
 def run_pipeline(
     ctx: StageContext,
     only: str | None = None,
+    stop_after: str | None = None,
     force: bool = False,
     media_fingerprint: str = "",
     brief_fingerprint: str = "",
@@ -93,6 +100,8 @@ def run_pipeline(
     """Run stages in order. Returns ids of stages that actually executed."""
     if only is not None and only not in REGISTRY:
         raise KeyError(f"unknown stage: {only}")
+    if stop_after is not None and stop_after not in REGISTRY:
+        raise KeyError(f"unknown stage: {stop_after}")
 
     executed: list[str] = []
     for spec in _ordered_stages():
@@ -111,6 +120,8 @@ def run_pipeline(
             and ctx.store.exists(spec.produces)
         )
         if skip_cached:
+            if stop_after == spec.id:
+                break
             continue
         try:
             artifact = spec.fn(ctx)
@@ -122,6 +133,8 @@ def run_pipeline(
             )
         ctx.store.write(spec.produces, artifact, fingerprint)
         executed.append(spec.id)
+        if stop_after == spec.id:
+            break
     return executed
 
 

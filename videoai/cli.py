@@ -8,11 +8,11 @@ import typer
 
 import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import load_config
-from videoai.core.models import Approval
+from videoai.core.models import Approval, FinalResult
 from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir
 from videoai.core.registry import StageContext
 from videoai.core.runner import StageFailure, ordered_stages, run_pipeline, stale_downstream
-from videoai.core.store import ArtifactStore, hash_parts
+from videoai.core.store import ArtifactStore, hash_file, hash_parts
 
 app = typer.Typer(add_completion=False, help="Automated video pipeline.")
 
@@ -156,6 +156,7 @@ def stages() -> None:
 @app.command()
 def approve(
     project: Path = typer.Argument(..., help="Project whose current draft was reviewed"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
 ) -> None:
     """Approve the current timeline for delivery rendering."""
     store = ArtifactStore(project / "work")
@@ -165,17 +166,106 @@ def approve(
             "the project has no current timeline and draft; run the pipeline and review "
             "output/draft.mp4 first"
         )
+    from videoai.core.models import DraftResult
+
+    draft = store.read("06-draft", DraftResult)
+    if draft.timeline_hash != timeline_hash:
+        raise typer.BadParameter(
+            "draft.mp4 is stale: it was not rendered from the current timeline; "
+            "run the pipeline through render_draft and review the new file"
+        )
+    draft_hash = hash_file(Path(draft.path)) if Path(draft.path).is_file() else ""
+    if not draft_hash:
+        raise typer.BadParameter(f"draft file is missing: {draft.path}")
+    config_hash = hash_parts(load_config(config_path).model_dump_json())
     store.write(
         "06-approval",
         Approval(
             timeline_hash=timeline_hash,
+            draft_hash=draft_hash,
+            config_hash=config_hash,
             approved_at=datetime.now(timezone.utc).isoformat(),
         ),
         fingerprint="manual-approval",
     )
     typer.echo(
-        "Approved the current timeline. Re-planning will invalidate this approval."
+        "Approved the current timeline, draft, and effective config. Any change "
+        "to one of them invalidates this approval."
     )
+
+
+@app.command()
+def produce(
+    project: Path = typer.Argument(..., help="Project to take through the production contract"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+) -> None:
+    """Build a review draft, then a contract-validated final after approval."""
+    clip_dir = resolve_clip_dir(project)
+    cameras = list_camera_clips(clip_dir)
+    if not any(cameras.values()):
+        raise typer.BadParameter(f"no video files found in {clip_dir}")
+    work_dir = project / "work"
+    output_dir = project / "output"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    loaded = load_config(config_path)
+    if not loaded.polish.strict_contract:
+        raise typer.BadParameter(
+            "production requires polish.strict_contract: true in the selected config"
+        )
+    ctx = StageContext(
+        project_dir=project,
+        input_dir=project,
+        work_dir=work_dir,
+        output_dir=output_dir,
+        config=loaded,
+        store=ArtifactStore(work_dir),
+    )
+    media_fingerprint = _media_fingerprint(project)
+    brief_fingerprint = _brief_fingerprint(project)
+    try:
+        executed = run_pipeline(
+            ctx,
+            stop_after="render_draft",
+            media_fingerprint=media_fingerprint,
+            brief_fingerprint=brief_fingerprint,
+        )
+    except StageFailure as failure:
+        raise typer.BadParameter(
+            f"production stopped at {failure.stage_id}: {failure.cause}"
+        ) from failure
+    if executed:
+        typer.echo("Prepared review draft: " + ", ".join(executed))
+
+    from videoai.core.models import DraftResult
+    from videoai.stages.s08_polish import _approval_is_current
+
+    draft = ctx.store.read("06-draft", DraftResult)
+    try:
+        _approval_is_current(ctx, draft)
+    except RuntimeError as error:
+        typer.echo(str(error))
+        typer.echo(f"Review: {draft.path}")
+        typer.echo(
+            f"Then approve: videoai approve {project} --config {config_path}"
+        )
+        return
+
+    try:
+        executed = run_pipeline(
+            ctx,
+            media_fingerprint=media_fingerprint,
+            brief_fingerprint=brief_fingerprint,
+        )
+    except StageFailure as failure:
+        raise typer.BadParameter(
+            f"production stopped at {failure.stage_id}: {failure.cause}"
+        ) from failure
+    result = ctx.store.read("08-final", FinalResult)
+    if not result.fully_decoded or not result.production_report:
+        raise typer.BadParameter("final artifact did not pass the production contract")
+    typer.echo("Production passed: " + result.path)
+    typer.echo("Report: " + result.production_report)
 
 
 @app.command()

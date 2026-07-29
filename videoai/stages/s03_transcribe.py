@@ -8,6 +8,26 @@ from videoai.core.registry import StageContext, stage
 from videoai.providers.base import resolve_asr
 
 
+def _transcription_fingerprint_inputs(ctx: StageContext) -> tuple[str, ...]:
+    """Only source/audio identity affects ASR, never a disposable proxy path."""
+    manifest = ctx.store.read("01-manifest", Manifest)
+    sync_map = ctx.store.read("01b-sync", SyncMap)
+    inputs = [f"primary-camera:{sync_map.primary_camera}"]
+    for clip in manifest.clips:
+        inputs.append(
+            ":".join(
+                (
+                    clip.clip_id,
+                    clip.source_key,
+                    clip.camera,
+                    str(clip.has_audio),
+                    f"{clip.duration:.6f}",
+                )
+            )
+        )
+    return tuple(inputs)
+
+
 def derive_speech_spans(words: list[Word], gap: float) -> list[SpeechSpan]:
     """Contiguous speech regions: split wherever the pause between words exceeds `gap`."""
     if not words:
@@ -35,6 +55,7 @@ def derive_speech_spans(words: list[Word], gap: float) -> list[SpeechSpan]:
         "transcribe.chunk_duration_seconds",
         "transcribe.overlap_duration_seconds",
     ),
+    fingerprint_inputs=_transcription_fingerprint_inputs,
 )
 def transcribe(ctx: StageContext) -> Transcript:
     manifest = ctx.store.read("01-manifest", Manifest)

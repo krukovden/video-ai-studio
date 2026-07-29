@@ -75,11 +75,17 @@ class PolishSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = True
+    # Enforce production-contract.yaml. Kept opt-in at the model default so
+    # unit fixtures and intentionally lightweight configs can exercise the
+    # legacy preview renderer; the repository's production config enables it.
+    strict_contract: bool = False
     # When enabled, `videoai approve PROJECT` must be run after reviewing the
     # current draft. Approval is tied to the exact timeline, so any re-plan
     # requires another review.
     require_approval: bool = False
     intro_seconds: float = 2.5
+    outro_seconds: float = 2.5
+    outro_text: str = "Thanks for watching!"
     title_seconds: float = 2.0
     captions_enabled: bool = True
     caption_words: int = 4

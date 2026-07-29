@@ -1,0 +1,35 @@
+version: 1
+
+required_output:
+  width: 1920
+  height: 1080
+  video_codec: h264
+  audio: true
+  full_decode: true
+
+required_features:
+  intro: true
+  outro: true
+  section_titles: true
+  captions: true
+  music: true
+  music_ducking: true
+  transitions: true
+  closing_beat: true
+
+quality:
+  source: originals
+  lossless_intermediates: true
+  maximum_lossy_video_generations: 1
+
+review:
+  required: true
+  bind_to:
+    - timeline_hash
+    - draft_hash
+    - config_hash
+
+failure_policy:
+  allow_silent_degradation: false
+  fallback_output_name: preview-fallback.mp4
+  never_call_fallback_final: true

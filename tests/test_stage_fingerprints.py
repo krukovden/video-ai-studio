@@ -20,6 +20,7 @@ from videoai.config import (
 from videoai.core.registry import REGISTRY, StageContext
 from videoai.core.runner import _fingerprint, config_value
 from videoai.core.store import ArtifactStore
+from videoai.core.models import ClipInfo, Manifest, SyncMap
 
 
 def _context(tmp_path: Path, config: Config) -> StageContext:
@@ -88,8 +89,11 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(plan=PlanSettings(reject_adult_in_frame=False)), {"visual_check"}),
         (Config(plan=PlanSettings(reject_unusable_shots=False)), {"visual_check"}),
         (Config(polish=PolishSettings(enabled=False)), {"polish"}),
+        (Config(polish=PolishSettings(strict_contract=True)), {"polish"}),
         (Config(polish=PolishSettings(require_approval=True)), {"polish"}),
         (Config(polish=PolishSettings(intro_seconds=4.0)), {"polish"}),
+        (Config(polish=PolishSettings(outro_seconds=4.0)), {"polish"}),
+        (Config(polish=PolishSettings(outro_text="Subscribe!")), {"polish"}),
         (Config(polish=PolishSettings(title_seconds=3.0)), {"polish"}),
         (Config(polish=PolishSettings(captions_enabled=False)), {"polish"}),
         (Config(polish=PolishSettings(caption_words=6)), {"polish"}),
@@ -138,3 +142,31 @@ def test_every_declared_config_key_exists(tmp_path: Path):
 def test_unknown_config_key_is_rejected():
     with pytest.raises(KeyError, match="unknown config key"):
         config_value(Config(), "render.nope")
+
+
+def test_transcription_fingerprint_ignores_disposable_proxy_path(tmp_path: Path):
+    ctx = _context(tmp_path, Config())
+    clip = ClipInfo(
+        clip_id="clip-01",
+        path="original.mov",
+        duration=10.0,
+        width=1920,
+        height=1080,
+        fps=30.0,
+        has_audio=True,
+        source_key="same-source",
+        audio_path="audio.wav",
+        proxy_path="proxy-540p.mp4",
+    )
+    ctx.store.write("01-manifest", Manifest(clips=[clip]), fingerprint="old")
+    ctx.store.write("01b-sync", SyncMap(primary_camera="main"), fingerprint="sync")
+    before = _fingerprint(REGISTRY["transcribe"], ctx, "media-fp", "brief-fp")
+
+    ctx.store.write(
+        "01-manifest",
+        Manifest(clips=[clip.model_copy(update={"proxy_path": "proxy-720p.mp4"})]),
+        fingerprint="new",
+    )
+    after = _fingerprint(REGISTRY["transcribe"], ctx, "media-fp", "brief-fp")
+
+    assert after == before

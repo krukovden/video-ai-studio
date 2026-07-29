@@ -272,21 +272,25 @@ class DraftResult(BaseModel):
     path: str
     duration: float
     segment_count: int
+    # The exact edit this review file represents. Approval must never bind a
+    # stale draft to a newer plan merely because both files happen to exist.
+    timeline_hash: str = ""
 
 
 class Approval(BaseModel):
     """Explicit creator approval bound to one exact timeline."""
 
     timeline_hash: str
+    draft_hash: str = ""
+    config_hash: str = ""
     approved_at: str
 
 
 class FinalResult(BaseModel):
-    """The watchable cut: the draft plus intro, section titles, music and dissolves.
+    """The watchable cut plus an exact record of the applied production layers.
 
-    Every polish element is optional and degrades on its own — a missing music
-    folder or an unreadable font must still produce a video — so the artifact
-    records what was actually applied rather than what was configured.
+    Legacy preview mode may degrade individual elements. Strict production mode
+    validates the required fields and removes an invalid `final.mp4`.
     """
 
     path: str
@@ -303,6 +307,10 @@ class FinalResult(BaseModel):
     title_count: int = 0
     transition_count: int = 0
     caption_count: int = 0
+    outro: bool = False
+    music_ducking: bool = False
+    fully_decoded: bool = False
+    production_report: str = ""
     music_track: str | None = None
     # Bensound's free licence requires the credit to travel with the video, so it
     # is recorded here as well as written to output/metadata.md.

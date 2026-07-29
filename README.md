@@ -71,17 +71,28 @@ Running the pipeline creates two more folders next to the brief:
 - `work/` — every stage's artifact (JSON), plus derived media it caches
   (audio, proxies, keyframes, rendered segments). Safe to delete entirely;
   everything rebuilds from the source clips.
-- `output/` — the rendered files, currently just `draft.mp4`.
+- `output/` — the review draft, contract-validated `final.mp4`, captions,
+  metadata, and the machine-readable production report.
 
 ## Running it
 
 ```bash
-uv run videoai run projects/my-review --auto-fix 2
+uv run videoai produce projects/my-review --config config.yaml
 open projects/my-review/output/draft.mp4
-uv run videoai approve projects/my-review
-uv run videoai run projects/my-review
+uv run videoai approve projects/my-review --config config.yaml
+uv run videoai produce projects/my-review --config config.yaml
 ```
 
+`produce` is the normal creator command. On its first run it executes the
+provider-independent pipeline only through the review draft and tells you how
+to approve it. Approval is bound to the exact timeline, rendered draft, and
+effective configuration. After approval, the second run builds and fully
+validates the delivery. The required phases and features are defined once in
+[`PRODUCTION-CONTRACT.md`](PRODUCTION-CONTRACT.md); both `AGENTS.md` and
+`CLAUDE.md` are symbolic links to that file, so Codex and Claude follow the
+same workflow.
+
+Use the lower-level `run` command for diagnosis and individual-stage work.
 `--auto-fix N` closes the loop around the visual check described below: when a
 chosen shot turns out to have an adult filling the frame, or to be unusable,
 the segment is withheld and the edit is planned again without it, at most N
@@ -349,19 +360,26 @@ temporary disk space and CPU, but `work/polish/` is disposable.
 The audio target is unchanged — AAC, 44100 Hz, mono, exactly what the draft
 settled on — because the concat step depends on every segment agreeing on it.
 
-Five things are then added, in one ffmpeg invocation so the picture is encoded
-once rather than once per element:
+The strict production path uses finite, independently testable passes instead
+of one large ffmpeg graph. It cuts lossless source segments, builds a picture
+master, renders a finite alpha graphics track, prepares finite music and
+ducked-audio tracks, then performs one lossy H.264 delivery encode. This avoids
+the deadlocks caused by unbounded loop inputs while preserving one-generation
+picture quality.
+
+The production layers are:
 
 - **A title card** of `polish.intro_seconds`, carrying the title the planner
-  wrote into `05a-storyplan`, cross-dissolving into the first segment.
-- **A lower third** wherever a timeline clip's beat differs from the one
+  wrote into `05a-storyplan`, plus an **outro card** of
+  `polish.outro_seconds`.
+- **A section title** wherever a timeline clip's beat differs from the one
   before it, naming that beat for `polish.title_seconds` behind a
-  semi-transparent plate, fading in and out. The first clip never gets one —
-  the card has just named the video.
+  semi-transparent plate in the upper safe area.
 - **Word-timed captions** generated locally from `03-transcript.json`. They are
   grouped into compact chunks (`polish.caption_words`, four by default), mapped
-  through cuts and dissolves to delivery time, written as ASS, and burned in by
-  ffmpeg/libass. No transcription API or cloud service is used.
+  through cuts to delivery time, rasterised locally into the lower safe area,
+  and also written to `output/final.srt`. This does not depend on ffmpeg's
+  optional libass or drawtext support.
 - **A music bed** from `polish.music_dir`, chosen by your brief's `style`
   when that names a track the library has and otherwise by a stable digest of
   the project's name, so the same project always gets the same music. It is
@@ -371,35 +389,35 @@ once rather than once per element:
   Bensound's free licence wants a credit, so the track's attribution line is
   appended to `output/metadata.md` (once, however often you re-render) and
   recorded in the artifact.
-- **A cross-dissolve of `polish.transition_frames`** on the cuts between story
-  sections only. Cuts inside a section stay hard cuts: cutting straight on
-  speech is correct, and a dissolve on every cut reads as a slideshow.
+- **A fade-through-black transition of `polish.transition_frames`** at story
+  section boundaries. Cuts inside a section stay hard cuts.
 
-Every element degrades on its own. No music folder, an empty one, or an
-ffmpeg build without `drawtext` (Homebrew's macOS bottle has no libfreetype,
-in which case titles are rasterised and overlaid as images instead) all still
-produce a video, and the artifact says what was left out. `polish.enabled:
-false` copies the draft through untouched.
+With `polish.strict_contract: true`, required elements do not silently
+degrade. Missing captions, music, closing beat, approval, resolution, or a
+failed full decode makes production fail and prevents an invalid
+`final.mp4`. The authoritative requirements are in
+`production-contract.yaml`. Set strict mode false only for legacy preview/test
+workflows; `videoai produce` refuses to run in that mode.
 
 When `polish.require_approval: true`, delivery stops after the draft until the
 creator approves the exact current timeline:
 
 ```bash
 open projects/my-review/output/draft.mp4
-uv run videoai approve projects/my-review
-uv run videoai run projects/my-review
+uv run videoai approve projects/my-review --config config.yaml
+uv run videoai produce projects/my-review --config config.yaml
 ```
 
-Approval is stored in `work/06-approval.json` with the timeline content hash.
-Any re-plan changes that hash and requires a fresh review.
+Approval is stored in `work/06-approval.json` with hashes for the timeline,
+draft file, and effective config. Any change to one of them requires a fresh
+review.
 
 Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `06-draft`. Writes its own
-delivery cuts under `work/polish/`, `output/final.mp4`, the credit in
-`output/metadata.md`, and `08-final.json` (path, duration, the delivered frame,
-the wall-clock render time, which elements were applied, the chosen track and
-its attribution). Runs locally with `ffmpeg`. Cost: $0 in money and real time
-in minutes — cutting twenty-two segments out of 4K HEVC is slower than cutting
-them out of proxies, which is why the artifact records how long it took.
+delivery files under `work/delivery/`, `output/final.mp4`,
+`output/final.srt`, `output/production-report.json`, the music credit in
+`output/metadata.md`, and `08-final.json`. The renderer then decodes the whole
+file before publishing success. Runs locally with OpenCV and ffmpeg. Cost: $0
+in money and real time in minutes.
 
 
 ## Caching
@@ -425,11 +443,12 @@ Concretely:
   `transcribe` never read the brief at all, so their artifacts are reused
   untouched.
 - **Changing a config value** re-runs only the stages that declare reading it.
-  Most settings are scoped to one stage, but `render.draft_height` is read by
-  both `ingest` (it sets the proxy's build height) and `render_draft`, so
-  changing the draft resolution rebuilds every proxy, not just the final cut —
-  and `render.audio_fade_seconds` is read by `render_draft` and `polish` alike,
-  since both do their own cutting and have to fade a cut the same way. The
+  Most settings are scoped to one stage. `render.draft_height` directly
+  invalidates ingest and rebuilds the proxies; transcription fingerprints only
+  the source/audio identity, so a disposable proxy change does not trigger
+  Parakeet again. `render.audio_fade_seconds` is read by `render_draft` and
+  `polish` alike, since both do their own cutting and have to fade a cut the
+  same way. The
   three delivery settings (`polish.output_height`, `polish.output_crf`,
   `polish.hardware_encode`) re-render `output/final.mp4` and touch nothing
   upstream: they are about the deliverable, not about the review copy.
@@ -457,6 +476,12 @@ shouldn't hit this. If it recurs — an unusually long clip, or
 `chunk_duration_seconds` raised too high in `config.yaml` — lower
 `transcribe.chunk_duration_seconds` and re-run just that stage:
 `videoai run <project> --stage transcribe`.
+
+**`transcribe` says MLX cannot access a Metal device.** Headless and sandboxed
+macOS sessions may not expose the GPU. VideoAI probes MLX in an isolated child
+process, so this now produces a normal stage error instead of aborting the
+whole Python process. Keep the valid cached transcript, or run the
+`transcribe` stage once from an interactive macOS terminal with Metal access.
 
 **VideoToolbox is listed by ffmpeg but encoding fails with `-12903`.** VideoAI
 performs a real one-frame capability probe once per run. If macOS cannot create

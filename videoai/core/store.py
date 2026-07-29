@@ -22,6 +22,15 @@ def hash_parts(*parts: str) -> str:
     return digest.hexdigest()[:16]
 
 
+def hash_file(path: Path) -> str:
+    """Stable streaming digest for media and other non-text artifacts."""
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()[:16]
+
+
 def source_key(path: Path) -> str:
     """Short digest identifying a source file by path, size and mtime.
 

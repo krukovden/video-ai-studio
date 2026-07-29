@@ -125,4 +125,5 @@ def render_draft(ctx: StageContext) -> DraftResult:
         path=str(output),
         duration=probe(output).duration,
         segment_count=len(segment_paths),
+        timeline_hash=ctx.store.content_hash("05-timeline") or "",
     )

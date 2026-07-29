@@ -62,7 +62,13 @@ class ClaudeCliLLM:
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"claude CLI timed out after {timeout} seconds") from exc
         if result.returncode != 0:
-            raise RuntimeError(f"claude CLI failed: {result.stderr.strip()[:500]}")
+            diagnostic = (result.stderr or result.stdout).strip()[:500]
+            if not diagnostic:
+                diagnostic = (
+                    f"exit code {result.returncode} with no diagnostic output; "
+                    "the CLI may be blocked by a headless or sandboxed session"
+                )
+            raise RuntimeError(f"claude CLI failed: {diagnostic}")
         envelope = json.loads(result.stdout)
         if envelope.get("is_error"):
             raise RuntimeError(f"claude CLI returned an error: {envelope.get('result')}")
