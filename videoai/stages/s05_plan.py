@@ -126,6 +126,7 @@ def plan(ctx: StageContext) -> Timeline:
         story,
         analysis,
         manifest,
+        transcript,
         padding=ctx.config.transcribe.cut_padding_seconds,
         fps=manifest.clips[0].fps,
     )

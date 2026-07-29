@@ -169,7 +169,9 @@ def test_padding_clamped_at_source_boundary_is_still_judged_on_core_duration():
         sections=[PlanSection(name="Noise", goal="x", phrase_ids=["clip-01#001"])],
         title="T", description="D", tags=[],
     )
-    timeline = build_timeline(plan, analysis, manifest, padding=0.15, fps=30.0)
+    timeline = build_timeline(
+        plan, analysis, manifest, Transcript(provider="mock", clips=[]), padding=0.15, fps=30.0
+    )
     clip = timeline.clips[0]
     # The clamp at the 30s source boundary produces exactly the old minimum, which
     # would have passed the total-duration rule alone.
