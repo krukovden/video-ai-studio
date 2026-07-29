@@ -71,6 +71,23 @@ class PlanSettings(BaseModel):
     reject_unusable_shots: bool = True
 
 
+class PolishSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = True
+    intro_seconds: float = 2.5
+    title_seconds: float = 2.0
+    # Where the music bed sits before ducking, and how much further it drops while
+    # the child is talking. Both are attenuations: the bed is never the loudest
+    # thing in the mix.
+    music_gain_db: float = -22.0
+    music_duck_db: float = -12.0
+    transition_frames: int = 8
+    # An explicit filename inside `music_dir`, which overrides the automatic pick.
+    music_track: str | None = None
+    music_dir: str = "assets/Music"
+
+
 class Config(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -82,6 +99,7 @@ class Config(BaseModel):
     render: RenderSettings = RenderSettings()
     sync: SyncSettings = SyncSettings()
     plan: PlanSettings = PlanSettings()
+    polish: PolishSettings = PolishSettings()
 
     @model_validator(mode="after")
     def _check_provider_keys(self) -> "Config":
@@ -106,4 +124,5 @@ def load_config(path: Path | None = None) -> Config:
         render=RenderSettings(**(raw.get("render") or {})),
         sync=SyncSettings(**(raw.get("sync") or {})),
         plan=PlanSettings(**(raw.get("plan") or {})),
+        polish=PolishSettings(**(raw.get("polish") or {})),
     )

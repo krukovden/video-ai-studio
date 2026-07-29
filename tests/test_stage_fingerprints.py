@@ -12,6 +12,7 @@ from videoai.config import (
     AnalyzeSettings,
     Config,
     PlanSettings,
+    PolishSettings,
     RenderSettings,
     SyncSettings,
     TranscribeSettings,
@@ -84,6 +85,14 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(plan=PlanSettings(gain_db_by_beat={"Popping": -6.0})), {"plan"}),
         (Config(plan=PlanSettings(reject_adult_in_frame=False)), {"visual_check"}),
         (Config(plan=PlanSettings(reject_unusable_shots=False)), {"visual_check"}),
+        (Config(polish=PolishSettings(enabled=False)), {"polish"}),
+        (Config(polish=PolishSettings(intro_seconds=4.0)), {"polish"}),
+        (Config(polish=PolishSettings(title_seconds=3.0)), {"polish"}),
+        (Config(polish=PolishSettings(music_gain_db=-18.0)), {"polish"}),
+        (Config(polish=PolishSettings(music_duck_db=-6.0)), {"polish"}),
+        (Config(polish=PolishSettings(transition_frames=2)), {"polish"}),
+        (Config(polish=PolishSettings(music_track="bensound-energy.mp3")), {"polish"}),
+        (Config(polish=PolishSettings(music_dir="assets/Other")), {"polish"}),
     ],
 )
 def test_changing_a_setting_invalidates_exactly_the_stages_that_read_it(

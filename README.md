@@ -83,7 +83,7 @@ uv run videoai config                                          # effective confi
 
 ## Pipeline
 
-Eight stages run in this order, each reading artifacts written by the stages
+Ten stages run in this order, each reading artifacts written by the stages
 before it and writing exactly one artifact of its own under `work/`.
 
 ```mermaid
@@ -96,6 +96,7 @@ flowchart TD
     plan["plan<br/>05-timeline"]
     visual_check["visual_check<br/>05b-visual"]
     render_draft["render_draft<br/>06-draft"]
+    polish["polish<br/>08-final"]
 
     ingest --> quality
     ingest --> sync
@@ -113,6 +114,8 @@ flowchart TD
     ingest --> render_draft
     plan --> render_draft
     visual_check --> render_draft
+    render_draft --> polish
+    plan --> polish
     visual_check -. "rejected phrase ids<br/>05c-rejected" .-> plan
 ```
 
@@ -299,6 +302,44 @@ Reads `01-manifest`, `05-timeline`, `05b-visual`. Writes the individual cut
 segments under `work/segments/`, the final `output/draft.mp4`, and
 `06-draft.json` (path, duration, segment count). Runs locally with `ffmpeg`.
 Cost: $0.
+
+### polish — `08-final`
+
+Builds `output/final.mp4` beside the draft: the draft is what you watch to
+check edit decisions, the final is what someone would actually sit through.
+The draft itself is never touched. Four things are added, in one ffmpeg
+invocation so the picture is encoded once rather than once per element:
+
+- **A title card** of `polish.intro_seconds`, carrying the title the planner
+  wrote into `05a-storyplan`, cross-dissolving into the first segment.
+- **A lower third** wherever a timeline clip's beat differs from the one
+  before it, naming that beat for `polish.title_seconds` behind a
+  semi-transparent plate, fading in and out. The first clip never gets one —
+  the card has just named the video.
+- **A music bed** from `polish.music_dir`, chosen by your brief's `style`
+  when that names a track the library has and otherwise by a stable digest of
+  the project's name, so the same project always gets the same music. It is
+  looped or trimmed to length, faded at both ends, laid in at
+  `polish.music_gain_db` and ducked a further `polish.music_duck_db` under
+  the speech by an ffmpeg `sidechaincompress` keyed on the video's own audio.
+  Bensound's free licence wants a credit, so the track's attribution line is
+  appended to `output/metadata.md` (once, however often you re-render) and
+  recorded in the artifact.
+- **A cross-dissolve of `polish.transition_frames`** on the cuts between story
+  sections only. Cuts inside a section stay hard cuts: cutting straight on
+  speech is correct, and a dissolve on every cut reads as a slideshow.
+
+Every element degrades on its own. No music folder, an empty one, or an
+ffmpeg build without `drawtext` (Homebrew's macOS bottle has no libfreetype,
+in which case titles are rasterised and overlaid as images instead) all still
+produce a video, and the artifact says what was left out. `polish.enabled:
+false` copies the draft through untouched.
+
+Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `06-draft`. Writes
+`output/final.mp4`, the credit in `output/metadata.md`, and `08-final.json`
+(path, duration, which elements were applied, the chosen track and its
+attribution). Runs locally with `ffmpeg`. Cost: $0.
+
 
 ## Caching
 

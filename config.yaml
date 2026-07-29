@@ -38,3 +38,13 @@ plan:
   # every later planning round.
   reject_adult_in_frame: true
   reject_unusable_shots: true
+
+polish:
+  enabled: true
+  intro_seconds: 2.5      # the title card, cross-dissolved into the first segment
+  title_seconds: 2.0      # how long a beat's lower third stays up
+  music_gain_db: -22.0    # where the bed sits before ducking
+  music_duck_db: -12.0    # how much further it drops while the child is talking
+  transition_frames: 8    # cross-dissolve length, on section boundaries only
+  music_track:            # leave empty to choose by style, then by project name
+  music_dir: assets/Music

@@ -274,6 +274,27 @@ class DraftResult(BaseModel):
     segment_count: int
 
 
+class FinalResult(BaseModel):
+    """The watchable cut: the draft plus intro, section titles, music and dissolves.
+
+    Every polish element is optional and degrades on its own — a missing music
+    folder or an unreadable font must still produce a video — so the artifact
+    records what was actually applied rather than what was configured.
+    """
+
+    path: str
+    duration: float
+    intro: bool = False
+    intro_title: str = ""
+    title_count: int = 0
+    transition_count: int = 0
+    music_track: str | None = None
+    # Bensound's free licence requires the credit to travel with the video, so it
+    # is recorded here as well as written to output/metadata.md.
+    music_attribution: str = ""
+    notes: list[str] = Field(default_factory=list)
+
+
 class ExportResult(BaseModel):
     """What `export_edit` wrote for a human editor to open in DaVinci Resolve
     (or any other OTIO/EDL-capable NLE)."""

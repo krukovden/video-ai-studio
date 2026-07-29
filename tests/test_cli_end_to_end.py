@@ -7,6 +7,11 @@ from videoai.cli import app
 
 runner = CliRunner()
 
+# Polish is off throughout: these tests are about the edit pipeline, and the
+# polish render would encode a second video and reach for the repository's real
+# music library. It has its own tests.
+MOCK_CONFIG = "providers:\n  asr: mock\n  llm: mock\npolish:\n  enabled: false\n"
+
 
 def _sidecar_for(project: Path, clip_id: str) -> Path:
     """Where the mock ASR expects this clip's words: next to the extracted audio.
@@ -52,7 +57,7 @@ def test_run_produces_draft_from_a_folder_of_clips(tmp_path: Path, make_clip, mo
     (project / "input" / "project.yaml").write_text("title: Test review\n", encoding="utf-8")
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
 
     words_payload = [
         {"text": "hello", "start": 0.5, "end": 0.9},
@@ -102,7 +107,7 @@ def test_second_run_skips_cached_stages(tmp_path: Path, make_clip, monkeypatch):
     (project / "input").mkdir(parents=True)
     make_clip("a.mp4", seconds=6.0).rename(project / "input" / "a.mp4")
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
     llm_path = tmp_path / "llm.json"
     llm_path.write_text(json.dumps({
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
@@ -130,7 +135,7 @@ def test_stages_command_lists_pipeline_order():
     assert result.exit_code == 0
     for stage_id in (
         "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
-        "render_draft", "export_edit",
+        "render_draft", "export_edit", "polish",
     ):
         assert stage_id in result.output
 
@@ -146,7 +151,7 @@ def test_run_with_video_folder_layout_produces_draft(tmp_path: Path, make_clip, 
     (project / "description" / "notes.md").write_text("Keep it upbeat.\n", encoding="utf-8")
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
 
     words_payload = [
         {"text": "hello", "start": 0.5, "end": 0.9},
@@ -195,7 +200,7 @@ def test_run_indexes_clips_from_per_camera_subfolders(tmp_path: Path, make_clip)
     make_clip("b.mp4", seconds=3.0).rename(project / "video" / "cam-b" / "b.mp4")
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
 
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
 
@@ -211,7 +216,7 @@ def test_run_fails_with_no_video_files_anywhere(tmp_path: Path):
     project.joinpath("project.yaml").write_text("title: Empty\n", encoding="utf-8")
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
 
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
 
@@ -234,7 +239,7 @@ def test_stage_failure_names_the_stage_and_exits_non_zero(tmp_path: Path, make_c
     (project / "video").mkdir(parents=True)
     make_clip("a.mp4", seconds=3.0).rename(project / "video" / "a.mp4")
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
 
     # No mock ASR sidecar exists, so `transcribe` raises FileNotFoundError.
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -256,7 +261,7 @@ def test_stage_failure_re_run_command_includes_the_custom_config_path(
     (project / "video").mkdir(parents=True)
     make_clip("a.mp4", seconds=3.0).rename(project / "video" / "a.mp4")
     config_path = tmp_path / "custom-config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
 
     # No mock ASR sidecar exists, so `transcribe` raises FileNotFoundError.
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -272,7 +277,7 @@ def test_debug_flag_keeps_the_traceback(tmp_path: Path, make_clip):
     (project / "video").mkdir(parents=True)
     make_clip("a.mp4", seconds=3.0).rename(project / "video" / "a.mp4")
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
 
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path), "--debug"])
 
@@ -290,7 +295,7 @@ def _executed_stages(output: str) -> set[str]:
 
 ALL_STAGE_IDS = {
     "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
-    "render_draft", "export_edit",
+    "render_draft", "export_edit", "polish",
 }
 
 
@@ -307,7 +312,7 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
     notes.write_text("Short brief.\n", encoding="utf-8")
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
     llm_path = tmp_path / "llm.json"
     llm_path.write_text(json.dumps({
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
@@ -351,7 +356,7 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
     after_brief_edit = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert after_brief_edit.exit_code == 0, after_brief_edit.output
     assert _executed_stages(after_brief_edit.output) == {
-        "analyze", "plan", "visual_check", "render_draft", "export_edit"
+        "analyze", "plan", "visual_check", "render_draft", "export_edit", "polish"
     }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -373,7 +378,7 @@ def test_adding_a_video_file_reruns_every_stage(tmp_path: Path, make_clip, monke
     # is a secondary angle and is never transcribed.
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
-        "providers:\n  asr: mock\n  llm: mock\nsync:\n  primary_camera: cam-a\n", encoding="utf-8"
+        MOCK_CONFIG + "sync:\n  primary_camera: cam-a\n", encoding="utf-8"
     )
     llm_path = tmp_path / "llm.json"
     llm_path.write_text(json.dumps({
@@ -422,7 +427,7 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
     make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
     llm_path = tmp_path / "llm.json"
     llm_path.write_text(json.dumps({
         "segments": [
@@ -476,7 +481,7 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
         "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
     }), encoding="utf-8")
     config_path.write_text(
-        "providers:\n  asr: mock\n  llm: mock\nplan:\n  exclude_phrases: [clip-01#002]\n",
+        MOCK_CONFIG + "plan:\n  exclude_phrases: [clip-01#002]\n",
         encoding="utf-8",
     )
 
@@ -484,7 +489,7 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
 
     assert after_exclusion.exit_code == 0, after_exclusion.output
     assert _executed_stages(after_exclusion.output) == {
-        "plan", "visual_check", "render_draft", "export_edit"
+        "plan", "visual_check", "render_draft", "export_edit", "polish"
     }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -502,7 +507,7 @@ def test_changing_a_render_setting_reruns_only_the_render(tmp_path: Path, make_c
     make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
     llm_path = tmp_path / "llm.json"
     llm_path.write_text(json.dumps({
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
@@ -523,7 +528,7 @@ def test_changing_a_render_setting_reruns_only_the_render(tmp_path: Path, make_c
     assert "nothing to do" in cached.output.lower()
 
     config_path.write_text(
-        "providers:\n  asr: mock\n  llm: mock\nrender:\n  draft_crf: 30\n", encoding="utf-8"
+        MOCK_CONFIG + "render:\n  draft_crf: 30\n", encoding="utf-8"
     )
 
     result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -541,7 +546,7 @@ def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, ma
     make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
     llm_path = tmp_path / "llm.json"
     llm_path.write_text(json.dumps({
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
@@ -584,7 +589,7 @@ def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, ma
     assert "now depend on stale input" in single_stage.output
     for stage_id in (
         "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
-        "render_draft", "export_edit",
+        "render_draft", "export_edit", "polish",
     ):
         assert stage_id in single_stage.output
     # The notice only names stale stages; it must not run them itself.
@@ -629,7 +634,7 @@ def _seed_project(tmp_path: Path, make_clip, monkeypatch, payload: dict) -> tupl
     (project / "video").mkdir(parents=True)
     make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
     llm_path = tmp_path / "llm.json"
     llm_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
