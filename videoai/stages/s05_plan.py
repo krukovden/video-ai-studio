@@ -33,7 +33,17 @@ Rules:
   such as a question the child then answers.
 - Most of the source material is unusable outtakes. Selecting a small fraction of
   it is the expected outcome, not a mistake.
-- Open with the single strongest moment, then tell the review in a sensible order.
+- If the brief describes the sequence the creator wants — an arc, a list of beats,
+  or must_include items — follow it. The creator knows what happened on the shoot;
+  your job is to find the footage for each beat, not to invent a different story.
+  Name your sections after their beats.
+- Only when the brief gives no structure, choose one yourself: open with the single
+  strongest moment, then tell the review in a sensible order. Strongest means most
+  engaging for THIS toy, judged from the material you were given, not most
+  energetic. For a quiet toy that may be the best reaction or the clearest look at
+  the thing itself.
+- A beat the brief asks for that has no usable footage is worth reporting: name it
+  in the description field rather than silently dropping it.
 - Aim for the target duration in the brief if one is given.
 - title is punchy and under 70 characters; description is two or three sentences.
 """
