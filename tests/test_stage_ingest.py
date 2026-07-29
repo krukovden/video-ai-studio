@@ -2,24 +2,36 @@ import json
 import subprocess
 from pathlib import Path
 
-from videoai.config import Config
+from videoai.config import Config, RenderSettings
 from videoai.core.models import Manifest
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
 from videoai.stages.s01_ingest import ingest
 
 
-def _context(project: Path) -> StageContext:
+def _context(project: Path, *, draft_height: int | None = None) -> StageContext:
     (project / "work").mkdir(parents=True, exist_ok=True)
     (project / "output").mkdir(parents=True, exist_ok=True)
+    config = Config() if draft_height is None else Config(render=RenderSettings(draft_height=draft_height))
     return StageContext(
         project_dir=project,
         input_dir=project,
         work_dir=project / "work",
         output_dir=project / "output",
-        config=Config(),
+        config=config,
         store=ArtifactStore(project / "work"),
     )
+
+
+def _video_height(path: Path) -> int:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=height", "-print_format", "json", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    return json.loads(result.stdout)["streams"][0]["height"]
 
 
 def test_ingest_indexes_clips_from_video_folder(tmp_path: Path, make_clip):
@@ -186,6 +198,28 @@ def test_ingest_records_a_stable_source_key_per_clip(tmp_path: Path, make_clip):
     assert all(keys)
     assert len(set(keys)) == 2
     assert [clip.source_key for clip in ingest(ctx).clips] == keys
+
+
+# --- Finding 1: the proxy filename must fold in its build height, or a height
+# change reuses the old, wrongly-sized proxy file and the pipeline never re-runs ---
+
+
+def test_proxy_is_rebuilt_when_draft_height_changes_but_audio_path_is_stable(
+    tmp_path: Path, make_clip
+):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0, size="640x360").rename(clips / "a.mp4")
+
+    first = ingest(_context(project, draft_height=240))
+    assert _video_height(Path(first.clips[0].proxy_path)) == 240
+
+    second = ingest(_context(project, draft_height=480))
+
+    assert _video_height(Path(second.clips[0].proxy_path)) == 480
+    assert second.clips[0].proxy_path != first.clips[0].proxy_path
+    assert second.clips[0].audio_path == first.clips[0].audio_path
 
 
 def test_ingest_labels_clips_with_their_camera(tmp_path: Path, make_clip):

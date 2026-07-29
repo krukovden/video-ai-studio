@@ -30,6 +30,13 @@ def derived_stem(source: Path) -> str:
     return f"{label}-{source_key(source)}"
 
 
+def _proxy_filename(stem: str, height: int) -> str:
+    """Proxy filenames must fold in the build height: unlike the audio, a proxy's
+    content depends on it, so a height change has to produce a different name or
+    reuse would silently keep serving the old resolution."""
+    return f"{stem}-proxy-{height}p.mp4"
+
+
 @stage(id="ingest", produces="01-manifest", requires=(), model=Manifest, config_keys=("render.draft_height",))
 def ingest(ctx: StageContext) -> Manifest:
     clip_dir = resolve_clip_dir(ctx.input_dir)
@@ -53,7 +60,7 @@ def ingest(ctx: StageContext) -> Manifest:
                 if not audio_path.exists():
                     extract_audio(source, audio_path)
 
-            proxy_path = media_dir / f"{stem}-proxy.mp4"
+            proxy_path = media_dir / _proxy_filename(stem, ctx.config.render.draft_height)
             if not proxy_path.exists():
                 make_proxy(source, proxy_path, height=ctx.config.render.draft_height)
 
