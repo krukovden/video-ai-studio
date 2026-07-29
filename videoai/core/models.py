@@ -141,3 +141,30 @@ class TakeGroups(BaseModel):
             if phrase_id in group.phrase_ids:
                 return group.group_id
         return None
+
+
+class SegmentAnalysis(BaseModel):
+    phrase_id: str
+    clip_id: str
+    start: float
+    end: float
+    text: str
+    content: str = ""
+    delivery_score: int = 5
+    visual_score: int = 5
+    emotion: str = "neutral"
+    speaker: str = "unclear"
+    is_failed_take: bool = False
+    take_group: str | None = None
+    shorts_candidate: bool = False
+
+
+class Analysis(BaseModel):
+    provider: str
+    segments: list[SegmentAnalysis] = Field(default_factory=list)
+
+    def by_phrase(self, phrase_id: str) -> SegmentAnalysis:
+        for segment in self.segments:
+            if segment.phrase_id == phrase_id:
+                return segment
+        raise KeyError(f"unknown phrase_id: {phrase_id}")
