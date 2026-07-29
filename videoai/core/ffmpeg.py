@@ -19,6 +19,7 @@ class ProbeResult:
     height: int
     fps: float
     has_audio: bool
+    created_at: float | None = None
 
 
 def run_ffmpeg(args: list[str]) -> None:
@@ -74,12 +75,23 @@ def probe(path: Path) -> ProbeResult:
     if "height" not in video:
         raise RuntimeError(f"probe({path}): missing height")
 
+    created_at: float | None = None
+    raw_created = data.get("format", {}).get("tags", {}).get("creation_time")
+    if raw_created:
+        from datetime import datetime
+
+        try:
+            created_at = datetime.fromisoformat(raw_created.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            created_at = None
+
     return ProbeResult(
         duration=duration,
         width=int(video["width"]),
         height=int(video["height"]),
         fps=fps,
         has_audio=any(s.get("codec_type") == "audio" for s in streams),
+        created_at=created_at,
     )
 
 

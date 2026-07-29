@@ -12,6 +12,8 @@ class ClipInfo(BaseModel):
     height: int
     fps: float
     has_audio: bool
+    camera: str = "main"
+    recorded_at: float | None = None
     audio_path: str | None = None
     proxy_path: str | None = None
 
@@ -92,3 +94,35 @@ class PhraseIndex(BaseModel):
             if phrase.phrase_id == phrase_id:
                 return phrase
         raise KeyError(f"unknown phrase_id: {phrase_id}")
+
+
+class ClipSync(BaseModel):
+    clip_id: str
+    camera: str
+    global_start: float
+    method: str
+    confidence: float = 0.0
+
+
+class SyncMap(BaseModel):
+    clips: list[ClipSync] = Field(default_factory=list)
+    primary_camera: str = "main"
+
+    def clips_of(self, camera: str) -> list[ClipSync]:
+        return [clip for clip in self.clips if clip.camera == camera]
+
+    def by_id(self, clip_id: str) -> ClipSync:
+        for clip in self.clips:
+            if clip.clip_id == clip_id:
+                return clip
+        raise KeyError(f"unknown clip_id: {clip_id}")
+
+    def overlaps(self, clip_a: str, clip_b: str, manifest: "Manifest") -> bool:
+        """True when both clips were recording at the same moment — different
+        angles of one performance rather than two attempts at it."""
+        first, second = self.by_id(clip_a), self.by_id(clip_b)
+        if first.camera == second.camera:
+            return False
+        first_end = first.global_start + manifest.by_id(clip_a).duration
+        second_end = second.global_start + manifest.by_id(clip_b).duration
+        return first.global_start < second_end and second.global_start < first_end

@@ -35,6 +35,12 @@ class RenderSettings(BaseModel):
     audio_fade_seconds: float = 0.03
 
 
+class SyncSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    primary_camera: str | None = None
+
+
 class Config(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -44,6 +50,7 @@ class Config(BaseModel):
     transcribe: TranscribeSettings = TranscribeSettings()
     analyze: AnalyzeSettings = AnalyzeSettings()
     render: RenderSettings = RenderSettings()
+    sync: SyncSettings = SyncSettings()
 
     @model_validator(mode="after")
     def _check_provider_keys(self) -> "Config":
@@ -66,4 +73,5 @@ def load_config(path: Path | None = None) -> Config:
         transcribe=TranscribeSettings(**(raw.get("transcribe") or {})),
         analyze=AnalyzeSettings(**(raw.get("analyze") or {})),
         render=RenderSettings(**(raw.get("render") or {})),
+        sync=SyncSettings(**(raw.get("sync") or {})),
     )

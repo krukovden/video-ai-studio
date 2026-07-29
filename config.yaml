@@ -18,3 +18,6 @@ render:
   draft_height: 720
   draft_crf: 23
   audio_fade_seconds: 0.03
+
+sync:
+  primary_camera:    # leave empty to detect the camera with the real microphone

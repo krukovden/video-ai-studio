@@ -1,4 +1,5 @@
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,44 @@ def test_probe_reads_stream_properties(make_clip):
     assert (result.width, result.height) == (320, 240)
     assert 29.0 < result.fps < 31.0
     assert result.has_audio is True
+
+
+def test_probe_created_at_is_none_when_creation_time_absent(make_clip):
+    clip = make_clip("a.mp4", seconds=1.0)
+    assert probe(clip).created_at is None
+
+
+def test_probe_reads_creation_time_tag_as_epoch_seconds(make_clip, tmp_path: Path):
+    clip = make_clip("a.mp4", seconds=1.0)
+    tagged = tmp_path / "tagged.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error", "-i", str(clip),
+            "-c", "copy", "-metadata", "creation_time=2024-01-15T10:30:00Z",
+            str(tagged),
+        ],
+        check=True,
+    )
+
+    result = probe(tagged)
+
+    expected = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc).timestamp()
+    assert result.created_at == pytest.approx(expected)
+
+
+def test_probe_creation_time_that_does_not_parse_is_none(make_clip, tmp_path: Path):
+    clip = make_clip("a.mp4", seconds=1.0)
+    tagged = tmp_path / "tagged.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error", "-i", str(clip),
+            "-c", "copy", "-metadata", "creation_time=not-a-timestamp",
+            str(tagged),
+        ],
+        check=True,
+    )
+
+    assert probe(tagged).created_at is None
 
 
 def test_extract_audio_writes_wav(make_clip, tmp_path: Path):

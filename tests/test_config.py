@@ -36,3 +36,15 @@ def test_config_is_immutable():
     config = Config()
     with pytest.raises(Exception):
         config.providers = {}
+
+
+def test_load_config_default_sync_primary_camera_is_none(tmp_path: Path):
+    config = load_config(tmp_path / "nope.yaml")
+    assert config.sync.primary_camera is None
+
+
+def test_load_config_overrides_sync_primary_camera(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    path.write_text("sync:\n  primary_camera: cam-a\n", encoding="utf-8")
+    config = load_config(path)
+    assert config.sync.primary_camera == "cam-a"

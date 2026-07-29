@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from videoai.config import Config
-from videoai.core.models import Manifest, Transcript, Word
+from videoai.core.models import Manifest, SyncMap, Transcript, Word
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
 from videoai.providers.asr_parakeet import merge_tokens_to_words
@@ -59,6 +59,7 @@ def test_mock_provider_produces_transcript_artifact(tmp_path: Path, make_clip):
 
     manifest: Manifest = ingest(ctx)
     ctx.store.write("01-manifest", manifest, fingerprint="fp")
+    ctx.store.write("01b-sync", SyncMap(clips=[], primary_camera="main"), fingerprint="fp")
     sidecar = Path(manifest.clips[0].audio_path).with_suffix(".words.json")
     sidecar.write_text(
         json.dumps(_words(("Look", 0.2, 0.5), ("here", 0.55, 0.9))), encoding="utf-8"
@@ -79,6 +80,7 @@ def test_missing_sidecar_raises_clear_error(tmp_path: Path, make_clip):
     from videoai.stages.s01_ingest import ingest
 
     ctx.store.write("01-manifest", ingest(ctx), fingerprint="fp")
+    ctx.store.write("01b-sync", SyncMap(clips=[], primary_camera="main"), fingerprint="fp")
     with pytest.raises(FileNotFoundError, match="words.json"):
         transcribe(ctx)
 
@@ -98,6 +100,7 @@ def test_clip_without_audio_yields_empty_transcript(tmp_path: Path):
     from videoai.stages.s01_ingest import ingest
 
     ctx.store.write("01-manifest", ingest(ctx), fingerprint="fp")
+    ctx.store.write("01b-sync", SyncMap(clips=[], primary_camera="main"), fingerprint="fp")
 
     result = transcribe(ctx)
 
@@ -133,6 +136,38 @@ def test_merge_tokens_to_words_drops_empty_and_whitespace_tokens():
     ]
     words = merge_tokens_to_words(tokens)
     assert [w.text for w in words] == ["Hi", "there"]
+
+
+def test_only_the_primary_camera_is_transcribed(tmp_path: Path, make_clip):
+    import json
+
+    from videoai.core.models import ClipInfo, Manifest, SyncMap
+    from videoai.stages.s01_ingest import ingest
+
+    ctx = _context(tmp_path)
+    (ctx.input_dir / "video" / "cam-a").mkdir(parents=True)
+    (ctx.input_dir / "video" / "cam-b").mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "video" / "cam-a" / "a.mp4")
+    make_clip("b.mp4", seconds=2.0).rename(ctx.input_dir / "video" / "cam-b" / "b.mp4")
+
+    manifest: Manifest = ingest(ctx)
+    ctx.store.write("01-manifest", manifest, fingerprint="fp")
+    ctx.store.write(
+        "01b-sync",
+        SyncMap(clips=[], primary_camera="cam-b"),
+        fingerprint="fp",
+    )
+    for clip in manifest.clips:
+        Path(clip.audio_path).with_suffix(".words.json").write_text(
+            json.dumps([{"text": clip.camera, "start": 0.1, "end": 0.4}]), encoding="utf-8"
+        )
+
+    result = transcribe(ctx)
+
+    primary = next(clip for clip in manifest.clips if clip.camera == "cam-b")
+    secondary = next(clip for clip in manifest.clips if clip.camera == "cam-a")
+    assert [word.text for word in result.by_id(primary.clip_id).words] == ["cam-b"]
+    assert result.by_id(secondary.clip_id).words == []
 
 
 def test_merge_tokens_to_words_uses_first_and_last_token_boundaries():

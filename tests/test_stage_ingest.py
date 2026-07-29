@@ -114,3 +114,16 @@ def test_ingest_raises_when_no_clips_found(tmp_path: Path):
         assert "no video files" in str(error)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_ingest_labels_clips_with_their_camera(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    (project / "video" / "cam-a").mkdir(parents=True)
+    (project / "video" / "cam-b").mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(project / "video" / "cam-a" / "a.mp4")
+    make_clip("b.mp4", seconds=2.0).rename(project / "video" / "cam-b" / "b.mp4")
+
+    manifest = ingest(_context(project))
+
+    assert {clip.camera for clip in manifest.clips} == {"cam-a", "cam-b"}
+    assert [clip.clip_id for clip in manifest.clips] == ["clip-01", "clip-02"]

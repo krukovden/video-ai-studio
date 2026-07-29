@@ -18,6 +18,26 @@ def resolve_clip_dir(project_dir: Path) -> Path:
     return project_dir
 
 
+def list_camera_clips(clip_dir: Path) -> dict[str, list[Path]]:
+    """Camera name to its clips.
+
+    Subdirectories are cameras, which is how a two-camera shoot is handed over;
+    a flat folder of files is a single camera called `main`.
+    """
+    from videoai.core.ffmpeg import list_video_files
+
+    cameras: dict[str, list[Path]] = {}
+    for entry in sorted(clip_dir.iterdir()) if clip_dir.is_dir() else []:
+        if entry.is_dir() and not entry.name.startswith("."):
+            files = list_video_files(entry)
+            if files:
+                cameras[entry.name] = files
+    if cameras:
+        return cameras
+    files = list_video_files(clip_dir)
+    return {"main": files} if files else {}
+
+
 def _read_docx(path: Path) -> str:
     import docx
 

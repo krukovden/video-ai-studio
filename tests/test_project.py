@@ -83,3 +83,41 @@ def test_read_brief_survives_an_unreadable_docx(tmp_path: Path):
 
     assert "real content" in brief
     assert "broken.docx" in brief
+
+
+def test_list_camera_clips_treats_subdirectories_as_cameras(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    (video / "cam-b").mkdir(parents=True)
+    (video / "cam-a").mkdir(parents=True)
+    make_clip("x.mp4", seconds=1.0).rename(video / "cam-a" / "x.mp4")
+    make_clip("y.MOV", seconds=1.0).rename(video / "cam-b" / "y.MOV")
+
+    from videoai.core.project import list_camera_clips
+
+    cameras = list_camera_clips(video)
+
+    assert sorted(cameras) == ["cam-a", "cam-b"]
+    assert [path.name for path in cameras["cam-a"]] == ["x.mp4"]
+
+
+def test_list_camera_clips_falls_back_to_single_main_camera(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    video.mkdir()
+    make_clip("x.mp4", seconds=1.0).rename(video / "x.mp4")
+
+    from videoai.core.project import list_camera_clips
+
+    cameras = list_camera_clips(video)
+
+    assert list(cameras) == ["main"]
+    assert [path.name for path in cameras["main"]] == ["x.mp4"]
+
+
+def test_list_camera_clips_ignores_empty_subdirectories(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    (video / "empty").mkdir(parents=True)
+    make_clip("x.mp4", seconds=1.0).rename(video / "x.mp4")
+
+    from videoai.core.project import list_camera_clips
+
+    assert list(list_camera_clips(video)) == ["main"]
