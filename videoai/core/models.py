@@ -72,3 +72,23 @@ class Transcript(BaseModel):
             if clip.clip_id == clip_id:
                 return clip
         raise KeyError(f"unknown clip_id: {clip_id}")
+
+
+class Phrase(BaseModel):
+    phrase_id: str
+    clip_id: str
+    start: float
+    end: float
+    text: str
+    word_start: int
+    word_end: int
+
+
+class PhraseIndex(BaseModel):
+    phrases: list[Phrase] = Field(default_factory=list)
+
+    def by_id(self, phrase_id: str) -> Phrase:
+        for phrase in self.phrases:
+            if phrase.phrase_id == phrase_id:
+                return phrase
+        raise KeyError(f"unknown phrase_id: {phrase_id}")
