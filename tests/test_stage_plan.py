@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from videoai.config import Config
+from videoai.config import Config, PlanSettings
 from videoai.core.models import (
     Analysis,
     ClipInfo,
@@ -20,7 +20,13 @@ from videoai.core.store import ArtifactStore
 from videoai.stages.s05_plan import plan
 
 
-def _context(tmp_path: Path, monkeypatch, payload: dict) -> StageContext:
+def _context(
+    tmp_path: Path,
+    monkeypatch,
+    payload: dict,
+    config: Config | None = None,
+    segments: list[SegmentAnalysis] | None = None,
+) -> StageContext:
     for name in ("input", "work", "output"):
         (tmp_path / name).mkdir(exist_ok=True)
     payload_path = tmp_path / "llm.json"
@@ -31,7 +37,7 @@ def _context(tmp_path: Path, monkeypatch, payload: dict) -> StageContext:
         input_dir=tmp_path / "input",
         work_dir=tmp_path / "work",
         output_dir=tmp_path / "output",
-        config=Config(providers={"asr": "mock", "llm": "mock"}),
+        config=config or Config(providers={"asr": "mock", "llm": "mock"}),
         store=ArtifactStore(tmp_path / "work"),
     )
     ctx.store.write("01-manifest", Manifest(clips=[
@@ -40,9 +46,12 @@ def _context(tmp_path: Path, monkeypatch, payload: dict) -> StageContext:
     ]), fingerprint="fp")
     ctx.store.write("03-transcript", Transcript(provider="mock", clips=[ClipTranscript(
         clip_id="clip-01",
-        words=[Word(text="hello", start=2.0, end=2.5), Word(text="world", start=2.6, end=3.0)],
+        words=[
+            Word(text="hello", start=2.0, end=2.5), Word(text="world", start=2.6, end=3.0),
+            Word(text="bad", start=4.0, end=4.4), Word(text="moment", start=4.5, end=5.0),
+        ],
     )]), fingerprint="fp")
-    ctx.store.write("04-analysis", Analysis(provider="mock", segments=[
+    ctx.store.write("04-analysis", Analysis(provider="mock", segments=segments or [
         SegmentAnalysis(phrase_id="clip-01#001", clip_id="clip-01", start=2.0, end=3.0,
                         text="hello world", content="greeting", delivery_score=9),
     ]), fingerprint="fp")
@@ -94,3 +103,63 @@ def test_plan_stage_rejects_unknown_phrase_id(tmp_path: Path, monkeypatch):
     assert "clip-77#001" in str(error.value)
     assert "Hook" in str(error.value)
     assert not isinstance(error.value, KeyError)
+
+
+def _two_segments() -> list[SegmentAnalysis]:
+    return [
+        SegmentAnalysis(phrase_id="clip-01#001", clip_id="clip-01", start=2.0, end=3.0,
+                        text="hello world", content="greeting", delivery_score=9),
+        SegmentAnalysis(phrase_id="clip-01#002", clip_id="clip-01", start=4.0, end=5.0,
+                        text="bad moment", content="an adult walks through frame",
+                        delivery_score=2),
+    ]
+
+
+def test_excluded_phrase_never_appears_in_the_resulting_timeline(tmp_path: Path, monkeypatch):
+    """The creator named a bad moment as excluded; the planner must never be given
+    the chance to pick it, and none of the phrase's own words may show up in the
+    final edit."""
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#001"]}],
+    }
+    config = Config(
+        providers={"asr": "mock", "llm": "mock"},
+        plan=PlanSettings(exclude_phrases=["clip-01#002"]),
+    )
+    ctx = _context(tmp_path, monkeypatch, payload, config=config, segments=_two_segments())
+
+    timeline = plan(ctx)
+
+    assert [clip.src for clip in timeline.clips] == ["clip-01"]
+    assert all(clip.quote != "bad moment" for clip in timeline.clips)
+
+
+def test_excluded_phrase_is_hidden_from_the_prompt(tmp_path: Path, monkeypatch):
+    from videoai.stages.s05_plan import _segments_view
+
+    analysis = Analysis(provider="mock", segments=_two_segments())
+    view = _segments_view(analysis, {"clip-01#002"})
+
+    assert "clip-01#001" in view
+    assert "clip-01#002" not in view
+    assert "bad moment" not in view
+
+
+def test_model_reply_naming_an_excluded_phrase_raises(tmp_path: Path, monkeypatch):
+    """A stale cached LLM reply could still name a phrase the creator has since
+    excluded; filtering it out of the prompt is not enough on its own."""
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#002"]}],
+    }
+    config = Config(
+        providers={"asr": "mock", "llm": "mock"},
+        plan=PlanSettings(exclude_phrases=["clip-01#002"]),
+    )
+    ctx = _context(tmp_path, monkeypatch, payload, config=config, segments=_two_segments())
+
+    with pytest.raises(RuntimeError) as error:
+        plan(ctx)
+
+    assert "clip-01#002" in str(error.value)

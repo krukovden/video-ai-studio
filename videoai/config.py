@@ -44,6 +44,15 @@ class SyncSettings(BaseModel):
     primary_camera: str | None = None
 
 
+class PlanSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    # Phrase ids the creator has explicitly banned from the edit — a "never use
+    # that" moment named after reviewing a draft, not something the planner can
+    # be argued out of via the brief.
+    exclude_phrases: list[str] = Field(default_factory=list)
+
+
 class Config(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -54,6 +63,7 @@ class Config(BaseModel):
     analyze: AnalyzeSettings = AnalyzeSettings()
     render: RenderSettings = RenderSettings()
     sync: SyncSettings = SyncSettings()
+    plan: PlanSettings = PlanSettings()
 
     @model_validator(mode="after")
     def _check_provider_keys(self) -> "Config":
@@ -77,4 +87,5 @@ def load_config(path: Path | None = None) -> Config:
         analyze=AnalyzeSettings(**(raw.get("analyze") or {})),
         render=RenderSettings(**(raw.get("render") or {})),
         sync=SyncSettings(**(raw.get("sync") or {})),
+        plan=PlanSettings(**(raw.get("plan") or {})),
     )

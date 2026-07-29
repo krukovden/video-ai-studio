@@ -377,6 +377,84 @@ def test_adding_a_video_file_reruns_every_stage(tmp_path: Path, make_clip, monke
     assert _executed_stages(after_new_clip.output) == ALL_STAGE_IDS
 
 
+def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
+    tmp_path: Path, make_clip, monkeypatch
+):
+    """The creator naming a bad moment as excluded is a plan-time decision, not a
+    media or brief change: it must re-run planning and the render that depends on
+    it, but must not force re-probing, re-scoring or re-transcribing every clip."""
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    llm_path = tmp_path / "llm.json"
+    llm_path.write_text(json.dumps({
+        "segments": [
+            {"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
+             "visual_score": 8, "emotion": "excited", "is_failed_take": False,
+             "shorts_candidate": False},
+            {"phrase_id": "clip-01#002", "content": "a bad moment", "delivery_score": 2,
+             "visual_score": 3, "emotion": "neutral", "is_failed_take": False,
+             "shorts_candidate": False},
+        ],
+        "title": "T", "description": "D", "tags": [],
+        "sections": [
+            {"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001", "clip-01#002"]},
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
+
+    runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
+    _write_words(project, "clip-01", [
+        {"text": "hello", "start": 0.5, "end": 0.9},
+        {"text": "everyone", "start": 0.95, "end": 1.5},
+        {"text": "bad", "start": 3.0, "end": 3.3},
+        {"text": "moment", "start": 3.35, "end": 3.8},
+    ])
+
+    first = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert first.exit_code == 0, first.output
+    assert _executed_stages(first.output) == ALL_STAGE_IDS - {"ingest"}
+
+    cached = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert cached.exit_code == 0, cached.output
+    assert "nothing to do" in cached.output.lower()
+    assert _executed_stages(cached.output) == set()
+
+    # Excluding a phrase changes what the planner can select; the mock LLM has to
+    # say so (real footage's real model would simply stop choosing it once it is
+    # hidden from the prompt), otherwise an identical timeline correctly leaves
+    # the render cached.
+    llm_path.write_text(json.dumps({
+        "segments": [
+            {"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
+             "visual_score": 8, "emotion": "excited", "is_failed_take": False,
+             "shorts_candidate": False},
+            {"phrase_id": "clip-01#002", "content": "a bad moment", "delivery_score": 2,
+             "visual_score": 3, "emotion": "neutral", "is_failed_take": False,
+             "shorts_candidate": False},
+        ],
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
+    }), encoding="utf-8")
+    config_path.write_text(
+        "providers:\n  asr: mock\n  llm: mock\nplan:\n  exclude_phrases: [clip-01#002]\n",
+        encoding="utf-8",
+    )
+
+    after_exclusion = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+
+    assert after_exclusion.exit_code == 0, after_exclusion.output
+    assert _executed_stages(after_exclusion.output) == {"plan", "render_draft"}
+
+    unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert unchanged_again.exit_code == 0, unchanged_again.output
+    assert "nothing to do" in unchanged_again.output.lower()
+    assert _executed_stages(unchanged_again.output) == set()
+
+
 def test_changing_a_render_setting_reruns_only_the_render(tmp_path: Path, make_clip, monkeypatch):
     """Finding I1 end to end: a setting a stage reads is one of its inputs. Before
     the fix `draft_crf` was invisible to every fingerprint and the pipeline said

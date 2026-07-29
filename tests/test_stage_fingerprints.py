@@ -8,7 +8,14 @@ from pathlib import Path
 import pytest
 
 import videoai.stages  # noqa: F401  (imports register every stage)
-from videoai.config import AnalyzeSettings, Config, RenderSettings, SyncSettings, TranscribeSettings
+from videoai.config import (
+    AnalyzeSettings,
+    Config,
+    PlanSettings,
+    RenderSettings,
+    SyncSettings,
+    TranscribeSettings,
+)
 from videoai.core.registry import REGISTRY, StageContext
 from videoai.core.runner import _fingerprint, config_value
 from videoai.core.store import ArtifactStore
@@ -65,6 +72,7 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(analyze=AnalyzeSettings(llm_model="opus")), {"analyze", "plan"}),
         (Config(render=RenderSettings(audio_fade_seconds=0.5)), {"render_draft"}),
         (Config(render=RenderSettings(draft_crf=30)), {"render_draft"}),
+        (Config(plan=PlanSettings(exclude_phrases=["clip-01#004"])), {"plan"}),
     ],
 )
 def test_changing_a_setting_invalidates_exactly_the_stages_that_read_it(

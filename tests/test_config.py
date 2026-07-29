@@ -48,3 +48,25 @@ def test_load_config_overrides_sync_primary_camera(tmp_path: Path):
     path.write_text("sync:\n  primary_camera: cam-a\n", encoding="utf-8")
     config = load_config(path)
     assert config.sync.primary_camera == "cam-a"
+
+
+def test_load_config_default_plan_settings_are_empty(tmp_path: Path):
+    config = load_config(tmp_path / "nope.yaml")
+    assert config.plan.exclude_phrases == []
+
+
+def test_load_config_overrides_plan_exclude_phrases(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "plan:\n  exclude_phrases: [clip-01#004, clip-02#009]\n", encoding="utf-8"
+    )
+    config = load_config(path)
+    assert config.plan.exclude_phrases == ["clip-01#004", "clip-02#009"]
+
+
+def test_plan_settings_are_immutable():
+    from videoai.config import PlanSettings
+
+    settings = PlanSettings()
+    with pytest.raises(Exception):
+        settings.exclude_phrases = ["x"]

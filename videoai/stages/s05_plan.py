@@ -46,12 +46,18 @@ Rules:
   in the description field rather than silently dropping it.
 - Aim for the target duration in the brief if one is given.
 - title is punchy and under 70 characters; description is two or three sentences.
+- Some phrases the creator has already reviewed and rejected are withheld from
+  the list below entirely. If a moment you would expect to see is missing, that
+  is why: do not try to reconstruct it from neighbouring phrases or invent a
+  replacement for it.
 """
 
 
-def _segments_view(analysis: Analysis) -> str:
+def _segments_view(analysis: Analysis, excluded: set[str]) -> str:
     lines = []
     for segment in analysis.segments:
+        if segment.phrase_id in excluded:
+            continue
         flags = []
         if segment.is_failed_take:
             flags.append("FAILED")
@@ -77,7 +83,11 @@ def _segments_view(analysis: Analysis) -> str:
     provider_key="llm",
     model=Timeline,
     uses_brief=True,
-    config_keys=("transcribe.cut_padding_seconds", "analyze.llm_model"),
+    config_keys=(
+        "transcribe.cut_padding_seconds",
+        "analyze.llm_model",
+        "plan.exclude_phrases",
+    ),
     prompt=INSTRUCTIONS,
 )
 def plan(ctx: StageContext) -> Timeline:
@@ -86,12 +96,13 @@ def plan(ctx: StageContext) -> Timeline:
     analysis = ctx.store.read("04-analysis", Analysis)
 
     brief = read_brief(ctx.project_dir)
+    excluded = set(ctx.config.plan.exclude_phrases)
 
     provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
     prompt = "\n\n".join([
         INSTRUCTIONS,
         f"Creator brief:\n{brief}" if brief.strip() else "",
-        f"Phrases:\n{_segments_view(analysis)}",
+        f"Phrases:\n{_segments_view(analysis, excluded)}",
     ]).strip()
     response = provider.complete_json(prompt, [], ctx.config.analyze.llm_timeout_seconds)
 
@@ -112,10 +123,19 @@ def plan(ctx: StageContext) -> Timeline:
 
     # A hallucinated phrase id is the likeliest failure at this stage; letting
     # `build_timeline` raise a bare KeyError would say nothing about where it
-    # came from.
+    # came from. An excluded phrase id is checked first and separately: it is
+    # known to `analysis` (it was only hidden from the prompt), so it would
+    # otherwise pass the "known" check below and slip back into the edit — the
+    # id could arrive from a stale cached reply, not just a fresh hallucination.
     known = {segment.phrase_id for segment in analysis.segments}
     for section in story.sections:
         for phrase_id in section.phrase_ids:
+            if phrase_id in excluded:
+                raise RuntimeError(
+                    f"planner referenced excluded phrase id {phrase_id!r} in section "
+                    f"{section.name!r}: this phrase is excluded via plan.exclude_phrases "
+                    "and must not appear in the edit"
+                )
             if phrase_id not in known:
                 raise RuntimeError(
                     f"planner referenced unknown phrase id {phrase_id!r} in section "

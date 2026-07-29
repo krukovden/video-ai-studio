@@ -25,3 +25,6 @@ render:
 
 sync:
   primary_camera:    # leave empty to detect the camera with the real microphone
+
+plan:
+  exclude_phrases: []   # phrase ids to ban outright, e.g. clip-03#012
