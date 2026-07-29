@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,15 @@ from videoai.config import Config
 from videoai.core.models import Manifest, Transcript, Word
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
+from videoai.providers.asr_parakeet import merge_tokens_to_words
 from videoai.stages.s03_transcribe import derive_speech_spans, transcribe
+
+
+@dataclass
+class _FakeToken:
+    text: str
+    start: float
+    end: float
 
 
 def _context(tmp_path: Path) -> StageContext:
@@ -93,3 +102,48 @@ def test_clip_without_audio_yields_empty_transcript(tmp_path: Path):
     result = transcribe(ctx)
 
     assert result.by_id("clip-01").words == []
+
+
+def test_merge_tokens_to_words_joins_subwords_on_leading_space():
+    tokens = [
+        _FakeToken(" Hi", 0.00, 0.32),
+        _FakeToken(" ever", 0.32, 0.48),
+        _FakeToken("y", 0.48, 0.64),
+        _FakeToken("one", 0.64, 0.80),
+        _FakeToken(",", 0.80, 1.04),
+    ]
+    words = merge_tokens_to_words(tokens)
+    assert len(words) == 2
+    assert words[0].text == "Hi" and words[0].start == 0.00 and words[0].end == 0.32
+    assert words[1].text == "everyone," and words[1].start == 0.32 and words[1].end == 1.04
+
+
+def test_merge_tokens_to_words_single_token_without_leading_space():
+    words = merge_tokens_to_words([_FakeToken("Hi", 0.0, 0.3)])
+    assert len(words) == 1
+    assert words[0].text == "Hi" and words[0].start == 0.0 and words[0].end == 0.3
+
+
+def test_merge_tokens_to_words_drops_empty_and_whitespace_tokens():
+    tokens = [
+        _FakeToken(" Hi", 0.0, 0.3),
+        _FakeToken("", 0.3, 0.3),
+        _FakeToken("   ", 0.3, 0.3),
+        _FakeToken(" there", 0.3, 0.6),
+    ]
+    words = merge_tokens_to_words(tokens)
+    assert [w.text for w in words] == ["Hi", "there"]
+
+
+def test_merge_tokens_to_words_uses_first_and_last_token_boundaries():
+    tokens = [
+        _FakeToken(" re", 1.0, 1.1),
+        _FakeToken("vie", 1.1, 1.2),
+        _FakeToken("w", 1.2, 1.3),
+        _FakeToken("ing", 1.3, 1.5),
+    ]
+    words = merge_tokens_to_words(tokens)
+    assert len(words) == 1
+    assert words[0].text == "reviewing"
+    assert words[0].start == 1.0
+    assert words[0].end == 1.5
