@@ -9,6 +9,13 @@ from pathlib import Path
 
 BRIEF_SUFFIXES = {".md", ".txt", ".docx"}
 
+# Folders the pipeline itself creates. A flat project (clips directly in the
+# project folder) would otherwise ingest its own `output/draft.mp4` on the second
+# run and treat `work/`'s proxies and segments as extra cameras.
+DERIVED_DIRS = {"work", "output"}
+
+LOOSE_CAMERA = "main"
+
 
 def resolve_clip_dir(project_dir: Path) -> Path:
     for name in ("input", "video"):
@@ -22,20 +29,28 @@ def list_camera_clips(clip_dir: Path) -> dict[str, list[Path]]:
     """Camera name to its clips.
 
     Subdirectories are cameras, which is how a two-camera shoot is handed over;
-    a flat folder of files is a single camera called `main`.
+    files sitting loose in `clip_dir` are a single camera called `main`. Both are
+    merged: a folder holding both loose clips and a camera subfolder is a real
+    layout, and silently dropping either half loses footage. `work/` and
+    `output/` are the pipeline's own folders and are never cameras.
     """
     from videoai.core.ffmpeg import list_video_files
 
     cameras: dict[str, list[Path]] = {}
+    loose = list_video_files(clip_dir)
+    if loose:
+        cameras[LOOSE_CAMERA] = loose
+
     for entry in sorted(clip_dir.iterdir()) if clip_dir.is_dir() else []:
-        if entry.is_dir() and not entry.name.startswith("."):
-            files = list_video_files(entry)
-            if files:
-                cameras[entry.name] = files
-    if cameras:
-        return cameras
-    files = list_video_files(clip_dir)
-    return {"main": files} if files else {}
+        if not entry.is_dir() or entry.name.startswith(".") or entry.name in DERIVED_DIRS:
+            continue
+        files = list_video_files(entry)
+        if not files:
+            continue
+        # A subfolder literally called `main` alongside loose clips: merge rather
+        # than let one shadow the other.
+        cameras[entry.name] = sorted(cameras.get(entry.name, []) + files)
+    return cameras
 
 
 def _read_docx(path: Path) -> str:

@@ -121,3 +121,71 @@ def test_list_camera_clips_ignores_empty_subdirectories(tmp_path: Path, make_cli
     from videoai.core.project import list_camera_clips
 
     assert list(list_camera_clips(video)) == ["main"]
+
+
+# --- Finding C2: a flat project must never ingest its own output ---
+
+
+def test_flat_project_ignores_its_own_output_folder(tmp_path: Path, make_clip):
+    """Run 1 creates `output/draft.mp4`; run 2 must still see the source clips
+    rather than deciding `output` is the only camera."""
+    project = tmp_path / "project"
+    project.mkdir()
+    make_clip("a.mp4", seconds=1.0).rename(project / "a.mp4")
+    make_clip("b.mp4", seconds=1.0).rename(project / "b.mp4")
+    (project / "output").mkdir()
+    make_clip("draft.mp4", seconds=1.0).rename(project / "output" / "draft.mp4")
+
+    from videoai.core.project import list_camera_clips, resolve_clip_dir
+
+    cameras = list_camera_clips(resolve_clip_dir(project))
+
+    assert list(cameras) == ["main"]
+    assert [path.name for path in cameras["main"]] == ["a.mp4", "b.mp4"]
+
+
+def test_flat_project_ignores_its_own_work_folder(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    project.mkdir()
+    make_clip("a.mp4", seconds=1.0).rename(project / "a.mp4")
+    (project / "work").mkdir()
+    make_clip("proxy.mp4", seconds=1.0).rename(project / "work" / "clip-01-proxy.mp4")
+
+    from videoai.core.project import list_camera_clips, resolve_clip_dir
+
+    cameras = list_camera_clips(resolve_clip_dir(project))
+
+    assert list(cameras) == ["main"]
+    assert [path.name for path in cameras["main"]] == ["a.mp4"]
+
+
+# --- Finding I4: a mixed layout must not silently drop loose clips ---
+
+
+def test_loose_clips_and_camera_subfolders_are_merged(tmp_path: Path, make_clip):
+    clips = tmp_path / "input"
+    (clips / "cam-a").mkdir(parents=True)
+    make_clip("loose.mp4", seconds=1.0).rename(clips / "loose.mp4")
+    make_clip("x.mp4", seconds=1.0).rename(clips / "cam-a" / "x.mp4")
+
+    from videoai.core.project import list_camera_clips
+
+    cameras = list_camera_clips(clips)
+
+    assert sorted(cameras) == ["cam-a", "main"]
+    assert [path.name for path in cameras["main"]] == ["loose.mp4"]
+    assert [path.name for path in cameras["cam-a"]] == ["x.mp4"]
+
+
+def test_subfolder_named_main_merges_with_loose_clips(tmp_path: Path, make_clip):
+    clips = tmp_path / "input"
+    (clips / "main").mkdir(parents=True)
+    make_clip("a.mp4", seconds=1.0).rename(clips / "a.mp4")
+    make_clip("b.mp4", seconds=1.0).rename(clips / "main" / "b.mp4")
+
+    from videoai.core.project import list_camera_clips
+
+    cameras = list_camera_clips(clips)
+
+    assert list(cameras) == ["main"]
+    assert sorted(path.name for path in cameras["main"]) == ["a.mp4", "b.mp4"]
