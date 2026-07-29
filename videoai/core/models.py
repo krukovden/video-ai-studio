@@ -126,3 +126,18 @@ class SyncMap(BaseModel):
         first_end = first.global_start + manifest.by_id(clip_a).duration
         second_end = second.global_start + manifest.by_id(clip_b).duration
         return first.global_start < second_end and second.global_start < first_end
+
+
+class TakeGroup(BaseModel):
+    group_id: str
+    phrase_ids: list[str] = Field(default_factory=list)
+
+
+class TakeGroups(BaseModel):
+    groups: list[TakeGroup] = Field(default_factory=list)
+
+    def group_of(self, phrase_id: str) -> str | None:
+        for group in self.groups:
+            if phrase_id in group.phrase_ids:
+                return group.group_id
+        return None
