@@ -169,3 +169,38 @@ class Analysis(BaseModel):
             if segment.phrase_id == phrase_id:
                 return segment
         raise KeyError(f"unknown phrase_id: {phrase_id}")
+
+
+class PlanSection(BaseModel):
+    name: str
+    goal: str = ""
+    phrase_ids: list[str] = Field(default_factory=list)
+
+
+class StoryPlan(BaseModel):
+    sections: list[PlanSection] = Field(default_factory=list)
+    title: str = ""
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+
+class TimelineClip(BaseModel):
+    src: str
+    offset: float
+    dur: float
+    start: float
+    quote: str = ""
+    reason: str = ""
+    beat: str = ""
+    angles: list[str] = Field(default_factory=list)
+
+
+class Timeline(BaseModel):
+    fps: float
+    width: int
+    height: int
+    clips: list[TimelineClip] = Field(default_factory=list)
+
+    @property
+    def duration(self) -> float:
+        return sum(clip.dur for clip in self.clips)
