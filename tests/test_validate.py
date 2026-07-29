@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from videoai.core.ffmpeg import make_proxy
 from videoai.core.models import (
     Analysis,
     ClipInfo,
@@ -212,8 +215,7 @@ def test_timeline_mixing_portrait_and_landscape_sources_is_reported():
 def test_uniform_timeline_reports_no_geometry_violation():
     manifest = Manifest(clips=[
         ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
-                 width=3840, height=2160, fps=30.0, has_audio=True),
-        # Different pixel size, same aspect ratio: both proxies come out identical.
+                 width=1920, height=1080, fps=30.0, has_audio=True),
         ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
     ])
@@ -225,6 +227,63 @@ def test_uniform_timeline_reports_no_geometry_violation():
     violations = validate_timeline(timeline, manifest, _empty_transcript())
 
     assert not any("mixed source geometry" in v for v in violations)
+
+
+def test_clips_without_proxies_fall_back_to_originals_and_catch_4k_vs_1080p():
+    """Same aspect ratio, genuinely different pixel size, and neither clip has a
+    proxy yet: the old aspect-only rule passed this silently, but the renderer
+    would still concatenate mismatched geometry with -c copy."""
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                 width=3840, height=2160, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, manifest, _empty_transcript())
+
+    geometry = [v for v in violations if "mixed source geometry" in v]
+    assert len(geometry) == 1
+    assert "clip-01" in geometry[0]
+    assert "clip-02" in geometry[0]
+
+
+# --- Finding 2: geometry must be read from the actual proxy, not inferred from
+# the original's aspect ratio; two same-aspect originals whose proxies were built
+# at different heights must be caught even though the originals never differ ---
+
+
+def test_proxies_built_at_different_heights_are_reported_even_with_identical_originals(
+    tmp_path: Path, make_clip
+):
+    source_a = make_clip("a.mp4", seconds=1.0, size="640x360")
+    source_b = make_clip("b.mp4", seconds=1.0, size="640x360")
+    proxy_a = tmp_path / "a-proxy-240p.mp4"
+    proxy_b = tmp_path / "b-proxy-480p.mp4"
+    make_proxy(source_a, proxy_a, height=240)
+    make_proxy(source_b, proxy_b, height=480)
+
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path=str(source_a), duration=1.0,
+                 width=640, height=360, fps=30.0, has_audio=True, proxy_path=str(proxy_a)),
+        ClipInfo(clip_id="clip-02", path=str(source_b), duration=1.0,
+                 width=640, height=360, fps=30.0, has_audio=True, proxy_path=str(proxy_b)),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=0.1, dur=0.5, start=0.0, quote="", core_dur=0.5),
+        TimelineClip(src="clip-02", offset=0.1, dur=0.5, start=0.5, quote="", core_dur=0.5),
+    )
+
+    violations = validate_timeline(timeline, manifest, _empty_transcript())
+
+    geometry = [v for v in violations if "mixed source geometry" in v]
+    assert len(geometry) == 1
+    assert "clip-01" in geometry[0]
+    assert "clip-02" in geometry[0]
 
 
 def test_mixed_frame_rate_is_reported():

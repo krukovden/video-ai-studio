@@ -7,7 +7,9 @@ and prove each segment really contains the line it claims to.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
+from videoai.core.ffmpeg import probe
 from videoai.core.models import ClipInfo, Manifest, Timeline, Transcript
 
 MIN_SEGMENT_SECONDS = 0.3
@@ -16,19 +18,26 @@ EPSILON = 0.01
 FPS_EPSILON = 0.01
 
 
-def _proxy_shape(clip: ClipInfo) -> tuple[float, float]:
-    """What the clip's proxy will look like, as (aspect ratio, frame rate).
+def _clip_geometry(clip: ClipInfo) -> tuple[int, int, float]:
+    """Real pixel dimensions and frame rate of the file the renderer will actually
+    use: the proxy once ingest has built one, the original otherwise.
 
-    Proxies scale to a fixed height with an even auto width, so two sources with
-    the same aspect ratio produce identically sized proxies however different
-    their originals are — and two with different aspect ratios never do.
+    Proxies are rebuilt independently per source and keyed by their own build
+    height, so two sources that share an aspect ratio — or even two proxies of
+    one same-aspect pair — can still end up at different pixel sizes. Only
+    probing the actual file catches that; inferring shape from the original's
+    aspect ratio cannot.
     """
-    aspect = round(clip.width / clip.height, 3) if clip.height else 0.0
-    return aspect, round(clip.fps, 2)
+    if clip.proxy_path:
+        proxy = Path(clip.proxy_path)
+        if proxy.exists():
+            info = probe(proxy)
+            return info.width, info.height, round(info.fps, 2)
+    return clip.width, clip.height, round(clip.fps, 2)
 
 
 def _geometry_violations(timeline: Timeline, known_clips: dict[str, ClipInfo]) -> list[str]:
-    """Every source in the timeline must yield the same proxy geometry and frame rate.
+    """Every source in the timeline must yield the same real geometry and frame rate.
 
     The draft concatenates rendered segments with `-c copy`, which accepts mixed
     geometry without complaint and produces a garbled file: one rotated clip in a
@@ -36,27 +45,26 @@ def _geometry_violations(timeline: Timeline, known_clips: dict[str, ClipInfo]) -
     """
     violations: list[str] = []
     reference_id: str | None = None
-    reference_shape: tuple[float, float] | None = None
+    reference_shape: tuple[int, int, float] | None = None
     reported: set[str] = set()
 
     for clip in timeline.clips:
         source = known_clips.get(clip.src)
         if source is None:
             continue
-        shape = _proxy_shape(source)
+        shape = _clip_geometry(source)
         if reference_shape is None:
             reference_id, reference_shape = clip.src, shape
             continue
-        same_aspect = abs(shape[0] - reference_shape[0]) < 1e-6
-        same_fps = abs(shape[1] - reference_shape[1]) <= FPS_EPSILON
-        if (same_aspect and same_fps) or clip.src in reported:
+        same_size = shape[0] == reference_shape[0] and shape[1] == reference_shape[1]
+        same_fps = abs(shape[2] - reference_shape[2]) <= FPS_EPSILON
+        if (same_size and same_fps) or clip.src in reported:
             continue
         reported.add(clip.src)
-        reference = known_clips[reference_id]
         violations.append(
-            f"mixed source geometry: {clip.src} is {source.width}x{source.height} "
-            f"@{source.fps:.2f}fps but {reference_id} is "
-            f"{reference.width}x{reference.height} @{reference.fps:.2f}fps; "
+            f"mixed source geometry: {clip.src} is {shape[0]}x{shape[1]} "
+            f"@{shape[2]:.2f}fps but {reference_id} is "
+            f"{reference_shape[0]}x{reference_shape[1]} @{reference_shape[2]:.2f}fps; "
             "the draft concatenates their proxies with -c copy, which cannot mix them"
         )
     return violations
