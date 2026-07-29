@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Subagent-driven development scratch
+.superpowers/
+
 # Python
 __pycache__/
 *.pyc
@@ -12,6 +15,9 @@ node_modules/
 # Project working data (heavy media, caches)
 projects/*/work/
 projects/*/output/
+
+# Source footage and music — gigabytes of media, never in git
+assets/
 
 # macOS
 .DS_Store

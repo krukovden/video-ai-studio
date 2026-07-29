@@ -1,0 +1,447 @@
+from pathlib import Path
+
+from videoai.core.ffmpeg import make_proxy
+from videoai.core.models import (
+    Analysis,
+    ClipInfo,
+    ClipTranscript,
+    Manifest,
+    PlanSection,
+    SegmentAnalysis,
+    StoryPlan,
+    Timeline,
+    TimelineClip,
+    Transcript,
+    Word,
+)
+from videoai.logic.timeline import build_timeline
+from videoai.logic.validate import validate_timeline
+
+
+def _manifest() -> Manifest:
+    return Manifest(clips=[ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                                    width=1920, height=1080, fps=30.0, has_audio=True)])
+
+
+def _transcript() -> Transcript:
+    return Transcript(provider="mock", clips=[ClipTranscript(
+        clip_id="clip-01",
+        words=[Word(text="hello", start=2.0, end=2.5), Word(text="world", start=2.6, end=3.0)],
+    )])
+
+
+def _timeline(*clips: TimelineClip) -> Timeline:
+    return Timeline(fps=30.0, width=1920, height=1080, clips=list(clips))
+
+
+def test_valid_timeline_has_no_violations():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="hello world",
+                     core_dur=1.0)
+    )
+    assert validate_timeline(timeline, _manifest(), _transcript()) == []
+
+
+def test_gap_between_clips_is_reported():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="hello world"),
+        TimelineClip(src="clip-01", offset=5.0, dur=1.0, start=2.0, quote=""),
+    )
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("contiguous" in v for v in violations)
+
+
+def test_segment_beyond_source_duration_is_reported():
+    timeline = _timeline(TimelineClip(src="clip-01", offset=29.0, dur=5.0, start=0.0, quote=""))
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("exceeds source duration" in v for v in violations)
+
+
+def test_unknown_source_is_reported():
+    timeline = _timeline(TimelineClip(src="clip-99", offset=0.0, dur=1.0, start=0.0, quote=""))
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("unknown source" in v for v in violations)
+
+
+def test_too_short_segment_is_reported():
+    timeline = _timeline(TimelineClip(src="clip-01", offset=2.0, dur=0.1, start=0.0, quote=""))
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("shorter than" in v for v in violations)
+
+
+def test_cut_inside_a_word_is_reported():
+    timeline = _timeline(TimelineClip(src="clip-01", offset=2.2, dur=0.6, start=0.0, quote=""))
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("inside word" in v for v in violations)
+
+
+def test_quote_not_present_in_segment_is_reported():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="totally invented")
+    )
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("quote not found" in v for v in violations)
+
+
+def test_negative_offset_is_reported():
+    timeline = _timeline(TimelineClip(src="clip-01", offset=-0.5, dur=1.0, start=0.0, quote=""))
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("negative offset" in v for v in violations)
+
+
+# --- Finding 1: normalisation must not doubled-space on punctuation next to a space ---
+
+
+def test_quote_differing_only_by_punctuation_still_validates():
+    transcript = Transcript(provider="mock", clips=[ClipTranscript(
+        clip_id="clip-01",
+        words=[
+            Word(text="Hello,", start=2.0, end=2.5),
+            Word(text="everyone!", start=2.6, end=3.0),
+            Word(text="welcome", start=3.1, end=3.5),
+            Word(text="back", start=3.6, end=3.9),
+        ],
+    )])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=2.25, start=0.0,
+                     quote="hello everyone welcome back", core_dur=1.9)
+    )
+    assert validate_timeline(timeline, _manifest(), transcript) == []
+
+
+def test_quote_differing_only_by_capitalisation_and_spacing_still_validates():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0,
+                     quote="  HELLO   World  ", core_dur=1.0)
+    )
+    assert validate_timeline(timeline, _manifest(), _transcript()) == []
+
+
+def test_genuinely_absent_quote_is_still_rejected_after_normalisation_fix():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0,
+                     quote="totally, invented!", core_dur=1.0)
+    )
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("quote not found" in v for v in violations)
+
+
+# --- Finding 2: MIN_SPEECH_SECONDS must judge the real speech length, not the
+# padded total, which the padding default alone can inflate past MIN_SEGMENT_SECONDS ---
+
+
+def test_zero_length_core_segment_is_rejected():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="", core_dur=0.0)
+    )
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("core speech shorter than" in v for v in violations)
+
+
+def test_short_core_segment_is_rejected():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="", core_dur=0.1)
+    )
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert any("core speech shorter than" in v for v in violations)
+
+
+def test_core_segment_of_0_4_seconds_passes():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="", core_dur=0.4)
+    )
+    violations = validate_timeline(timeline, _manifest(), _transcript())
+    assert not any("core speech" in v for v in violations)
+
+
+def test_padding_clamped_at_source_boundary_is_still_judged_on_core_duration():
+    """Reproduces the dormant defect: padding alone (0.15s each side) can inflate
+    a clamped, nearly-zero-length segment's total duration to exactly
+    MIN_SEGMENT_SECONDS, which the old total-duration rule alone would accept.
+    core_dur exposes the real speech length regardless of that clamp."""
+    manifest = Manifest(clips=[ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                                        width=1920, height=1080, fps=30.0, has_audio=True)])
+    analysis = Analysis(provider="mock", segments=[
+        SegmentAnalysis(phrase_id="clip-01#001", clip_id="clip-01", start=29.85, end=29.95,
+                        text="uh", content="noise", delivery_score=1),
+    ])
+    plan = StoryPlan(
+        sections=[PlanSection(name="Noise", goal="x", phrase_ids=["clip-01#001"])],
+        title="T", description="D", tags=[],
+    )
+    timeline = build_timeline(
+        plan, analysis, manifest, Transcript(provider="mock", clips=[]), padding=0.15, fps=30.0
+    )
+    clip = timeline.clips[0]
+    # The clamp at the 30s source boundary produces exactly the old minimum, which
+    # would have passed the total-duration rule alone.
+    assert abs(clip.dur - 0.30) < 1e-6
+    assert abs(clip.core_dur - 0.10) < 1e-6
+
+    violations = validate_timeline(timeline, manifest, Transcript(provider="mock", clips=[]))
+    assert any("core speech shorter than" in v for v in violations)
+
+
+# --- Finding I3: mixed clip geometry silently corrupts the draft. Proxies scale
+# to a fixed height, so a portrait clip becomes 405x720 beside 1280x720 landscape
+# ones, and the concat demuxer's `-c copy` accepts that without an error ---
+
+
+def _mixed_manifest() -> Manifest:
+    return Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/landscape.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-02", path="/tmp/portrait.mp4", duration=30.0,
+                 width=1080, height=1920, fps=30.0, has_audio=True),
+    ])
+
+
+def _empty_transcript() -> Transcript:
+    return Transcript(provider="mock", clips=[])
+
+
+def test_timeline_mixing_portrait_and_landscape_sources_is_reported():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, _mixed_manifest(), _empty_transcript())
+
+    geometry = [v for v in violations if "mixed source geometry" in v]
+    assert len(geometry) == 1
+    assert "clip-01" in geometry[0]
+    assert "clip-02" in geometry[0]
+
+
+def test_uniform_timeline_reports_no_geometry_violation():
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, manifest, _empty_transcript())
+
+    assert not any("mixed source geometry" in v for v in violations)
+
+
+def test_clips_without_proxies_fall_back_to_originals_and_catch_4k_vs_1080p():
+    """Same aspect ratio, genuinely different pixel size, and neither clip has a
+    proxy yet: the old aspect-only rule passed this silently, but the renderer
+    would still concatenate mismatched geometry with -c copy."""
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                 width=3840, height=2160, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, manifest, _empty_transcript())
+
+    geometry = [v for v in violations if "mixed source geometry" in v]
+    assert len(geometry) == 1
+    assert "clip-01" in geometry[0]
+    assert "clip-02" in geometry[0]
+
+
+# --- Finding 2: geometry must be read from the actual proxy, not inferred from
+# the original's aspect ratio; two same-aspect originals whose proxies were built
+# at different heights must be caught even though the originals never differ ---
+
+
+def test_proxies_built_at_different_heights_are_reported_even_with_identical_originals(
+    tmp_path: Path, make_clip
+):
+    source_a = make_clip("a.mp4", seconds=1.0, size="640x360")
+    source_b = make_clip("b.mp4", seconds=1.0, size="640x360")
+    proxy_a = tmp_path / "a-proxy-240p.mp4"
+    proxy_b = tmp_path / "b-proxy-480p.mp4"
+    make_proxy(source_a, proxy_a, height=240)
+    make_proxy(source_b, proxy_b, height=480)
+
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path=str(source_a), duration=1.0,
+                 width=640, height=360, fps=30.0, has_audio=True, proxy_path=str(proxy_a)),
+        ClipInfo(clip_id="clip-02", path=str(source_b), duration=1.0,
+                 width=640, height=360, fps=30.0, has_audio=True, proxy_path=str(proxy_b)),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=0.1, dur=0.5, start=0.0, quote="", core_dur=0.5),
+        TimelineClip(src="clip-02", offset=0.1, dur=0.5, start=0.5, quote="", core_dur=0.5),
+    )
+
+    violations = validate_timeline(timeline, manifest, _empty_transcript())
+
+    geometry = [v for v in violations if "mixed source geometry" in v]
+    assert len(geometry) == 1
+    assert "clip-01" in geometry[0]
+    assert "clip-02" in geometry[0]
+
+
+def test_mixed_frame_rate_is_reported():
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+                 width=1920, height=1080, fps=60.0, has_audio=True),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, manifest, _empty_transcript())
+
+    assert any("mixed source geometry" in v and "60.00fps" in v for v in violations)
+
+
+def test_each_offending_source_is_reported_once_however_often_it_is_cut_in():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=3.0, dur=1.0, start=2.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, _mixed_manifest(), _empty_transcript())
+
+    assert len([v for v in violations if "mixed source geometry" in v]) == 1
+
+
+def test_single_source_timeline_reports_no_geometry_violation():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="hello world",
+                     core_dur=1.0)
+    )
+    assert validate_timeline(timeline, _manifest(), _transcript()) == []
+
+
+# --- Silent visual inserts: no words to cut inside and no quote to anchor, so the
+# two speech rules cannot apply to them. Every other rule still must ---
+
+
+def _insert_manifest() -> Manifest:
+    return Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+    ])
+
+
+def _insert_transcript() -> Transcript:
+    """clip-10 has an entry but no words — the close-up nobody narrated. clip-01's
+    words are placed so that an insert cut at the same times would land mid-word."""
+    return Transcript(provider="mock", clips=[
+        ClipTranscript(clip_id="clip-01", words=[
+            Word(text="hello", start=2.0, end=2.5), Word(text="world", start=2.6, end=3.0),
+        ]),
+        ClipTranscript(clip_id="clip-10", words=[]),
+    ])
+
+
+def test_timeline_mixing_speech_clips_and_inserts_has_no_violations():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="hello world",
+                     core_dur=1.0),
+        TimelineClip(src="clip-10", offset=2.0, dur=3.0, start=1.4, quote="",
+                     reason="visual insert", core_dur=3.0, is_insert=True),
+    )
+    assert validate_timeline(timeline, _insert_manifest(), _insert_transcript()) == []
+
+
+def test_speech_clip_cutting_inside_a_word_still_fails_beside_an_insert():
+    """The exemption is scoped to inserts: an ordinary speech clip in the same
+    timeline is judged exactly as before."""
+    timeline = _timeline(
+        TimelineClip(src="clip-10", offset=2.0, dur=3.0, start=0.0, quote="",
+                     reason="visual insert", core_dur=3.0, is_insert=True),
+        TimelineClip(src="clip-01", offset=2.2, dur=0.6, start=3.0, quote="", core_dur=0.6),
+    )
+    violations = validate_timeline(timeline, _insert_manifest(), _insert_transcript())
+    assert any("inside word" in v for v in violations)
+    assert all("clip-10" not in v for v in violations)
+
+
+def test_insert_over_a_narrated_clip_is_still_exempt_from_the_word_rule():
+    """A quiet clip can still carry a stray word. Cutting it as an insert is a
+    picture decision, so the word-boundary rule has nothing to say about it."""
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=2.2, dur=0.6, start=0.0, quote="",
+                     reason="visual insert", core_dur=0.6, is_insert=True),
+    )
+    assert validate_timeline(timeline, _insert_manifest(), _insert_transcript()) == []
+
+
+def test_insert_beyond_its_source_duration_is_still_reported():
+    timeline = _timeline(
+        TimelineClip(src="clip-10", offset=5.0, dur=4.0, start=0.0, quote="",
+                     reason="visual insert", core_dur=4.0, is_insert=True),
+    )
+    violations = validate_timeline(timeline, _insert_manifest(), _insert_transcript())
+    assert any("exceeds source duration" in v for v in violations)
+
+
+def test_gap_before_an_insert_is_still_reported():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="hello world",
+                     core_dur=1.0),
+        TimelineClip(src="clip-10", offset=2.0, dur=3.0, start=5.0, quote="",
+                     reason="visual insert", core_dur=3.0, is_insert=True),
+    )
+    violations = validate_timeline(timeline, _insert_manifest(), _insert_transcript())
+    assert any("contiguous" in v for v in violations)
+
+
+def test_insert_shorter_than_the_minimum_is_still_reported():
+    timeline = _timeline(
+        TimelineClip(src="clip-10", offset=2.0, dur=0.1, start=0.0, quote="",
+                     reason="visual insert", core_dur=0.1, is_insert=True),
+    )
+    violations = validate_timeline(timeline, _insert_manifest(), _insert_transcript())
+    assert any("shorter than" in v for v in violations)
+
+
+def test_insert_from_a_source_of_different_geometry_is_still_reported():
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0,
+                 width=1080, height=1920, fps=30.0, has_audio=True),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="hello world",
+                     core_dur=1.0),
+        TimelineClip(src="clip-10", offset=2.0, dur=3.0, start=1.4, quote="",
+                     reason="visual insert", core_dur=3.0, is_insert=True),
+    )
+    violations = validate_timeline(timeline, manifest, _insert_transcript())
+    assert any("mixed source geometry" in v for v in violations)
+
+
+def test_build_timeline_mixing_speech_and_inserts_passes_its_own_validator():
+    manifest = _insert_manifest()
+    transcript = _insert_transcript()
+    analysis = Analysis(provider="mock", segments=[
+        SegmentAnalysis(phrase_id="clip-01#001", clip_id="clip-01", start=2.0, end=3.0,
+                        text="hello world", content="intro", delivery_score=8),
+    ])
+    plan = StoryPlan(
+        sections=[PlanSection(name="Hook", goal="open",
+                              phrase_ids=["clip-01#001", "insert:clip-10@2-5"])],
+        title="T", description="D", tags=[],
+    )
+
+    timeline = build_timeline(plan, analysis, manifest, transcript, padding=0.15, fps=30.0)
+
+    assert [clip.is_insert for clip in timeline.clips] == [False, True]
+    assert validate_timeline(timeline, manifest, transcript) == []

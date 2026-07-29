@@ -29,6 +29,29 @@ Reference spec: `docs/superpowers/specs/2026-07-28-videoai-pipeline-design.md`.
 - Commit after every task using the exact command given in the task's final step.
 - Test media is generated at test time with ffmpeg `lavfi`; no binary media is committed to git.
 
+## Real Project Layout (authoritative)
+
+The creator's folders already exist and the pipeline adapts to them, not the other way round.
+A project directory looks like this — `video/` and `description/` are supplied by the creator,
+the rest the pipeline creates:
+
+```
+assets/1.Toy_Pimple_Popping/
+├── video/          # source clips (.MOV/.mp4), supplied
+├── description/    # brief: .docx/.md/.txt plus product photos, supplied
+├── work/           # artifacts and cache, created
+└── output/
+    ├── draft.mp4   # review draft
+    ├── video/      # approved final video (later plans)
+    └── shorts/     # shorts, created after approval (later plans)
+```
+
+Clip source directory resolution order: `input/` if it exists, else `video/`, else the project
+directory itself. macOS metadata files (`.DS_Store`, any dotfile, AppleDouble `._*`) are ignored
+everywhere. Real footage for the first project is 56 clips / 44.8 minutes of 4K HEVC 30 fps with
+stereo AAC, so anything that touches every clip must be cached and must not decode 4K when a
+proxy would do.
+
 ## File Structure
 
 | File | Responsibility |
@@ -41,6 +64,7 @@ Reference spec: `docs/superpowers/specs/2026-07-28-videoai-pipeline-design.md`.
 | `videoai/core/registry.py` | `StageSpec`, `StageContext`, `@stage` decorator, registry |
 | `videoai/core/runner.py` | Stage ordering, fingerprinting, skip/force logic |
 | `videoai/core/ffmpeg.py` | ffprobe/ffmpeg subprocess helpers |
+| `videoai/core/project.py` | Project layout resolution and creator-brief reading |
 | `videoai/logic/phrases.py` | Words → phrases → packed transcript (pure) |
 | `videoai/logic/takes.py` | Repeated-take detection (pure) |
 | `videoai/logic/timeline.py` | Analysis + StoryPlan → Timeline (pure) |
@@ -744,21 +768,38 @@ git commit -m "feat: stage registry and caching runner"
 
 ---
 
-### Task 4: ffmpeg helpers and the ingest stage
+### Task 4: ffmpeg helpers, project layout and the ingest stage
 
 **Files:**
-- Create: `videoai/core/ffmpeg.py`, `videoai/core/models.py`, `videoai/stages/s01_ingest.py`, `tests/conftest.py`
-- Test: `tests/test_ffmpeg.py`, `tests/test_stage_ingest.py`
+- Create: `videoai/core/ffmpeg.py`, `videoai/core/project.py`, `videoai/core/models.py`, `videoai/stages/s01_ingest.py`, `tests/conftest.py`
+- Test: `tests/test_ffmpeg.py`, `tests/test_project.py`, `tests/test_stage_ingest.py`
 
 **Interfaces:**
 - Consumes: `StageContext`, `stage` (Task 3).
 - Produces:
-  - `videoai/core/ffmpeg.py`: `probe(path: Path) -> ProbeResult` (dataclass with `duration: float, width: int, height: int, fps: float, has_audio: bool`), `extract_audio(src: Path, dst: Path) -> None` (16 kHz mono WAV, loudnorm applied), `make_proxy(src: Path, dst: Path, height: int) -> None`, `extract_frame(src: Path, at: float, dst: Path, height: int) -> None`, `run_ffmpeg(args: list[str]) -> None`.
-  - `videoai/core/models.py`: `ClipInfo`, `Manifest` (see code).
+  - `videoai/core/ffmpeg.py`: `ProbeResult` dataclass (`duration: float, width: int, height: int, fps: float, has_audio: bool`), `probe(path) -> ProbeResult`, `run_ffmpeg(args: list[str]) -> None`, `extract_audio(src, dst) -> None`, `make_proxy(src, dst, height) -> None`, `extract_frame(src, at, dst, height=360) -> None`, `list_video_files(directory: Path) -> list[Path]`, and the constant `VIDEO_SUFFIXES`.
+  - `videoai/core/project.py`: `resolve_clip_dir(project_dir: Path) -> Path`, `read_brief(project_dir: Path) -> str`.
+  - `videoai/core/models.py`: `ClipInfo`, `Manifest`.
   - Stage id `ingest`, artifact `01-manifest`, model `Manifest`.
-  - `tests/conftest.py`: fixture `make_clip(tmp_path, name, seconds, tone_hz)` returning a `Path` to a generated mp4.
+  - `tests/conftest.py`: fixture `make_clip(name, seconds, tone_hz, size)` returning a `Path` to a generated mp4 in `tmp_path`.
 
-- [ ] **Step 1: Write the test fixture helper**
+**Layout adaptation (this task owns it).** `StageContext.input_dir` is the *project* directory.
+Clips live in `resolve_clip_dir(project_dir)`, which prefers `input/`, then `video/`, then the
+project directory itself. `read_brief` concatenates, in this order and skipping whatever is
+absent: `project.yaml`, `notes.md`, and every `.md`, `.txt` and `.docx` inside `description/`.
+Files whose name starts with `.` or `._` are ignored everywhere.
+
+**Performance requirement.** Sources are 4K HEVC (56 clips, 44.8 minutes for the first real
+project). `make_proxy` decodes with `-hwaccel videotoolbox` and encodes with
+`h264_videotoolbox`, falling back to `libx264` when the hardware encoder is unavailable.
+
+- [ ] **Step 1: Add the docx dependency**
+
+```bash
+uv add python-docx
+```
+
+- [ ] **Step 2: Write the test fixture helper**
 
 `tests/conftest.py`:
 
@@ -770,6 +811,7 @@ import pytest
 
 
 def _generate_clip(path: Path, seconds: float, tone_hz: int, size: str = "320x240") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
             "ffmpeg", "-y", "-loglevel", "error",
@@ -791,14 +833,20 @@ def make_clip(tmp_path: Path):
     return _make
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [ ] **Step 3: Write the failing ffmpeg tests**
 
 `tests/test_ffmpeg.py`:
 
 ```python
 from pathlib import Path
 
-from videoai.core.ffmpeg import extract_audio, extract_frame, make_proxy, probe
+from videoai.core.ffmpeg import (
+    extract_audio,
+    extract_frame,
+    list_video_files,
+    make_proxy,
+    probe,
+)
 
 
 def test_probe_reads_stream_properties(make_clip):
@@ -812,91 +860,55 @@ def test_probe_reads_stream_properties(make_clip):
 
 def test_extract_audio_writes_wav(make_clip, tmp_path: Path):
     clip = make_clip("a.mp4", seconds=2.0)
-    wav = tmp_path / "a.wav"
+    wav = tmp_path / "out" / "a.wav"
     extract_audio(clip, wav)
     assert wav.exists() and wav.stat().st_size > 1000
 
 
 def test_make_proxy_scales_height(make_clip, tmp_path: Path):
     clip = make_clip("a.mp4", seconds=2.0, size="640x480")
-    proxy = tmp_path / "a-proxy.mp4"
+    proxy = tmp_path / "out" / "a-proxy.mp4"
     make_proxy(clip, proxy, height=240)
     assert probe(proxy).height == 240
 
 
+def test_make_proxy_keeps_audio(make_clip, tmp_path: Path):
+    clip = make_clip("a.mp4", seconds=2.0, size="640x480")
+    proxy = tmp_path / "out" / "a-proxy.mp4"
+    make_proxy(clip, proxy, height=240)
+    assert probe(proxy).has_audio is True
+
+
 def test_extract_frame_writes_image(make_clip, tmp_path: Path):
     clip = make_clip("a.mp4", seconds=3.0)
-    frame = tmp_path / "f.jpg"
+    frame = tmp_path / "frames" / "f.jpg"
     extract_frame(clip, at=1.0, dst=frame, height=180)
     assert frame.exists() and frame.stat().st_size > 500
+
+
+def test_list_video_files_sorts_and_filters(tmp_path: Path, make_clip):
+    make_clip("b.MOV", seconds=1.0).rename(tmp_path / "b.MOV")
+    make_clip("a.mp4", seconds=1.0).rename(tmp_path / "a.mp4")
+    (tmp_path / ".DS_Store").write_bytes(b"junk")
+    (tmp_path / "._a.mp4").write_bytes(b"junk")
+    (tmp_path / "notes.md").write_text("hello", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+
+    found = list_video_files(tmp_path)
+
+    assert [path.name for path in found] == ["a.mp4", "b.MOV"]
+
+
+def test_list_video_files_on_missing_directory_returns_empty(tmp_path: Path):
+    assert list_video_files(tmp_path / "nope") == []
 ```
 
-`tests/test_stage_ingest.py`:
+- [ ] **Step 4: Run the ffmpeg tests to verify they fail**
 
-```python
-from pathlib import Path
-
-from videoai.config import Config
-from videoai.core.models import Manifest
-from videoai.core.registry import StageContext
-from videoai.core.store import ArtifactStore
-from videoai.stages.s01_ingest import ingest
-
-
-def _context(tmp_path: Path) -> StageContext:
-    for name in ("input", "work", "output"):
-        (tmp_path / name).mkdir(exist_ok=True)
-    return StageContext(
-        project_dir=tmp_path,
-        input_dir=tmp_path / "input",
-        work_dir=tmp_path / "work",
-        output_dir=tmp_path / "output",
-        config=Config(),
-        store=ArtifactStore(tmp_path / "work"),
-    )
-
-
-def test_ingest_indexes_clips_sorted_by_name(tmp_path: Path, make_clip):
-    ctx = _context(tmp_path)
-    for name in ("b.mp4", "a.mp4"):
-        make_clip(name, seconds=2.0).rename(ctx.input_dir / name)
-
-    manifest = ingest(ctx)
-
-    assert isinstance(manifest, Manifest)
-    assert [clip.clip_id for clip in manifest.clips] == ["clip-01", "clip-02"]
-    assert [Path(clip.path).name for clip in manifest.clips] == ["a.mp4", "b.mp4"]
-    assert all(clip.duration > 1.5 for clip in manifest.clips)
-
-
-def test_ingest_creates_audio_and_proxy_files(tmp_path: Path, make_clip):
-    ctx = _context(tmp_path)
-    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "a.mp4")
-
-    manifest = ingest(ctx)
-
-    clip = manifest.clips[0]
-    assert Path(clip.audio_path).exists()
-    assert Path(clip.proxy_path).exists()
-
-
-def test_ingest_ignores_non_video_files(tmp_path: Path, make_clip):
-    ctx = _context(tmp_path)
-    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "a.mp4")
-    (ctx.input_dir / "project.yaml").write_text("title: test\n", encoding="utf-8")
-    (ctx.input_dir / "notes.md").write_text("hello", encoding="utf-8")
-
-    manifest = ingest(ctx)
-
-    assert len(manifest.clips) == 1
-```
-
-- [ ] **Step 3: Run the tests to verify they fail**
-
-Run: `uv run pytest tests/test_ffmpeg.py tests/test_stage_ingest.py -v`
+Run: `uv run pytest tests/test_ffmpeg.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'videoai.core.ffmpeg'`
 
-- [ ] **Step 4: Implement `videoai/core/ffmpeg.py`**
+- [ ] **Step 5: Implement `videoai/core/ffmpeg.py`**
 
 ```python
 """Thin, explicit wrappers over ffmpeg/ffprobe. No hidden defaults."""
@@ -905,6 +917,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".avi"}
@@ -956,6 +969,26 @@ def probe(path: Path) -> ProbeResult:
     )
 
 
+def list_video_files(directory: Path) -> list[Path]:
+    """Video files directly inside `directory`, sorted, macOS metadata excluded."""
+    if not directory.is_dir():
+        return []
+    return sorted(
+        path for path in directory.iterdir()
+        if path.is_file()
+        and not path.name.startswith((".", "._"))
+        and path.suffix.lower() in VIDEO_SUFFIXES
+    )
+
+
+@cache
+def _has_videotoolbox_encoder() -> bool:
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True
+    )
+    return "h264_videotoolbox" in result.stdout
+
+
 def extract_audio(src: Path, dst: Path) -> None:
     """16 kHz mono WAV with EBU R128 loudness normalisation, ready for ASR."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -968,14 +1001,30 @@ def extract_audio(src: Path, dst: Path) -> None:
 
 
 def make_proxy(src: Path, dst: Path, height: int) -> None:
+    """Small proxy for analysis and draft renders.
+
+    Sources are 4K HEVC, so decode and encode go through VideoToolbox when the
+    build supports it; software encoding is minutes per clip instead of seconds.
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
-    run_ffmpeg([
-        "-i", str(src),
-        "-vf", f"scale=-2:{height}",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-        "-c:a", "aac", "-b:a", "128k",
-        str(dst),
-    ])
+    scale = f"scale=-2:{height}"
+    if _has_videotoolbox_encoder():
+        args = [
+            "-hwaccel", "videotoolbox", "-i", str(src),
+            "-vf", scale,
+            "-c:v", "h264_videotoolbox", "-b:v", "2500k",
+            "-c:a", "aac", "-b:a", "128k",
+            str(dst),
+        ]
+    else:
+        args = [
+            "-i", str(src),
+            "-vf", scale,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-c:a", "aac", "-b:a", "128k",
+            str(dst),
+        ]
+    run_ffmpeg(args)
 
 
 def extract_frame(src: Path, at: float, dst: Path, height: int = 360) -> None:
@@ -987,7 +1036,280 @@ def extract_frame(src: Path, at: float, dst: Path, height: int = 360) -> None:
     ])
 ```
 
-- [ ] **Step 5: Implement `videoai/core/models.py` (manifest part)**
+- [ ] **Step 6: Run the ffmpeg tests to verify they pass**
+
+Run: `uv run pytest tests/test_ffmpeg.py -v`
+Expected: 7 passed
+
+- [ ] **Step 7: Write the failing project-layout tests**
+
+`tests/test_project.py`:
+
+```python
+from pathlib import Path
+
+import docx
+
+from videoai.core.project import read_brief, resolve_clip_dir
+
+
+def test_resolve_clip_dir_prefers_input(tmp_path: Path):
+    (tmp_path / "input").mkdir()
+    (tmp_path / "video").mkdir()
+    assert resolve_clip_dir(tmp_path) == tmp_path / "input"
+
+
+def test_resolve_clip_dir_falls_back_to_video(tmp_path: Path):
+    (tmp_path / "video").mkdir()
+    assert resolve_clip_dir(tmp_path) == tmp_path / "video"
+
+
+def test_resolve_clip_dir_falls_back_to_project_dir(tmp_path: Path):
+    assert resolve_clip_dir(tmp_path) == tmp_path
+
+
+def test_read_brief_returns_empty_string_when_nothing_present(tmp_path: Path):
+    assert read_brief(tmp_path) == ""
+
+
+def test_read_brief_includes_project_yaml_and_notes(tmp_path: Path):
+    (tmp_path / "project.yaml").write_text("title: Slime review\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("Keep the laugh at the end.", encoding="utf-8")
+
+    brief = read_brief(tmp_path)
+
+    assert "Slime review" in brief
+    assert "Keep the laugh at the end." in brief
+
+
+def test_read_brief_reads_docx_from_description(tmp_path: Path):
+    description = tmp_path / "description"
+    description.mkdir()
+    document = docx.Document()
+    document.add_paragraph("Pimple Popping Stress Toy")
+    document.add_paragraph("Refillable, two in one.")
+    document.save(description / "product.docx")
+
+    brief = read_brief(tmp_path)
+
+    assert "Pimple Popping Stress Toy" in brief
+    assert "Refillable, two in one." in brief
+
+
+def test_read_brief_reads_markdown_and_text_from_description(tmp_path: Path):
+    description = tmp_path / "description"
+    description.mkdir()
+    (description / "a.md").write_text("markdown content", encoding="utf-8")
+    (description / "b.txt").write_text("plain content", encoding="utf-8")
+
+    brief = read_brief(tmp_path)
+
+    assert "markdown content" in brief
+    assert "plain content" in brief
+
+
+def test_read_brief_ignores_macos_metadata_and_images(tmp_path: Path):
+    description = tmp_path / "description"
+    description.mkdir()
+    (description / ".DS_Store").write_bytes(b"junk")
+    (description / "._notes.md").write_bytes(b"junk")
+    (description / "photo.jpeg").write_bytes(b"\xff\xd8\xff")
+    (description / "real.md").write_text("real content", encoding="utf-8")
+
+    brief = read_brief(tmp_path)
+
+    assert brief.strip() == "real content"
+
+
+def test_read_brief_survives_an_unreadable_docx(tmp_path: Path):
+    description = tmp_path / "description"
+    description.mkdir()
+    (description / "broken.docx").write_bytes(b"not a real docx")
+    (description / "real.md").write_text("real content", encoding="utf-8")
+
+    brief = read_brief(tmp_path)
+
+    assert "real content" in brief
+    assert "broken.docx" in brief
+```
+
+- [ ] **Step 8: Run the project tests to verify they fail**
+
+Run: `uv run pytest tests/test_project.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'videoai.core.project'`
+
+- [ ] **Step 9: Implement `videoai/core/project.py`**
+
+```python
+"""Project folder conventions.
+
+The creator's folders came first, so the pipeline adapts to them: clips may sit
+in `input/` or `video/`, and the brief is whatever prose lives in `description/`.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+BRIEF_SUFFIXES = {".md", ".txt", ".docx"}
+
+
+def resolve_clip_dir(project_dir: Path) -> Path:
+    for name in ("input", "video"):
+        candidate = project_dir / name
+        if candidate.is_dir():
+            return candidate
+    return project_dir
+
+
+def _read_docx(path: Path) -> str:
+    import docx
+
+    document = docx.Document(str(path))
+    return "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+
+def _read_one(path: Path) -> str:
+    if path.suffix.lower() == ".docx":
+        try:
+            return _read_docx(path)
+        except Exception:
+            return f"[could not read {path.name}]"
+    try:
+        return path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return f"[could not read {path.name}]"
+
+
+def read_brief(project_dir: Path) -> str:
+    """Everything the creator wrote about this video, concatenated."""
+    parts: list[str] = []
+    for name in ("project.yaml", "notes.md"):
+        path = project_dir / name
+        if path.is_file():
+            parts.append(_read_one(path))
+
+    description = project_dir / "description"
+    if description.is_dir():
+        for path in sorted(description.iterdir()):
+            if (
+                path.is_file()
+                and not path.name.startswith((".", "._"))
+                and path.suffix.lower() in BRIEF_SUFFIXES
+            ):
+                parts.append(_read_one(path))
+
+    return "\n\n".join(part.strip() for part in parts if part.strip())
+```
+
+- [ ] **Step 10: Run the project tests to verify they pass**
+
+Run: `uv run pytest tests/test_project.py -v`
+Expected: 9 passed
+
+- [ ] **Step 11: Write the failing ingest tests**
+
+`tests/test_stage_ingest.py`:
+
+```python
+from pathlib import Path
+
+from videoai.config import Config
+from videoai.core.models import Manifest
+from videoai.core.registry import StageContext
+from videoai.core.store import ArtifactStore
+from videoai.stages.s01_ingest import ingest
+
+
+def _context(project: Path) -> StageContext:
+    (project / "work").mkdir(parents=True, exist_ok=True)
+    (project / "output").mkdir(parents=True, exist_ok=True)
+    return StageContext(
+        project_dir=project,
+        input_dir=project,
+        work_dir=project / "work",
+        output_dir=project / "output",
+        config=Config(),
+        store=ArtifactStore(project / "work"),
+    )
+
+
+def test_ingest_indexes_clips_from_video_folder(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("b.mp4", seconds=2.0).rename(clips / "b.mp4")
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+
+    manifest = ingest(_context(project))
+
+    assert isinstance(manifest, Manifest)
+    assert [clip.clip_id for clip in manifest.clips] == ["clip-01", "clip-02"]
+    assert [Path(clip.path).name for clip in manifest.clips] == ["a.mp4", "b.mp4"]
+    assert all(clip.duration > 1.5 for clip in manifest.clips)
+
+
+def test_ingest_creates_audio_and_proxy_files(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+
+    manifest = ingest(_context(project))
+
+    clip = manifest.clips[0]
+    assert Path(clip.audio_path).exists()
+    assert Path(clip.proxy_path).exists()
+
+
+def test_ingest_ignores_non_video_and_macos_metadata(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+    (clips / ".DS_Store").write_bytes(b"junk")
+    (clips / "IMG_8195.JPG").write_bytes(b"\xff\xd8\xff")
+    (project / "project.yaml").write_text("title: test\n", encoding="utf-8")
+
+    manifest = ingest(_context(project))
+
+    assert len(manifest.clips) == 1
+
+
+def test_ingest_is_idempotent_and_reuses_existing_media(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+    ctx = _context(project)
+
+    first = ingest(ctx)
+    proxy = Path(first.clips[0].proxy_path)
+    marker = proxy.stat().st_mtime_ns
+
+    second = ingest(ctx)
+
+    assert second.clips[0].proxy_path == first.clips[0].proxy_path
+    assert Path(second.clips[0].proxy_path).stat().st_mtime_ns == marker
+
+
+def test_ingest_raises_when_no_clips_found(tmp_path: Path):
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+
+    try:
+        ingest(_context(project))
+    except RuntimeError as error:
+        assert "no video files" in str(error)
+    else:
+        raise AssertionError("expected RuntimeError")
+```
+
+- [ ] **Step 12: Run the ingest tests to verify they fail**
+
+Run: `uv run pytest tests/test_stage_ingest.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'videoai.core.models'`
+
+- [ ] **Step 13: Implement `videoai/core/models.py`**
 
 ```python
 """Artifact models. Every stage input and output is defined here."""
@@ -1018,39 +1340,47 @@ class Manifest(BaseModel):
         raise KeyError(f"unknown clip_id: {clip_id}")
 ```
 
-- [ ] **Step 6: Implement `videoai/stages/s01_ingest.py`**
+- [ ] **Step 14: Implement `videoai/stages/s01_ingest.py`**
 
 ```python
-"""s01 ingest: index input clips, normalise audio, build proxies."""
+"""s01 ingest: index the source clips, normalise audio, build proxies.
+
+Derived media is expensive (44 minutes of 4K HEVC in the first real project), so
+anything already on disk is reused; deleting `work/media` forces a rebuild.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
-from videoai.core.ffmpeg import VIDEO_SUFFIXES, extract_audio, make_proxy, probe
+from videoai.core.ffmpeg import extract_audio, list_video_files, make_proxy, probe
 from videoai.core.models import ClipInfo, Manifest
+from videoai.core.project import resolve_clip_dir
 from videoai.core.registry import StageContext, stage
 
 
 @stage(id="ingest", produces="01-manifest", requires=(), model=Manifest)
 def ingest(ctx: StageContext) -> Manifest:
-    sources = sorted(
-        path for path in ctx.input_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
-    )
+    clip_dir = resolve_clip_dir(ctx.input_dir)
+    sources = list_video_files(clip_dir)
     if not sources:
-        raise RuntimeError(f"no video files found in {ctx.input_dir}")
+        raise RuntimeError(f"no video files found in {clip_dir}")
 
     media_dir = ctx.work_dir / "media"
     clips: list[ClipInfo] = []
     for index, source in enumerate(sources, start=1):
         clip_id = f"clip-{index:02d}"
         info = probe(source)
+
         audio_path: Path | None = None
         if info.has_audio:
             audio_path = media_dir / f"{clip_id}.wav"
-            extract_audio(source, audio_path)
+            if not audio_path.exists():
+                extract_audio(source, audio_path)
+
         proxy_path = media_dir / f"{clip_id}-proxy.mp4"
-        make_proxy(source, proxy_path, height=ctx.config.render.draft_height)
+        if not proxy_path.exists():
+            make_proxy(source, proxy_path, height=ctx.config.render.draft_height)
+
         clips.append(
             ClipInfo(
                 clip_id=clip_id,
@@ -1067,19 +1397,17 @@ def ingest(ctx: StageContext) -> Manifest:
     return Manifest(clips=clips)
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [ ] **Step 15: Run every test written so far**
 
-Run: `uv run pytest tests/test_ffmpeg.py tests/test_stage_ingest.py -v`
-Expected: 7 passed
+Run: `uv run pytest -v`
+Expected: all tests pass (25 from Tasks 1-3 plus 21 new)
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 16: Commit**
 
 ```bash
-git add videoai/core/ffmpeg.py videoai/core/models.py videoai/stages/s01_ingest.py tests/conftest.py tests/test_ffmpeg.py tests/test_stage_ingest.py
-git commit -m "feat: ffmpeg helpers and ingest stage"
+git add videoai/core/ffmpeg.py videoai/core/project.py videoai/core/models.py videoai/stages/s01_ingest.py tests/conftest.py tests/test_ffmpeg.py tests/test_project.py tests/test_stage_ingest.py pyproject.toml uv.lock
+git commit -m "feat: ffmpeg helpers, project layout resolution and ingest stage"
 ```
-
----
 
 ### Task 5: Quality gate stage
 
@@ -1090,7 +1418,7 @@ git commit -m "feat: ffmpeg helpers and ingest stage"
 
 **Interfaces:**
 - Consumes: `Manifest` artifact `01-manifest` (Task 4); `probe`, `extract_frame`.
-- Produces: models `ClipQuality` (fields `clip_id: str`, `blur: float`, `shake: float`, `black_ratio: float`, `usable: bool`) and `QualityReport` (`clips: list[ClipQuality]`, method `by_id`); stage id `quality`, artifact `02-quality`.
+- Produces: models `ClipQuality` (fields `clip_id: str`, `blur: float`, `motion: float`, `black_ratio: float`, `usable: bool`, `scored: bool`) and `QualityReport` (`clips: list[ClipQuality]`, method `by_id`); stage id `quality`, artifact `02-quality`.
 
 Blur is the mean Laplacian variance across sampled frames, inverted and normalised to 0..1 where higher means blurrier. Shake is the mean absolute difference between consecutive sampled frames, normalised to 0..1.
 
@@ -1200,7 +1528,7 @@ Expected: FAIL with `ImportError: cannot import name 'QualityReport'`
 class ClipQuality(BaseModel):
     clip_id: str
     blur: float
-    shake: float
+    motion: float
     black_ratio: float
     usable: bool
 
@@ -1252,7 +1580,8 @@ def _sample_frames(path: Path, duration: float, count: int) -> list[np.ndarray]:
 def _score_clip(clip_id: str, path: Path, duration: float) -> ClipQuality:
     frames = _sample_frames(path, duration, SAMPLE_COUNT)
     if not frames:
-        return ClipQuality(clip_id=clip_id, blur=1.0, shake=0.0, black_ratio=1.0, usable=False)
+        return ClipQuality(clip_id=clip_id, blur=0.0, motion=0.0, black_ratio=0.0,
+                           usable=False, scored=False)
 
     sharpness = [float(cv2.Laplacian(frame, cv2.CV_64F).var()) for frame in frames]
     blur = 1.0 - min(1.0, float(np.mean(sharpness)) / BLUR_REFERENCE)
@@ -1261,12 +1590,12 @@ def _score_clip(clip_id: str, path: Path, duration: float) -> ClipQuality:
         float(np.mean(np.abs(frames[i].astype(np.int16) - frames[i - 1].astype(np.int16))))
         for i in range(1, len(frames))
     ]
-    shake = min(1.0, float(np.mean(differences)) / 64.0) if differences else 0.0
+    motion = min(1.0, float(np.mean(differences)) / 64.0) if differences else 0.0
 
     black_ratio = sum(1 for frame in frames if float(np.mean(frame)) < BLACK_LUMA_THRESHOLD) / len(frames)
     usable = black_ratio < 0.5 and blur < 0.95
     return ClipQuality(
-        clip_id=clip_id, blur=blur, shake=shake, black_ratio=black_ratio, usable=usable
+        clip_id=clip_id, blur=blur, motion=motion, black_ratio=black_ratio, usable=usable
     )
 
 
@@ -1865,7 +2194,749 @@ git commit -m "feat: phrase segmentation and packed transcript"
 
 ---
 
-### Task 8: Repeated-take detection
+### Task 8: Camera grouping and audio synchronisation
+
+**Files:**
+- Modify: `videoai/core/ffmpeg.py` (creation time in `ProbeResult`), `videoai/core/project.py` (`list_camera_clips`), `videoai/core/models.py` (append sync models, extend `ClipInfo`), `videoai/stages/s01_ingest.py` (camera + recorded_at)
+- Create: `videoai/logic/sync.py`, `videoai/stages/s02b_sync.py`
+- Test: `tests/test_sync.py`, `tests/test_stage_sync.py`, plus updates to `tests/test_ffmpeg.py`, `tests/test_project.py`, `tests/test_stage_ingest.py`
+
+**Why this exists.** The creator shoots with two cameras running at the same time, and only one
+of them carries a microphone worth listening to. Both record enough sound to align on, but only
+one produces a usable transcript. So this task does two things: it puts every clip on one
+timeline using audio cross-correlation, and it names the camera whose audio the pipeline should
+actually transcribe. Naming that camera is what keeps the rest of the pipeline simple — with a
+single transcribed camera there are no duplicated phrases at all, so the take detector sees only
+genuine retakes, and the second camera stays what it is: an alternative angle available at any
+moment the timeline says it was rolling.
+
+**Interfaces:**
+- Consumes: `probe`, `list_video_files` (Task 4); `ClipInfo`, `Manifest`; `ArtifactStore`.
+- Produces:
+  - `ProbeResult` gains `created_at: float | None` — epoch seconds parsed from the container's
+    `creation_time` tag, `None` when absent.
+  - `videoai/core/project.py`: `list_camera_clips(clip_dir: Path) -> dict[str, list[Path]]`.
+    Immediate subdirectories are cameras (`video/cam-a/…` → camera `cam-a`); when there are no
+    subdirectories with video in them, every file directly inside belongs to camera `main`.
+    Camera names are the directory names, sorted; dotfiles ignored.
+  - `ClipInfo` gains `camera: str = "main"` and `recorded_at: float | None = None`.
+  - `videoai/logic/sync.py`: `audio_envelope(wav_path, rate=100) -> np.ndarray`,
+    `estimate_offset(reference, other, rate=100, max_shift_seconds=600.0) -> tuple[float, float]`
+    returning `(offset_seconds, confidence)`, and
+    `build_sync_map(manifest, envelope_of) -> SyncMap`.
+  - Models `ClipSync` (`clip_id`, `camera`, `global_start: float`, `method: str`,
+    `confidence: float`) and `SyncMap` (`clips: list[ClipSync]`, `primary_camera: str`, `by_id`,
+    and `overlaps(clip_a: str, clip_b: str, manifest: Manifest) -> bool`).
+  - Stage id `sync`, artifact `01b-sync`, requires `01-manifest`, model `SyncMap`.
+  - `videoai/stages/s03_transcribe.py` is modified to require `01b-sync` and transcribe only the
+    primary camera's clips; clips from other cameras get an empty `ClipTranscript`.
+  - `Config` gains `sync: SyncSettings` with `primary_camera: str | None = None` — an override
+    for when automatic detection picks wrong.
+
+**Algorithm.** Coarse placement from `recorded_at` (present on iPhone footage, one-second
+precision); clips lacking it fall back to sequential placement within their camera, end to end.
+Refinement: for every pair of clips from different cameras whose coarse ranges overlap, estimate
+the audio offset by cross-correlating 100 Hz loudness envelopes; take the median of the
+high-confidence offsets per camera pair as that camera's clock correction and apply it to all its
+clips. Single-camera projects skip correlation entirely and record `method="metadata"` or
+`"sequential"`.
+
+**Primary camera selection.** `config.sync.primary_camera` wins when set. Otherwise pick the
+camera with the highest mean envelope energy across its clips — the one with the real microphone
+is markedly louder than a camera picking up room ambience. With one camera, it is that camera.
+With no audio anywhere, it is the first camera by name.
+
+- [ ] **Step 1: Write the failing sync-logic tests**
+
+`tests/test_sync.py`:
+
+```python
+import math
+import wave
+from pathlib import Path
+
+import numpy as np
+
+from videoai.core.models import ClipInfo, Manifest
+from videoai.logic.sync import audio_envelope, build_sync_map, estimate_offset
+
+
+def _write_wav(path: Path, samples: np.ndarray, rate: int = 16000) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = np.clip(samples, -1.0, 1.0)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes((data * 32767).astype("<i2").tobytes())
+    return path
+
+
+def _bursts(duration: float, burst_times: list[float], rate: int = 16000) -> np.ndarray:
+    samples = np.zeros(int(duration * rate), dtype=np.float64)
+    for start in burst_times:
+        begin = int(start * rate)
+        end = min(len(samples), begin + int(0.2 * rate))
+        if begin < len(samples):
+            noise = np.random.default_rng(abs(int(start * 1000)) + 1).normal(0, 0.4, end - begin)
+            samples[begin:end] = noise
+    return samples
+
+
+def test_audio_envelope_length_matches_duration(tmp_path: Path):
+    path = _write_wav(tmp_path / "a.wav", _bursts(3.0, [0.5, 1.5]))
+    envelope = audio_envelope(path, rate=100)
+    assert 290 <= len(envelope) <= 310
+
+
+def test_audio_envelope_is_loud_where_the_bursts_are(tmp_path: Path):
+    path = _write_wav(tmp_path / "a.wav", _bursts(3.0, [1.0]))
+    envelope = audio_envelope(path, rate=100)
+    assert envelope[100:120].mean() > envelope[200:280].mean() * 5
+
+
+def test_estimate_offset_recovers_a_known_shift(tmp_path: Path):
+    signal = _bursts(8.0, [1.0, 2.7, 4.1, 6.3])
+    reference = _write_wav(tmp_path / "ref.wav", signal)
+    shifted = _write_wav(tmp_path / "other.wav", np.concatenate([np.zeros(16000 * 2), signal]))
+
+    offset, confidence = estimate_offset(
+        audio_envelope(reference), audio_envelope(shifted)
+    )
+
+    assert math.isclose(offset, -2.0, abs_tol=0.15)
+    assert confidence > 2.0
+
+
+def test_estimate_offset_reports_low_confidence_for_unrelated_audio(tmp_path: Path):
+    first = _write_wav(tmp_path / "a.wav", _bursts(8.0, [1.0, 2.0, 3.0]))
+    second = _write_wav(tmp_path / "b.wav", np.random.default_rng(7).normal(0, 0.3, 16000 * 8))
+
+    _, confidence = estimate_offset(audio_envelope(first), audio_envelope(second))
+
+    assert confidence < 2.0
+
+
+def _clip(clip_id: str, camera: str, recorded_at: float | None, duration: float = 10.0) -> ClipInfo:
+    return ClipInfo(
+        clip_id=clip_id, path=f"/tmp/{clip_id}.mov", duration=duration, width=1920,
+        height=1080, fps=30.0, has_audio=True, camera=camera, recorded_at=recorded_at,
+    )
+
+
+def test_single_camera_places_clips_by_recorded_at():
+    manifest = Manifest(clips=[
+        _clip("clip-01", "main", 1000.0),
+        _clip("clip-02", "main", 1030.0),
+    ])
+
+    sync = build_sync_map(manifest, envelope_of=lambda clip: None)
+
+    assert sync.by_id("clip-01").global_start == 0.0
+    assert sync.by_id("clip-02").global_start == 30.0
+    assert sync.by_id("clip-02").method == "metadata"
+
+
+def test_missing_recorded_at_falls_back_to_sequential_placement():
+    manifest = Manifest(clips=[
+        _clip("clip-01", "main", None, duration=10.0),
+        _clip("clip-02", "main", None, duration=5.0),
+    ])
+
+    sync = build_sync_map(manifest, envelope_of=lambda clip: None)
+
+    assert sync.by_id("clip-01").global_start == 0.0
+    assert sync.by_id("clip-02").global_start == 10.0
+    assert sync.by_id("clip-02").method == "sequential"
+
+
+def test_two_cameras_are_aligned_by_audio_when_clocks_disagree():
+    # cam-b's clock is 5 s fast; its audio proves the true offset is 0.
+    manifest = Manifest(clips=[
+        _clip("clip-01", "cam-a", 1000.0, duration=20.0),
+        _clip("clip-02", "cam-b", 1005.0, duration=20.0),
+    ])
+    rng = np.random.default_rng(3)
+    shared = np.abs(rng.normal(0, 1.0, 2000))
+
+    def envelope_of(clip: ClipInfo):
+        return shared
+
+    sync = build_sync_map(manifest, envelope_of=envelope_of)
+
+    assert abs(sync.by_id("clip-01").global_start - sync.by_id("clip-02").global_start) < 0.2
+    assert sync.by_id("clip-02").method == "audio"
+
+
+def test_primary_camera_is_the_loud_one():
+    from videoai.logic.sync import choose_primary_camera
+
+    manifest = Manifest(clips=[
+        _clip("clip-01", "cam-a", 1000.0),
+        _clip("clip-02", "cam-b", 1000.0),
+    ])
+    quiet = np.full(500, 0.01)
+    loud = np.full(500, 0.4)
+
+    def envelope_of(clip: ClipInfo):
+        return loud if clip.camera == "cam-b" else quiet
+
+    assert choose_primary_camera(manifest, envelope_of) == "cam-b"
+
+
+def test_primary_camera_override_is_honoured_and_validated():
+    from videoai.logic.sync import choose_primary_camera
+
+    manifest = Manifest(clips=[_clip("clip-01", "cam-a", 1000.0), _clip("clip-02", "cam-b", 1000.0)])
+    envelope_of = lambda clip: np.full(10, 0.5)
+
+    assert choose_primary_camera(manifest, envelope_of, override="cam-a") == "cam-a"
+    try:
+        choose_primary_camera(manifest, envelope_of, override="cam-z")
+    except ValueError as error:
+        assert "cam-z" in str(error)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_primary_camera_without_audio_is_the_first_by_name():
+    from videoai.logic.sync import choose_primary_camera
+
+    manifest = Manifest(clips=[_clip("clip-01", "cam-b", None), _clip("clip-02", "cam-a", None)])
+
+    assert choose_primary_camera(manifest, envelope_of=lambda clip: None) == "cam-a"
+
+
+def test_overlaps_is_true_for_simultaneous_angles_and_false_for_sequential_takes():
+    manifest = Manifest(clips=[
+        _clip("clip-01", "cam-a", 1000.0, duration=20.0),
+        _clip("clip-02", "cam-b", 1000.0, duration=20.0),
+        _clip("clip-03", "cam-a", 1100.0, duration=20.0),
+    ])
+
+    sync = build_sync_map(manifest, envelope_of=lambda clip: None)
+
+    assert sync.overlaps("clip-01", "clip-02", manifest) is True
+    assert sync.overlaps("clip-01", "clip-03", manifest) is False
+```
+
+- [ ] **Step 2: Run the sync tests to verify they fail**
+
+Run: `uv run pytest tests/test_sync.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'videoai.logic.sync'`
+
+- [ ] **Step 3: Append the sync models to `videoai/core/models.py` and extend `ClipInfo`**
+
+Add these two fields to the existing `ClipInfo`, after `has_audio`:
+
+```python
+    camera: str = "main"
+    recorded_at: float | None = None
+```
+
+Append at the end of the file:
+
+```python
+class ClipSync(BaseModel):
+    clip_id: str
+    camera: str
+    global_start: float
+    method: str
+    confidence: float = 0.0
+
+
+class SyncMap(BaseModel):
+    clips: list[ClipSync] = Field(default_factory=list)
+    primary_camera: str = "main"
+
+    def clips_of(self, camera: str) -> list[ClipSync]:
+        return [clip for clip in self.clips if clip.camera == camera]
+
+    def by_id(self, clip_id: str) -> ClipSync:
+        for clip in self.clips:
+            if clip.clip_id == clip_id:
+                return clip
+        raise KeyError(f"unknown clip_id: {clip_id}")
+
+    def overlaps(self, clip_a: str, clip_b: str, manifest: "Manifest") -> bool:
+        """True when both clips were recording at the same moment — different
+        angles of one performance rather than two attempts at it."""
+        first, second = self.by_id(clip_a), self.by_id(clip_b)
+        if first.camera == second.camera:
+            return False
+        first_end = first.global_start + manifest.by_id(clip_a).duration
+        second_end = second.global_start + manifest.by_id(clip_b).duration
+        return first.global_start < second_end and second.global_start < first_end
+```
+
+- [ ] **Step 4: Implement `videoai/logic/sync.py`**
+
+```python
+"""Put every clip on one project timeline.
+
+Two cameras rolling at once produce the same words twice. Only a shared timeline
+tells "second angle" apart from "second attempt", so everything downstream that
+compares clips depends on this.
+"""
+from __future__ import annotations
+
+import wave
+from pathlib import Path
+from statistics import median
+from typing import Callable
+
+import numpy as np
+
+from videoai.core.models import ClipInfo, ClipSync, Manifest, SyncMap
+
+MIN_CONFIDENCE = 2.0
+
+
+def audio_envelope(wav_path: Path, rate: int = 100) -> np.ndarray:
+    """Loudness envelope at `rate` Hz. Speech shape survives; pitch does not,
+    which is what makes cross-correlation between different microphones work."""
+    with wave.open(str(wav_path), "rb") as handle:
+        frame_rate = handle.getframerate()
+        frames = handle.readframes(handle.getnframes())
+    samples = np.frombuffer(frames, dtype="<i2").astype(np.float64) / 32768.0
+    block = max(1, frame_rate // rate)
+    usable = len(samples) - (len(samples) % block)
+    if usable <= 0:
+        return np.zeros(0)
+    return np.abs(samples[:usable]).reshape(-1, block).mean(axis=1)
+
+
+def estimate_offset(
+    reference: np.ndarray,
+    other: np.ndarray,
+    rate: int = 100,
+    max_shift_seconds: float = 600.0,
+) -> tuple[float, float]:
+    """Seconds to add to `other` to align it with `reference`, plus a confidence
+    ratio (correlation peak over its own mean). Below MIN_CONFIDENCE, treat the
+    answer as unusable."""
+    if reference.size == 0 or other.size == 0:
+        return 0.0, 0.0
+    first = reference - reference.mean()
+    second = other - other.mean()
+    size = 1 << int(np.ceil(np.log2(len(first) + len(second))))
+    spectrum = np.fft.rfft(first, size) * np.conj(np.fft.rfft(second, size))
+    correlation = np.fft.irfft(spectrum, size)
+    correlation = np.concatenate([correlation[-(len(second) - 1):], correlation[: len(first)]])
+    lags = np.arange(-(len(second) - 1), len(first))
+    limit = int(max_shift_seconds * rate)
+    allowed = np.abs(lags) <= limit
+    if not allowed.any():
+        return 0.0, 0.0
+    window = correlation[allowed]
+    peak = int(np.argmax(window))
+    magnitude = float(window[peak])
+    baseline = float(np.mean(np.abs(window))) or 1e-9
+    return float(lags[allowed][peak]) / rate, abs(magnitude) / baseline
+
+
+def choose_primary_camera(
+    manifest: Manifest,
+    envelope_of: Callable[[ClipInfo], np.ndarray | None],
+    override: str | None = None,
+) -> str:
+    """The camera whose audio is worth transcribing.
+
+    Only one camera carries a real microphone; the other hears the room. Mean
+    envelope energy separates them reliably without any configuration.
+    """
+    cameras = sorted({clip.camera for clip in manifest.clips})
+    if not cameras:
+        return "main"
+    if override:
+        if override not in cameras:
+            raise ValueError(
+                f"config.sync.primary_camera={override!r} is not one of {cameras}"
+            )
+        return override
+    if len(cameras) == 1:
+        return cameras[0]
+
+    loudness: dict[str, float] = {}
+    for camera in cameras:
+        energies = [
+            float(envelope.mean())
+            for clip in manifest.clips
+            if clip.camera == camera
+            and (envelope := envelope_of(clip)) is not None
+            and envelope.size
+        ]
+        if energies:
+            loudness[camera] = sum(energies) / len(energies)
+    if not loudness:
+        return cameras[0]
+    return max(loudness, key=loudness.__getitem__)
+
+
+def build_sync_map(
+    manifest: Manifest,
+    envelope_of: Callable[[ClipInfo], np.ndarray | None],
+    primary_camera: str | None = None,
+) -> SyncMap:
+    cameras: dict[str, list[ClipInfo]] = {}
+    for clip in manifest.clips:
+        cameras.setdefault(clip.camera, []).append(clip)
+
+    placements: dict[str, tuple[float, str]] = {}
+    for camera, clips in cameras.items():
+        if all(clip.recorded_at is not None for clip in clips):
+            for clip in clips:
+                placements[clip.clip_id] = (float(clip.recorded_at), "metadata")
+        else:
+            cursor = 0.0
+            for clip in clips:
+                placements[clip.clip_id] = (cursor, "sequential")
+                cursor += clip.duration
+
+    corrections: dict[str, float] = {name: 0.0 for name in cameras}
+    methods: dict[str, str] = {}
+    names = sorted(cameras)
+    if len(names) > 1:
+        anchor = names[0]
+        anchor_envelopes = {clip.clip_id: envelope_of(clip) for clip in cameras[anchor]}
+        for name in names[1:]:
+            offsets: list[float] = []
+            for clip in cameras[name]:
+                other = envelope_of(clip)
+                if other is None:
+                    continue
+                for anchor_clip in cameras[anchor]:
+                    reference = anchor_envelopes.get(anchor_clip.clip_id)
+                    if reference is None:
+                        continue
+                    coarse_gap = placements[clip.clip_id][0] - placements[anchor_clip.clip_id][0]
+                    if abs(coarse_gap) > max(anchor_clip.duration, clip.duration) + 60.0:
+                        continue
+                    shift, confidence = estimate_offset(reference, other)
+                    if confidence >= MIN_CONFIDENCE:
+                        offsets.append(
+                            placements[anchor_clip.clip_id][0] + shift - placements[clip.clip_id][0]
+                        )
+            if offsets:
+                corrections[name] = median(offsets)
+                methods[name] = "audio"
+
+    origin = min(start for start, _ in placements.values())
+    synced: list[ClipSync] = []
+    for clip in manifest.clips:
+        start, method = placements[clip.clip_id]
+        synced.append(
+            ClipSync(
+                clip_id=clip.clip_id,
+                camera=clip.camera,
+                global_start=start + corrections[clip.camera] - origin,
+                method=methods.get(clip.camera, method),
+                confidence=1.0 if methods.get(clip.camera) == "audio" else 0.0,
+            )
+        )
+    return SyncMap(
+        clips=synced,
+        primary_camera=primary_camera
+        or choose_primary_camera(manifest, envelope_of),
+    )
+```
+
+- [ ] **Step 5: Run the sync tests to verify they pass**
+
+Run: `uv run pytest tests/test_sync.py -v`
+Expected: 8 passed
+
+- [ ] **Step 6: Add creation-time parsing to `videoai/core/ffmpeg.py`**
+
+Add `created_at: float | None = None` as the last field of `ProbeResult`, and inside `probe`,
+after the existing validation, parse the container tag:
+
+```python
+    created_at: float | None = None
+    raw_created = data.get("format", {}).get("tags", {}).get("creation_time")
+    if raw_created:
+        from datetime import datetime
+
+        try:
+            created_at = datetime.fromisoformat(raw_created.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            created_at = None
+```
+
+and pass `created_at=created_at` into the returned `ProbeResult`. A missing or unparseable
+creation time is not an error — sync falls back to sequential placement.
+
+- [ ] **Step 7: Add `list_camera_clips` to `videoai/core/project.py`**
+
+```python
+def list_camera_clips(clip_dir: Path) -> dict[str, list[Path]]:
+    """Camera name to its clips.
+
+    Subdirectories are cameras, which is how a two-camera shoot is handed over;
+    a flat folder of files is a single camera called `main`.
+    """
+    from videoai.core.ffmpeg import list_video_files
+
+    cameras: dict[str, list[Path]] = {}
+    for entry in sorted(clip_dir.iterdir()) if clip_dir.is_dir() else []:
+        if entry.is_dir() and not entry.name.startswith("."):
+            files = list_video_files(entry)
+            if files:
+                cameras[entry.name] = files
+    if cameras:
+        return cameras
+    files = list_video_files(clip_dir)
+    return {"main": files} if files else {}
+```
+
+- [ ] **Step 8: Write the failing camera-grouping tests**
+
+Append to `tests/test_project.py`:
+
+```python
+def test_list_camera_clips_treats_subdirectories_as_cameras(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    (video / "cam-b").mkdir(parents=True)
+    (video / "cam-a").mkdir(parents=True)
+    make_clip("x.mp4", seconds=1.0).rename(video / "cam-a" / "x.mp4")
+    make_clip("y.MOV", seconds=1.0).rename(video / "cam-b" / "y.MOV")
+
+    from videoai.core.project import list_camera_clips
+
+    cameras = list_camera_clips(video)
+
+    assert sorted(cameras) == ["cam-a", "cam-b"]
+    assert [path.name for path in cameras["cam-a"]] == ["x.mp4"]
+
+
+def test_list_camera_clips_falls_back_to_single_main_camera(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    video.mkdir()
+    make_clip("x.mp4", seconds=1.0).rename(video / "x.mp4")
+
+    from videoai.core.project import list_camera_clips
+
+    cameras = list_camera_clips(video)
+
+    assert list(cameras) == ["main"]
+    assert [path.name for path in cameras["main"]] == ["x.mp4"]
+
+
+def test_list_camera_clips_ignores_empty_subdirectories(tmp_path: Path, make_clip):
+    video = tmp_path / "video"
+    (video / "empty").mkdir(parents=True)
+    make_clip("x.mp4", seconds=1.0).rename(video / "x.mp4")
+
+    from videoai.core.project import list_camera_clips
+
+    assert list(list_camera_clips(video)) == ["main"]
+```
+
+- [ ] **Step 9: Teach ingest about cameras**
+
+In `videoai/stages/s01_ingest.py`, replace the flat `list_video_files(clip_dir)` call with
+`list_camera_clips(clip_dir)`, iterate cameras in sorted order and clips within each camera in
+order, keep `clip-NN` numbering globally sequential across all cameras, and set `camera` and
+`recorded_at=info.created_at` on each `ClipInfo`. The "no video files found" error must still
+fire when no camera yields any clip.
+
+Append this test to `tests/test_stage_ingest.py`:
+
+```python
+def test_ingest_labels_clips_with_their_camera(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    (project / "video" / "cam-a").mkdir(parents=True)
+    (project / "video" / "cam-b").mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(project / "video" / "cam-a" / "a.mp4")
+    make_clip("b.mp4", seconds=2.0).rename(project / "video" / "cam-b" / "b.mp4")
+
+    manifest = ingest(_context(project))
+
+    assert {clip.camera for clip in manifest.clips} == {"cam-a", "cam-b"}
+    assert [clip.clip_id for clip in manifest.clips] == ["clip-01", "clip-02"]
+```
+
+- [ ] **Step 10: Write the failing sync-stage test**
+
+`tests/test_stage_sync.py`:
+
+```python
+from pathlib import Path
+
+from videoai.config import Config
+from videoai.core.models import ClipInfo, Manifest, SyncMap
+from videoai.core.registry import StageContext
+from videoai.core.store import ArtifactStore
+from videoai.stages.s02b_sync import sync
+
+
+def _context(tmp_path: Path) -> StageContext:
+    (tmp_path / "work").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "output").mkdir(parents=True, exist_ok=True)
+    return StageContext(
+        project_dir=tmp_path,
+        input_dir=tmp_path,
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
+        config=Config(),
+        store=ArtifactStore(tmp_path / "work"),
+    )
+
+
+def test_sync_stage_places_every_clip_on_the_timeline(tmp_path: Path):
+    ctx = _context(tmp_path)
+    ctx.store.write("01-manifest", Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mov", duration=10.0, width=1920, height=1080,
+                 fps=30.0, has_audio=False, camera="main", recorded_at=1000.0),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mov", duration=10.0, width=1920, height=1080,
+                 fps=30.0, has_audio=False, camera="main", recorded_at=1020.0),
+    ]), fingerprint="fp")
+
+    result = sync(ctx)
+
+    assert isinstance(result, SyncMap)
+    assert result.by_id("clip-01").global_start == 0.0
+    assert result.by_id("clip-02").global_start == 20.0
+
+
+def test_sync_stage_tolerates_missing_audio_files(tmp_path: Path):
+    ctx = _context(tmp_path)
+    ctx.store.write("01-manifest", Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mov", duration=10.0, width=1920, height=1080,
+                 fps=30.0, has_audio=True, audio_path="/tmp/does-not-exist.wav",
+                 camera="cam-a", recorded_at=1000.0),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mov", duration=10.0, width=1920, height=1080,
+                 fps=30.0, has_audio=True, audio_path="/tmp/also-missing.wav",
+                 camera="cam-b", recorded_at=1000.0),
+    ]), fingerprint="fp")
+
+    result = sync(ctx)
+
+    assert len(result.clips) == 2
+    assert all(clip.method in {"metadata", "sequential"} for clip in result.clips)
+```
+
+- [ ] **Step 11: Implement `videoai/stages/s02b_sync.py`**
+
+```python
+"""s02b sync: one timeline for every camera."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+
+from videoai.core.models import ClipInfo, Manifest, SyncMap
+from videoai.core.registry import StageContext, stage
+from videoai.logic.sync import audio_envelope, build_sync_map
+
+
+@stage(id="sync", produces="01b-sync", requires=("01-manifest",), model=SyncMap)
+def sync(ctx: StageContext) -> SyncMap:
+    manifest = ctx.store.read("01-manifest", Manifest)
+    cache: dict[str, np.ndarray | None] = {}
+
+    def envelope_of(clip: ClipInfo) -> np.ndarray | None:
+        if clip.clip_id not in cache:
+            envelope: np.ndarray | None = None
+            if clip.audio_path and Path(clip.audio_path).exists():
+                computed = audio_envelope(Path(clip.audio_path))
+                envelope = computed if computed.size else None
+            cache[clip.clip_id] = envelope
+        return cache[clip.clip_id]
+
+    return build_sync_map(
+        manifest,
+        envelope_of,
+        primary_camera=choose_primary_camera(
+            manifest, envelope_of, ctx.config.sync.primary_camera
+        ),
+    )
+```
+
+Import `choose_primary_camera` alongside `audio_envelope` and `build_sync_map`.
+
+- [ ] **Step 12: Add the sync settings to `videoai/config.py`**
+
+Add the settings class and wire it into `Config` and `load_config` exactly like the existing
+sections:
+
+```python
+class SyncSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    primary_camera: str | None = None
+```
+
+`Config` gains `sync: SyncSettings = SyncSettings()`, and `load_config` gains
+`sync=SyncSettings(**(raw.get("sync") or {}))`. Add to `config.yaml`:
+
+```yaml
+sync:
+  primary_camera:    # leave empty to detect the camera with the real microphone
+```
+
+- [ ] **Step 13: Transcribe only the primary camera**
+
+Modify `videoai/stages/s03_transcribe.py`: add `"01b-sync"` to the stage's `requires`, read the
+`SyncMap`, and transcribe a clip only when `clip.camera == sync_map.primary_camera`. Clips from
+other cameras still appear in the transcript artifact, with empty `words` and `speech_spans`, so
+downstream stages can address every clip uniformly.
+
+Append this test to `tests/test_stage_transcribe.py`:
+
+```python
+def test_only_the_primary_camera_is_transcribed(tmp_path: Path, make_clip):
+    import json
+
+    from videoai.core.models import ClipInfo, Manifest, SyncMap
+    from videoai.stages.s01_ingest import ingest
+
+    ctx = _context(tmp_path)
+    (ctx.input_dir / "video" / "cam-a").mkdir(parents=True)
+    (ctx.input_dir / "video" / "cam-b").mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "video" / "cam-a" / "a.mp4")
+    make_clip("b.mp4", seconds=2.0).rename(ctx.input_dir / "video" / "cam-b" / "b.mp4")
+
+    manifest: Manifest = ingest(ctx)
+    ctx.store.write("01-manifest", manifest, fingerprint="fp")
+    ctx.store.write(
+        "01b-sync",
+        SyncMap(clips=[], primary_camera="cam-b"),
+        fingerprint="fp",
+    )
+    for clip in manifest.clips:
+        Path(clip.audio_path).with_suffix(".words.json").write_text(
+            json.dumps([{"text": clip.camera, "start": 0.1, "end": 0.4}]), encoding="utf-8"
+        )
+
+    result = transcribe(ctx)
+
+    primary = next(clip for clip in manifest.clips if clip.camera == "cam-b")
+    secondary = next(clip for clip in manifest.clips if clip.camera == "cam-a")
+    assert [word.text for word in result.by_id(primary.clip_id).words] == ["cam-b"]
+    assert result.by_id(secondary.clip_id).words == []
+```
+
+Note the `SyncMap` written here has no per-clip entries on purpose — the transcribe stage must
+only consult `primary_camera`, never require a placement for every clip.
+
+- [ ] **Step 14: Run the whole suite**
+
+Run: `uv run pytest -v`
+Expected: every earlier test still passes plus the new sync, camera, config, ingest and
+transcribe tests.
+
+- [ ] **Step 15: Commit**
+
+```bash
+git add videoai/core/models.py videoai/core/ffmpeg.py videoai/core/project.py videoai/config.py config.yaml videoai/logic/sync.py videoai/stages/s01_ingest.py videoai/stages/s02b_sync.py videoai/stages/s03_transcribe.py tests/test_sync.py tests/test_stage_sync.py tests/test_project.py tests/test_stage_ingest.py tests/test_stage_transcribe.py tests/test_ffmpeg.py tests/test_config.py
+git commit -m "feat: camera grouping, multi-camera audio sync and primary-camera transcription"
+```
+
+---
+
+### Task 9: Repeated-take detection
 
 **Files:**
 - Create: `videoai/logic/takes.py`
@@ -1879,6 +2950,10 @@ git commit -m "feat: phrase segmentation and packed transcript"
   - `detect_take_groups(index: PhraseIndex, similarity: int = 80, window: int = 6) -> TakeGroups`.
 
 Two phrases belong to the same take group when their normalised text similarity (rapidfuzz `token_sort_ratio`) is at least `similarity` and they are within `window` phrases of each other, **including across clips** (clip boundaries are re-take boundaries in this workflow). Group ids are `take-01`, `take-02`, …
+
+**Multi-camera note.** Only the primary camera is transcribed (Task 8), so phrases from a second
+angle never reach this function and cannot be mistaken for retakes. No camera awareness is needed
+here — but do not "optimise" by comparing across cameras later without re-reading Task 8.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2089,7 +3164,7 @@ git commit -m "feat: fuzzy repeated-take detection"
 
 ---
 
-### Task 9: Analysis stage with LLM providers
+### Task 10: Analysis stage with LLM providers
 
 **Files:**
 - Modify: `videoai/core/models.py`
@@ -2157,7 +3232,7 @@ def _seed_artifacts(ctx: StageContext) -> None:
     )
     ctx.store.write(
         "02-quality",
-        QualityReport(clips=[ClipQuality(clip_id="clip-01", blur=0.1, shake=0.2, black_ratio=0.0, usable=True)]),
+        QualityReport(clips=[ClipQuality(clip_id="clip-01", blur=0.1, motion=0.2, black_ratio=0.0, usable=True)]),
         fingerprint="fp",
     )
     ctx.store.write(
@@ -2235,7 +3310,7 @@ def test_prompt_contains_packed_transcript_and_rules(tmp_path: Path, monkeypatch
     prompt = build_analysis_prompt(
         packed="[clip-01#001] 0.00-0.70 Look here",
         takes=TakeGroups(),
-        quality=QualityReport(clips=[ClipQuality(clip_id="clip-01", blur=0.9, shake=0.1, black_ratio=0.0, usable=False)]),
+        quality=QualityReport(clips=[ClipQuality(clip_id="clip-01", blur=0.9, motion=0.1, black_ratio=0.0, usable=False)]),
         brief="Toy review",
     )
     assert "clip-01#001" in prompt
@@ -2262,6 +3337,7 @@ class SegmentAnalysis(BaseModel):
     delivery_score: int = 5
     visual_score: int = 5
     emotion: str = "neutral"
+    speaker: str = "unclear"
     is_failed_take: bool = False
     take_group: str | None = None
     shorts_candidate: bool = False
@@ -2397,6 +3473,7 @@ Score every phrase. Reply with one JSON document:
 {"segments": [
   {"phrase_id": "clip-01#001", "content": "one short clause describing what happens",
    "delivery_score": 1-10, "visual_score": 1-10, "emotion": "excited|calm|funny|neutral",
+   "speaker": "child|helper|both|unclear",
    "is_failed_take": true|false, "shorts_candidate": true|false}
 ]}
 
@@ -2404,8 +3481,17 @@ Rules:
 - Include every phrase id exactly once. Invent no ids.
 - delivery_score rates energy and clarity of speech; visual_score rates how
   interesting the phrase is likely to look on screen.
-- is_failed_take is true for restarts, cut-off sentences and obvious mistakes.
-- shorts_candidate is true only for self-contained, high-energy moments.
+- is_failed_take is true for restarts, cut-off sentences, obvious mistakes, and
+  anything said while the shot is clearly not usable. Most of this footage is
+  outtakes, so be willing to mark a lot of it failed.
+- speaker: an adult sometimes helps off or on camera. Mark who carries the line.
+  "helper" is not automatically bad — a helper question that sets up the child's
+  answer earns its place — but the child leads the video.
+- shorts_candidate is true for a moment that stands on its own without setup and
+  would make someone stop scrolling. What that looks like depends on the toy: a
+  genuine reaction, a satisfying thing happening on screen, a funny aside, or a
+  clear reveal. Do not require action or stunts — many toys are quiet, and a
+  calm review can still have standout moments.
 """
 
 
@@ -2420,11 +3506,15 @@ def build_analysis_prompt(
             f"- {group.group_id}: {', '.join(group.phrase_ids)}" for group in takes.groups
         ]
         sections.append(
-            "Phrases suspected to be repeated attempts at the same line "
-            "(pick the best one, mark the others as failed takes):\n" + "\n".join(lines)
+            "Phrases that MIGHT be repeated attempts at the same line. This is a "
+            "guess made by text similarity, not a fact. Read them: if they really "
+            "are attempts at the same line, keep the best one and mark the rest as "
+            "failed takes. If they are different things the child said, keep them "
+            "all.\n" + "\n".join(lines)
         )
     quality_lines = [
-        f"- {clip.clip_id}: blur={clip.blur:.2f} shake={clip.shake:.2f} usable={clip.usable}"
+        f"- {clip.clip_id}: blur={clip.blur:.2f} motion={clip.motion:.2f} "
+        f"usable={clip.usable} scored={clip.scored}"
         for clip in quality.clips
     ]
     sections.append("Technical quality per clip:\n" + "\n".join(quality_lines))
@@ -2502,6 +3592,7 @@ def analyze(ctx: StageContext) -> Analysis:
                 delivery_score=int(item.get("delivery_score", 5)),
                 visual_score=int(item.get("visual_score", 5)),
                 emotion=item.get("emotion", "neutral"),
+                speaker=item.get("speaker", "unclear"),
                 is_failed_take=bool(item.get("is_failed_take", False)),
                 take_group=takes.group_of(phrase.phrase_id),
                 shorts_candidate=bool(item.get("shorts_candidate", False)),
@@ -2524,7 +3615,7 @@ git commit -m "feat: analysis stage with Claude CLI and mock LLM providers"
 
 ---
 
-### Task 10: Story plan, timeline builder and validator
+### Task 11: Story plan, timeline builder and validator
 
 **Files:**
 - Modify: `videoai/core/models.py`
@@ -2760,6 +3851,7 @@ class TimelineClip(BaseModel):
     quote: str = ""
     reason: str = ""
     beat: str = ""
+    angles: list[str] = Field(default_factory=list)
 
 
 class Timeline(BaseModel):
@@ -3026,9 +4118,24 @@ ordering phrase ids. Reply with one JSON document:
 
 Rules:
 - Use only phrase ids from the list. Never invent ids and never repeat one.
-- Drop phrases marked as failed takes; when several phrases share a take group,
-  keep exactly one — the best delivery.
-- Open with the single strongest moment, then tell the review in a sensible order.
+- Drop phrases marked as failed takes. A take group is a suspicion, not a fact:
+  when its members really are attempts at one line, keep only the best delivery;
+  when they turn out to be different content, keep what belongs in the story.
+- The child is the presenter. Keep helper lines only where they carry the story,
+  such as a question the child then answers.
+- Most of the source material is unusable outtakes. Selecting a small fraction of
+  it is the expected outcome, not a mistake.
+- If the brief describes the sequence the creator wants — an arc, a list of beats,
+  or must_include items — follow it. The creator knows what happened on the shoot;
+  your job is to find the footage for each beat, not to invent a different story.
+  Name your sections after their beats.
+- Only when the brief gives no structure, choose one yourself: open with the single
+  strongest moment, then tell the review in a sensible order. Strongest means most
+  engaging for THIS toy, judged from the material you were given, not most
+  energetic. For a quiet toy that may be the best reaction or the clearest look at
+  the thing itself.
+- A beat the brief asks for that has no usable footage is worth reporting: name it
+  in the description field rather than silently dropping it.
 - Aim for the target duration in the brief if one is given.
 - title is punchy and under 70 characters; description is two or three sentences.
 """
@@ -3044,6 +4151,8 @@ def _segments_view(analysis: Analysis) -> str:
             flags.append(segment.take_group)
         if segment.shorts_candidate:
             flags.append("shorts")
+        if segment.speaker not in {"child", "unclear"}:
+            flags.append(segment.speaker)
         suffix = f" [{' '.join(flags)}]" if flags else ""
         lines.append(
             f"{segment.phrase_id} ({segment.end - segment.start:.1f}s, "
@@ -3118,7 +4227,7 @@ git commit -m "feat: story plan stage with timeline builder and hard-rule valida
 
 ---
 
-### Task 11: Draft render and end-to-end CLI
+### Task 12: Draft render and end-to-end CLI
 
 **Files:**
 - Create: `videoai/stages/s06_render_draft.py`
@@ -3314,6 +4423,7 @@ def render_draft(ctx: StageContext) -> DraftResult:
 from videoai.stages import (  # noqa: F401
     s01_ingest,
     s02_quality,
+    s02b_sync,
     s03_transcribe,
     s04_analyze,
     s05_plan,
@@ -3421,7 +4531,7 @@ def test_second_run_skips_cached_stages(tmp_path: Path, make_clip, monkeypatch):
 def test_stages_command_lists_pipeline_order():
     result = runner.invoke(app, ["stages"])
     assert result.exit_code == 0
-    for stage_id in ("ingest", "quality", "transcribe", "analyze", "plan", "render_draft"):
+    for stage_id in ("ingest", "quality", "sync", "transcribe", "analyze", "plan", "render_draft"):
         assert stage_id in result.output
 ```
 
@@ -3526,7 +4636,7 @@ git commit -m "feat: draft render stage and end-to-end pipeline CLI"
 
 ---
 
-### Task 12: Stack documentation and a real-footage smoke run
+### Task 13: Stack documentation and a real-footage smoke run
 
 **Files:**
 - Create: `docs/state/STACK.md`, `docs/state/UPGRADES.md`, `README.md`
