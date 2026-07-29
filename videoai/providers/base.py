@@ -32,7 +32,9 @@ def resolve_asr(name: str) -> ASRProvider:
     raise ValueError(f"unknown asr provider: {name}")
 
 
-def resolve_llm(name: str) -> LLMProvider:
+def resolve_llm(name: str, model: str | None = None) -> LLMProvider:
+    """`model` is the configured `analyze.llm_model`; providers that have no model
+    choice (the mock) ignore it."""
     if name == "mock":
         from videoai.providers.llm_mock import MockLLM
 
@@ -40,5 +42,5 @@ def resolve_llm(name: str) -> LLMProvider:
     if name == "claude_cli":
         from videoai.providers.llm_claude_cli import ClaudeCliLLM
 
-        return ClaudeCliLLM()
+        return ClaudeCliLLM(model) if model else ClaudeCliLLM()
     raise ValueError(f"unknown llm provider: {name}")
