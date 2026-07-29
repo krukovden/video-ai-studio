@@ -15,17 +15,32 @@ from videoai.core.ffmpeg import probe, run_ffmpeg
 from videoai.core.models import DraftResult, Manifest, Timeline
 from videoai.core.registry import StageContext, stage
 
-# Silent audio synthesised for sources with no audio track, so every rendered
-# segment carries an audio stream with the same codec, sample rate and channel
-# layout — required for the concat demuxer's `-c copy` step to stay valid.
-SILENT_AUDIO_SOURCE = "anullsrc=channel_layout=mono:sample_rate=44100"
+# The draft's fixed audio target. Mono at 44100 Hz is right for a review draft:
+# it's smaller, and the draft exists to be watched for edit decisions, not to be
+# the master. Both branches of `_render_segment` force these values explicitly —
+# without an explicit `-ar`/`-ac`, `aac` just inherits whatever the source proxy
+# has (this project's real footage is AAC stereo at 48 kHz from an iPhone), so an
+# audio-bearing segment and a synthesised-silent segment would drift apart and
+# violate the homogeneity the concat demuxer's `-c copy` step depends on.
+DRAFT_AUDIO_CODEC = "aac"
+DRAFT_AUDIO_BITRATE = "160k"
+DRAFT_AUDIO_SAMPLE_RATE = 44100
+DRAFT_AUDIO_CHANNELS = 1
+DRAFT_AUDIO_CHANNEL_LAYOUT = "mono"
+
+SILENT_AUDIO_SOURCE = (
+    f"anullsrc=channel_layout={DRAFT_AUDIO_CHANNEL_LAYOUT}:sample_rate={DRAFT_AUDIO_SAMPLE_RATE}"
+)
 
 
 def _render_segment(
     source: Path, offset: float, duration: float, fade: float, crf: int, has_audio: bool, dst: Path
 ) -> None:
     video_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf)]
-    audio_args = ["-c:a", "aac", "-b:a", "160k"]
+    audio_args = [
+        "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
+        "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
+    ]
     if has_audio:
         fade_out_start = max(0.0, duration - fade)
         run_ffmpeg([
