@@ -1,3 +1,5 @@
+import json
+import subprocess
 from pathlib import Path
 
 from videoai.config import Config
@@ -6,6 +8,16 @@ from videoai.core.models import ClipInfo, DraftResult, Manifest, Timeline, Timel
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
 from videoai.stages.s06_render_draft import render_draft
+
+
+def _probe_streams(path: Path) -> list[dict]:
+    """Full ffprobe stream listing (codec, sample rate, channels, ...), which the
+    thin `videoai.core.ffmpeg.probe` wrapper doesn't expose."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return json.loads(result.stdout)["streams"]
 
 
 def _context(tmp_path: Path) -> StageContext:
@@ -75,3 +87,68 @@ def test_empty_timeline_raises(tmp_path: Path, make_clip):
         assert "empty timeline" in str(error)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_mixed_audio_and_silent_sources_render_with_one_uniform_audio_stream(
+    tmp_path: Path, make_clip, make_silent_clip
+):
+    """A muted second camera is ordinary for this project's two-camera setups. A
+    video-only segment placed next to an audio-bearing one breaks the concat
+    demuxer's `-c copy` assumption that every segment has the same stream layout —
+    this must not happen regardless of where the silent source lands in the cut."""
+    ctx = _context(tmp_path)
+    audio_source = make_clip("a.mp4", seconds=3.0)
+    silent_source = make_silent_clip("b.mp4", seconds=3.0)
+    ctx.store.write("01-manifest", Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path=str(audio_source), duration=3.0, width=320,
+                 height=240, fps=30.0, has_audio=True, proxy_path=str(audio_source)),
+        ClipInfo(clip_id="clip-02", path=str(silent_source), duration=3.0, width=320,
+                 height=240, fps=30.0, has_audio=False, proxy_path=str(silent_source)),
+    ]), fingerprint="fp")
+    ctx.store.write("05-timeline", Timeline(fps=30.0, width=320, height=240, clips=[
+        TimelineClip(src="clip-01", offset=0.2, dur=1.0, start=0.0),
+        TimelineClip(src="clip-02", offset=0.2, dur=1.0, start=1.0),
+    ]), fingerprint="fp")
+
+    result = render_draft(ctx)
+
+    output = Path(result.path)
+    streams = _probe_streams(output)
+    video_streams = [s for s in streams if s["codec_type"] == "video"]
+    audio_streams = [s for s in streams if s["codec_type"] == "audio"]
+    assert len(video_streams) == 1
+    assert len(audio_streams) == 1
+    assert 1.8 < probe(output).duration < 2.6
+
+    segment_dir = ctx.work_dir / "segments"
+    segment_files = sorted(segment_dir.glob("seg-*.mp4"))
+    assert len(segment_files) == 2
+    segment_audio = []
+    for segment_file in segment_files:
+        audio = [s for s in _probe_streams(segment_file) if s["codec_type"] == "audio"]
+        assert len(audio) == 1, f"{segment_file.name} must carry exactly one audio stream"
+        segment_audio.append(audio[0])
+
+    # The actual invariant the fix protects: identical codec, sample rate and
+    # channel count across every segment, audio-bearing or synthesised-silent.
+    assert len({a["codec_name"] for a in segment_audio}) == 1
+    assert len({a["sample_rate"] for a in segment_audio}) == 1
+    assert len({a["channels"] for a in segment_audio}) == 1
+
+
+def test_all_silent_sources_still_render_with_an_audio_stream(tmp_path: Path, make_silent_clip):
+    ctx = _context(tmp_path)
+    source = make_silent_clip("a.mp4", seconds=3.0)
+    ctx.store.write("01-manifest", Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path=str(source), duration=3.0, width=320,
+                 height=240, fps=30.0, has_audio=False, proxy_path=str(source)),
+    ]), fingerprint="fp")
+    ctx.store.write("05-timeline", Timeline(fps=30.0, width=320, height=240, clips=[
+        TimelineClip(src="clip-01", offset=0.2, dur=1.0, start=0.0),
+    ]), fingerprint="fp")
+
+    result = render_draft(ctx)
+
+    streams = _probe_streams(Path(result.path))
+    audio_streams = [s for s in streams if s["codec_type"] == "audio"]
+    assert len(audio_streams) == 1
