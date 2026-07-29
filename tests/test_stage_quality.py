@@ -1,0 +1,88 @@
+import subprocess
+from pathlib import Path
+
+from videoai.config import Config
+from videoai.core.models import Manifest, QualityReport
+from videoai.core.registry import StageContext
+from videoai.core.store import ArtifactStore
+from videoai.stages.s01_ingest import ingest
+from videoai.stages.s02_quality import quality
+
+
+def _context(tmp_path: Path) -> StageContext:
+    for name in ("input", "work", "output"):
+        (tmp_path / name).mkdir(exist_ok=True)
+    return StageContext(
+        project_dir=tmp_path,
+        input_dir=tmp_path / "input",
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
+        config=Config(),
+        store=ArtifactStore(tmp_path / "work"),
+    )
+
+
+def _blurred_clip(path: Path, seconds: float = 2.0) -> Path:
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"testsrc=size=320x240:rate=30:duration={seconds}",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+            "-vf", "boxblur=10:1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+            str(path),
+        ],
+        check=True,
+    )
+    return path
+
+
+def _black_clip(path: Path, seconds: float = 2.0) -> Path:
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"color=c=black:size=320x240:rate=30:duration={seconds}",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+            str(path),
+        ],
+        check=True,
+    )
+    return path
+
+
+def test_blurred_clip_scores_higher_blur_than_sharp(tmp_path: Path, make_clip):
+    ctx = _context(tmp_path)
+    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "a.mp4")
+    _blurred_clip(ctx.input_dir / "b.mp4", seconds=2.0)
+    ctx.store.write("01-manifest", ingest(ctx), fingerprint="fp")
+
+    report = quality(ctx)
+
+    assert isinstance(report, QualityReport)
+    sharp = report.by_id("clip-01")
+    blurred = report.by_id("clip-02")
+    assert blurred.blur > sharp.blur
+
+
+def test_black_clip_is_flagged_unusable(tmp_path: Path):
+    ctx = _context(tmp_path)
+    _black_clip(ctx.input_dir / "a.mp4", seconds=2.0)
+    ctx.store.write("01-manifest", ingest(ctx), fingerprint="fp")
+
+    report = quality(ctx)
+
+    assert report.by_id("clip-01").black_ratio > 0.5
+    assert report.by_id("clip-01").usable is False
+
+
+def test_every_clip_appears_in_report(tmp_path: Path, make_clip):
+    ctx = _context(tmp_path)
+    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "a.mp4")
+    make_clip("b.mp4", seconds=2.0).rename(ctx.input_dir / "b.mp4")
+    manifest: Manifest = ingest(ctx)
+    ctx.store.write("01-manifest", manifest, fingerprint="fp")
+
+    report = quality(ctx)
+
+    assert {c.clip_id for c in report.clips} == {c.clip_id for c in manifest.clips}

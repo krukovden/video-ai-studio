@@ -24,3 +24,21 @@ class Manifest(BaseModel):
             if clip.clip_id == clip_id:
                 return clip
         raise KeyError(f"unknown clip_id: {clip_id}")
+
+
+class ClipQuality(BaseModel):
+    clip_id: str
+    blur: float
+    shake: float
+    black_ratio: float
+    usable: bool
+
+
+class QualityReport(BaseModel):
+    clips: list[ClipQuality] = Field(default_factory=list)
+
+    def by_id(self, clip_id: str) -> ClipQuality:
+        for clip in self.clips:
+            if clip.clip_id == clip_id:
+                return clip
+        raise KeyError(f"unknown clip_id: {clip_id}")
