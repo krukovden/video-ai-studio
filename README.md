@@ -12,7 +12,8 @@ cut, every rejection — is written to disk as a plain, readable JSON file under
 - macOS on Apple Silicon (speech recognition runs on the GPU via MLX)
 - ffmpeg 8.x (`brew install ffmpeg`)
 - Python 3.13 via uv (`brew install uv`)
-- Claude Code CLI, authenticated (the analysis and planning stages run through it)
+- Claude Code CLI or Codex CLI, authenticated (analysis and planning use the
+  selected subscription-backed CLI; Claude is the default)
 
 ## Setup
 
@@ -21,6 +22,20 @@ uv venv --python 3.13
 uv sync
 cp .env.example .env   # then fill in the keys you have (all optional today)
 ```
+
+The default `providers.llm: claude_cli` uses Claude Max without an API key.
+You can switch to the authenticated OpenAI subscription-backed CLI without
+changing the pipeline:
+
+```yaml
+providers:
+  asr: parakeet
+  llm: codex_cli
+```
+
+Codex runs ephemerally and read-only, receives the same prompts and reference
+frames, and is asked only for the JSON artifact. This is also useful for
+comparing Claude and Codex on the same project without adding a metered API.
 
 ## Project layout
 
@@ -63,6 +78,8 @@ Running the pipeline creates two more folders next to the brief:
 ```bash
 uv run videoai run projects/my-review --auto-fix 2
 open projects/my-review/output/draft.mp4
+uv run videoai approve projects/my-review
+uv run videoai run projects/my-review
 ```
 
 `--auto-fix N` closes the loop around the visual check described below: when a
@@ -324,10 +341,15 @@ footage needs no special handling: ffmpeg autorotates on decode whenever the
 output goes through a filter chain, so a portrait clip stored as landscape
 frames plus a display matrix arrives upright and is delivered upright.
 
+With `polish.lossless_intermediates: true` (the default), selected source
+ranges are cut to lossless x264 intermediates before composition. The final
+delivery encode is therefore the only lossy video generation. This uses more
+temporary disk space and CPU, but `work/polish/` is disposable.
+
 The audio target is unchanged — AAC, 44100 Hz, mono, exactly what the draft
 settled on — because the concat step depends on every segment agreeing on it.
 
-Four things are then added, in one ffmpeg invocation so the picture is encoded
+Five things are then added, in one ffmpeg invocation so the picture is encoded
 once rather than once per element:
 
 - **A title card** of `polish.intro_seconds`, carrying the title the planner
@@ -336,6 +358,10 @@ once rather than once per element:
   before it, naming that beat for `polish.title_seconds` behind a
   semi-transparent plate, fading in and out. The first clip never gets one —
   the card has just named the video.
+- **Word-timed captions** generated locally from `03-transcript.json`. They are
+  grouped into compact chunks (`polish.caption_words`, four by default), mapped
+  through cuts and dissolves to delivery time, written as ASS, and burned in by
+  ffmpeg/libass. No transcription API or cloud service is used.
 - **A music bed** from `polish.music_dir`, chosen by your brief's `style`
   when that names a track the library has and otherwise by a stable digest of
   the project's name, so the same project always gets the same music. It is
@@ -354,6 +380,18 @@ ffmpeg build without `drawtext` (Homebrew's macOS bottle has no libfreetype,
 in which case titles are rasterised and overlaid as images instead) all still
 produce a video, and the artifact says what was left out. `polish.enabled:
 false` copies the draft through untouched.
+
+When `polish.require_approval: true`, delivery stops after the draft until the
+creator approves the exact current timeline:
+
+```bash
+open projects/my-review/output/draft.mp4
+uv run videoai approve projects/my-review
+uv run videoai run projects/my-review
+```
+
+Approval is stored in `work/06-approval.json` with the timeline content hash.
+Any re-plan changes that hash and requires a fresh review.
 
 Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `06-draft`. Writes its own
 delivery cuts under `work/polish/`, `output/final.mp4`, the credit in
@@ -419,6 +457,12 @@ shouldn't hit this. If it recurs — an unusually long clip, or
 `chunk_duration_seconds` raised too high in `config.yaml` — lower
 `transcribe.chunk_duration_seconds` and re-run just that stage:
 `videoai run <project> --stage transcribe`.
+
+**VideoToolbox is listed by ffmpeg but encoding fails with `-12903`.** VideoAI
+performs a real one-frame capability probe once per run. If macOS cannot create
+a compression session (for example in a headless session, CI, or while the
+media engine is busy), the pipeline automatically uses libx264 instead of
+failing every media stage.
 
 **`plan` fails with "timeline validation failed" naming a cut that starts or
 ends inside a word.** The validator caught its own planner (or a hand-edited

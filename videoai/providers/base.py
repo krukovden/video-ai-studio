@@ -55,4 +55,10 @@ def resolve_llm(name: str, model: str | None = None) -> LLMProvider:
         from videoai.providers.llm_claude_cli import ClaudeCliLLM
 
         return ClaudeCliLLM(model) if model else ClaudeCliLLM()
+    if name == "codex_cli":
+        from videoai.providers.llm_codex_cli import CodexCliLLM
+
+        # Codex uses the model selected by the authenticated CLI profile. The
+        # existing `analyze.llm_model` setting is Claude-specific.
+        return CodexCliLLM()
     raise ValueError(f"unknown llm provider: {name}")

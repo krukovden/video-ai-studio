@@ -29,6 +29,7 @@ import yaml
 
 from videoai.core.ffmpeg import (
     ProbeResult,
+    filter_available,
     h264_encode_args,
     hardware_decode_args,
     probe,
@@ -36,12 +37,15 @@ from videoai.core.ffmpeg import (
     videotoolbox_available,
 )
 from videoai.core.models import (
+    Approval,
     DraftResult,
     FinalResult,
     Manifest,
     StoryPlan,
     Timeline,
     TimelineClip,
+    Transcript,
+    Word,
 )
 from videoai.core.registry import StageContext, stage
 from videoai.core.text import (
@@ -62,10 +66,6 @@ from videoai.stages.s06_render_draft import (
     _audio_filter_chain,
 )
 
-# The cut segments are an intermediate that is immediately re-encoded into the
-# final, so they are held a few quantiser steps above the delivery target: two
-# encodes at the same CRF would show the second one's loss.
-SEGMENT_CRF_MARGIN = 4
 INTRO_BACKGROUND = "0x111a2b"
 INTRO_ACCENT = "0xe8c46a"
 INTRO_FADE_SECONDS = 0.4
@@ -106,6 +106,111 @@ class _TextOverlay:
     fade_in: float
     fade_out: float
     max_lines: int = 2
+
+
+@dataclass(frozen=True)
+class _Caption:
+    start: float
+    end: float
+    text: str
+
+
+def _ass_time(seconds: float) -> str:
+    centiseconds = max(0, round(seconds * 100))
+    hours, rest = divmod(centiseconds, 360000)
+    minutes, rest = divmod(rest, 6000)
+    whole, fraction = divmod(rest, 100)
+    return f"{hours}:{minutes:02d}:{whole:02d}.{fraction:02d}"
+
+
+def _ass_text(text: str) -> str:
+    return text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
+
+
+def _caption_groups(words: list[Word], maximum: int) -> list[list[Word]]:
+    groups: list[list[Word]] = []
+    current: list[Word] = []
+    maximum = max(1, maximum)
+    for word in words:
+        if current and (
+            len(current) >= maximum
+            or word.start - current[-1].end > 0.65
+            or word.end - current[0].start > 2.4
+        ):
+            groups.append(current)
+            current = []
+        current.append(word)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def build_captions(
+    timeline: Timeline,
+    transcript: Transcript,
+    measured_starts: list[float],
+    split_indices: list[int],
+    transition: float,
+    intro_offset: float,
+    words_per_caption: int,
+) -> list[_Caption]:
+    """Map source word timestamps onto the assembled delivery timeline."""
+    known = {clip.clip_id for clip in transcript.clips}
+    captions: list[_Caption] = []
+    for index, clip in enumerate(timeline.clips):
+        if clip.is_insert or clip.src not in known:
+            continue
+        words = [
+            word
+            for word in transcript.by_id(clip.src).words
+            if word.start >= clip.offset - 0.01
+            and word.end <= clip.offset + clip.dur + 0.01
+        ]
+        if not words:
+            continue
+        prior_dissolves = sum(1 for split in split_indices if split <= index)
+        base = measured_starts[index] - prior_dissolves * transition + intro_offset
+        for group in _caption_groups(words, words_per_caption):
+            start = base + group[0].start - clip.offset
+            end = base + group[-1].end - clip.offset
+            captions.append(
+                _Caption(
+                    start=max(0.0, start - 0.04),
+                    end=max(start + 0.2, end + 0.08),
+                    text=" ".join(word.text for word in group),
+                )
+            )
+    return captions
+
+
+def write_ass_captions(path: Path, captions: list[_Caption], width: int, height: int) -> None:
+    """Write readable, YouTube-safe burned-in captions without another dependency."""
+    font_size = max(28, round(height * 0.052))
+    margin_v = max(36, round(height * 0.08))
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {width}",
+        f"PlayResY: {height}",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+        "MarginR, MarginV, Encoding",
+        f"Style: Default,Arial Rounded MT Bold,{font_size},&H00FFFFFF,&H0000FFFF,"
+        f"&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,60,60,{margin_v},1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    lines.extend(
+        f"Dialogue: 0,{_ass_time(caption.start)},{_ass_time(caption.end)},"
+        f"Default,,0,0,0,,{_ass_text(caption.text)}"
+        for caption in captions
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _project_style(project_dir: Path) -> str:
@@ -372,12 +477,15 @@ def _overlay_inputs(
     # required for its ordering rather than its pixels: the draft is the review
     # the final is only worth building after, and it is what `polish.enabled:
     # false` copies through.
-    requires=("01-manifest", "05-timeline", "05a-storyplan", "06-draft"),
+    requires=("01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "06-draft"),
     model=FinalResult,
     config_keys=(
         "polish.enabled",
+        "polish.require_approval",
         "polish.intro_seconds",
         "polish.title_seconds",
+        "polish.captions_enabled",
+        "polish.caption_words",
         "polish.music_gain_db",
         "polish.music_duck_db",
         "polish.transition_frames",
@@ -385,6 +493,7 @@ def _overlay_inputs(
         "polish.music_dir",
         "polish.output_height",
         "polish.output_crf",
+        "polish.lossless_intermediates",
         "polish.hardware_encode",
         # Read, not inherited: the final does its own cutting now, and the fade at
         # each cut has to be the one the draft was reviewed with.
@@ -416,8 +525,26 @@ def polish(ctx: StageContext) -> FinalResult:
 
     manifest = ctx.store.read("01-manifest", Manifest)
     timeline = ctx.store.read("05-timeline", Timeline)
+    transcript = (
+        ctx.store.read("03-transcript", Transcript)
+        if ctx.store.exists("03-transcript")
+        else Transcript(provider="", clips=[])
+    )
     if not timeline.clips:
         raise RuntimeError("cannot polish an empty timeline")
+    if settings.require_approval:
+        if not ctx.store.exists("06-approval"):
+            raise RuntimeError(
+                "delivery requires review: watch output/draft.mp4, then run "
+                f"'videoai approve {ctx.project_dir}'"
+            )
+        approval = ctx.store.read("06-approval", Approval)
+        current_timeline_hash = ctx.store.content_hash("05-timeline")
+        if approval.timeline_hash != current_timeline_hash:
+            raise RuntimeError(
+                "the timeline changed after approval; review the new output/draft.mp4 "
+                f"and run 'videoai approve {ctx.project_dir}' again"
+            )
     story = (
         ctx.store.read("05a-storyplan", StoryPlan)
         if ctx.store.exists("05a-storyplan")
@@ -442,7 +569,12 @@ def polish(ctx: StageContext) -> FinalResult:
             "polish.hardware_encode is on but this ffmpeg build has no VideoToolbox "
             "encoder; the final was encoded with libx264"
         )
-    segment_crf = max(0, settings.output_crf - SEGMENT_CRF_MARGIN)
+    # Lossless x264 intermediates make the final composition the only lossy
+    # encode. VideoToolbox has no equivalent CRF 0 mode, so segment cutting is
+    # intentionally software-only in this mode; the final encode may still use
+    # the media engine.
+    segment_crf = 0 if settings.lossless_intermediates else max(0, settings.output_crf - 4)
+    segment_hardware = hardware and not settings.lossless_intermediates
     fade = ctx.config.render.audio_fade_seconds
 
     segments: list[Path] = []
@@ -450,7 +582,7 @@ def polish(ctx: StageContext) -> FinalResult:
         target = work_dir / f"seg-{index:03d}.mp4"
         _cut_segment(
             clip_source, clip, frame, fps, fade,
-            manifest.by_id(clip.src).has_audio, segment_crf, hardware, target,
+            manifest.by_id(clip.src).has_audio, segment_crf, segment_hardware, target,
         )
         segments.append(target)
     segment_durations = [probe(path).duration for path in segments]
@@ -495,6 +627,23 @@ def polish(ctx: StageContext) -> FinalResult:
                          intro_duration / 2, run_lengths[0])
     intro_offset = intro_duration - intro_fade if intro_duration > 0 else 0.0
     total = intro_offset + body_duration
+
+    # --- captions ---------------------------------------------------------------
+    captions: list[_Caption] = []
+    caption_file: Path | None = None
+    if settings.captions_enabled:
+        if filter_available("subtitles"):
+            captions = build_captions(
+                timeline, transcript, starts, split_indices, transition,
+                intro_offset, settings.caption_words,
+            )
+            if captions:
+                caption_file = work_dir / "captions.ass"
+                write_ass_captions(caption_file, captions, width, height)
+        else:
+            notes.append(
+                "captions requested but this ffmpeg build has no subtitles/libass filter"
+            )
 
     intro_title = (story.title or "").strip()
 
@@ -675,6 +824,15 @@ def polish(ctx: StageContext) -> FinalResult:
         chains.append(f"{video_label}fade=t=in:st=0:d={INTRO_FADE_SECONDS}[vout]")
         video_label = "[vout]"
 
+    if caption_file is not None:
+        escaped_caption_path = (
+            str(caption_file).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        )
+        chains.append(
+            f"{video_label}subtitles=filename='{escaped_caption_path}'[vcaptions]"
+        )
+        video_label = "[vcaptions]"
+
     # Audio: join the runs, prepend the card's silence, then duck the bed under it.
     body_audio = run_audio_labels[0]
     for position in range(1, len(run_audio_labels)):
@@ -733,6 +891,11 @@ def polish(ctx: StageContext) -> FinalResult:
         f"cut {len(segments)} segments from the original sources at {width}x{height} "
         f"(crf {settings.output_crf}, {encoder}) in {elapsed:.1f}s"
     )
+    if settings.lossless_intermediates:
+        notes.append(
+            "delivery segments used lossless x264 intermediates; final.mp4 is the "
+            "only lossy video generation"
+        )
 
     return FinalResult(
         path=str(output),
@@ -744,6 +907,7 @@ def polish(ctx: StageContext) -> FinalResult:
         intro_title=intro_title,
         title_count=len(title_overlays),
         transition_count=len(splits),
+        caption_count=len(captions),
         music_track=track.name if track is not None else None,
         music_attribution=attribution,
         notes=notes,

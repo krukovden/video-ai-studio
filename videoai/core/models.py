@@ -274,6 +274,13 @@ class DraftResult(BaseModel):
     segment_count: int
 
 
+class Approval(BaseModel):
+    """Explicit creator approval bound to one exact timeline."""
+
+    timeline_hash: str
+    approved_at: str
+
+
 class FinalResult(BaseModel):
     """The watchable cut: the draft plus intro, section titles, music and dissolves.
 
@@ -295,6 +302,7 @@ class FinalResult(BaseModel):
     intro_title: str = ""
     title_count: int = 0
     transition_count: int = 0
+    caption_count: int = 0
     music_track: str | None = None
     # Bensound's free licence requires the credit to travel with the video, so it
     # is recorded here as well as written to output/metadata.md.

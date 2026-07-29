@@ -75,8 +75,14 @@ class PolishSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = True
+    # When enabled, `videoai approve PROJECT` must be run after reviewing the
+    # current draft. Approval is tied to the exact timeline, so any re-plan
+    # requires another review.
+    require_approval: bool = False
     intro_seconds: float = 2.5
     title_seconds: float = 2.0
+    captions_enabled: bool = True
+    caption_words: int = 4
     # Where the music bed sits before ducking, and how much further it drops while
     # the child is talking. Both are attenuations: the bed is never the loudest
     # thing in the mix.
@@ -95,6 +101,11 @@ class PolishSettings(BaseModel):
     output_height: int = 1080
     # Visually near-lossless, against the draft's 26.
     output_crf: int = 18
+    # The selected source ranges are encoded once before the final composition
+    # graph. Keep that intermediate mathematically lossless so the delivery
+    # encode is the only lossy generation. This costs temporary disk space and
+    # CPU time, but work/polish is disposable.
+    lossless_intermediates: bool = True
     # VideoToolbox when the build has it, libx264 when it does not.
     hardware_encode: bool = True
 

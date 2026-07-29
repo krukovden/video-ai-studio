@@ -1,12 +1,14 @@
 """VideoAI command line interface."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
 
 import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import load_config
+from videoai.core.models import Approval
 from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir
 from videoai.core.registry import StageContext
 from videoai.core.runner import StageFailure, ordered_stages, run_pipeline, stale_downstream
@@ -149,6 +151,31 @@ def stages() -> None:
     for spec in ordered_stages():
         requires = ", ".join(spec.requires) or "-"
         typer.echo(f"{spec.id:<14} produces={spec.produces:<16} requires={requires}")
+
+
+@app.command()
+def approve(
+    project: Path = typer.Argument(..., help="Project whose current draft was reviewed"),
+) -> None:
+    """Approve the current timeline for delivery rendering."""
+    store = ArtifactStore(project / "work")
+    timeline_hash = store.content_hash("05-timeline")
+    if timeline_hash is None or not store.exists("06-draft"):
+        raise typer.BadParameter(
+            "the project has no current timeline and draft; run the pipeline and review "
+            "output/draft.mp4 first"
+        )
+    store.write(
+        "06-approval",
+        Approval(
+            timeline_hash=timeline_hash,
+            approved_at=datetime.now(timezone.utc).isoformat(),
+        ),
+        fingerprint="manual-approval",
+    )
+    typer.echo(
+        "Approved the current timeline. Re-planning will invalidate this approval."
+    )
 
 
 @app.command()

@@ -88,8 +88,11 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(plan=PlanSettings(reject_adult_in_frame=False)), {"visual_check"}),
         (Config(plan=PlanSettings(reject_unusable_shots=False)), {"visual_check"}),
         (Config(polish=PolishSettings(enabled=False)), {"polish"}),
+        (Config(polish=PolishSettings(require_approval=True)), {"polish"}),
         (Config(polish=PolishSettings(intro_seconds=4.0)), {"polish"}),
         (Config(polish=PolishSettings(title_seconds=3.0)), {"polish"}),
+        (Config(polish=PolishSettings(captions_enabled=False)), {"polish"}),
+        (Config(polish=PolishSettings(caption_words=6)), {"polish"}),
         (Config(polish=PolishSettings(music_gain_db=-18.0)), {"polish"}),
         (Config(polish=PolishSettings(music_duck_db=-6.0)), {"polish"}),
         (Config(polish=PolishSettings(transition_frames=2)), {"polish"}),
@@ -99,6 +102,7 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         # upstream: the draft is a review copy and is not affected by them.
         (Config(polish=PolishSettings(output_height=2160)), {"polish"}),
         (Config(polish=PolishSettings(output_crf=14)), {"polish"}),
+        (Config(polish=PolishSettings(lossless_intermediates=False)), {"polish"}),
         (Config(polish=PolishSettings(hardware_encode=False)), {"polish"}),
     ],
 )
