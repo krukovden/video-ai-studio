@@ -23,6 +23,9 @@ def build_timeline(
         for phrase_id in section.phrase_ids:
             segment = analysis.by_phrase(phrase_id)
             source = manifest.by_id(segment.clip_id)
+            # Unpadded, unclamped: the real speech length, independent of padding
+            # and of any clamp applied below at a source boundary.
+            core_duration = max(0.0, segment.end - segment.start)
             offset = max(0.0, segment.start - padding)
             end = min(source.duration, segment.end + padding)
             duration = max(0.0, end - offset)
@@ -37,6 +40,7 @@ def build_timeline(
                     quote=segment.text,
                     reason=segment.content or section.goal,
                     beat=section.name,
+                    core_dur=core_duration,
                 )
             )
             position += duration

@@ -85,6 +85,29 @@ def test_resolution_comes_from_first_source_clip():
     assert timeline.fps == 30.0
 
 
+def test_core_dur_is_the_unpadded_segment_length():
+    timeline = build_timeline(_plan(), _analysis(), _manifest(), padding=0.15, fps=30.0)
+    first, second = timeline.clips
+    assert abs(first.core_dur - 3.0) < 1e-6  # 5.0 - 2.0, no padding
+    assert abs(second.core_dur - 4.0) < 1e-6  # 14.0 - 10.0
+
+
+def test_core_dur_is_unaffected_by_padding_clamped_at_source_bounds():
+    analysis = Analysis(provider="mock", segments=[
+        SegmentAnalysis(phrase_id="clip-01#001", clip_id="clip-01", start=0.05, end=29.98,
+                        text="whole clip", content="all", delivery_score=8),
+    ])
+    plan = StoryPlan(
+        sections=[PlanSection(name="All", goal="everything", phrase_ids=["clip-01#001"])],
+        title="T", description="D", tags=[],
+    )
+    timeline = build_timeline(plan, analysis, _manifest(), padding=0.5, fps=30.0)
+    clip = timeline.clips[0]
+    # The clamp shrinks the padded total (clip.dur) but core_dur is the raw
+    # segment span, computed before padding and before the source clamp.
+    assert abs(clip.core_dur - 29.93) < 1e-6
+
+
 def test_unknown_phrase_id_in_plan_raises():
     plan = StoryPlan(
         sections=[PlanSection(name="Hook", goal="x", phrase_ids=["clip-09#001"])],

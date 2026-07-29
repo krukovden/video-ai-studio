@@ -11,11 +11,19 @@ import re
 from videoai.core.models import Manifest, Timeline, Transcript
 
 MIN_SEGMENT_SECONDS = 0.3
+MIN_SPEECH_SECONDS = 0.25
 EPSILON = 0.01
 
 
 def _normalise(text: str) -> str:
-    return re.sub(r"[^a-z0-9 ]+", " ", text.lower())
+    """Lowercase, drop punctuation, and collapse whitespace to single spaces.
+
+    Punctuation adjacent to a space (transcript words carry attached punctuation
+    by design) must not leave a doubled space behind, or a genuinely spoken quote
+    fails the substring check purely on whitespace shape.
+    """
+    stripped = re.sub(r"[^a-z0-9 ]+", " ", text.lower())
+    return re.sub(r"\s+", " ", stripped).strip()
 
 
 def validate_timeline(
@@ -41,6 +49,11 @@ def validate_timeline(
             violations.append(
                 f"{label}: shorter than {MIN_SEGMENT_SECONDS}s ({clip.dur:.2f}s)"
             )
+        if clip.core_dur < MIN_SPEECH_SECONDS:
+            violations.append(
+                f"{label}: core speech shorter than {MIN_SPEECH_SECONDS}s "
+                f"({clip.core_dur:.2f}s)"
+            )
         if clip.offset + clip.dur > source.duration + EPSILON:
             violations.append(
                 f"{label}: exceeds source duration ({source.duration:.2f}s)"
@@ -65,6 +78,6 @@ def validate_timeline(
                 word.text for word in words
                 if word.start >= cut_in - EPSILON and word.end <= cut_out + EPSILON
             )
-            if _normalise(clip.quote).strip() not in _normalise(spoken):
+            if _normalise(clip.quote) not in _normalise(spoken):
                 violations.append(f"{label}: quote not found in segment audio range")
     return violations
