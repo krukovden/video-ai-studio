@@ -128,7 +128,10 @@ def test_second_run_skips_cached_stages(tmp_path: Path, make_clip, monkeypatch):
 def test_stages_command_lists_pipeline_order():
     result = runner.invoke(app, ["stages"])
     assert result.exit_code == 0
-    for stage_id in ("ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check", "render_draft"):
+    for stage_id in (
+        "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
+        "render_draft", "export_edit",
+    ):
         assert stage_id in result.output
 
 
@@ -287,7 +290,7 @@ def _executed_stages(output: str) -> set[str]:
 
 ALL_STAGE_IDS = {
     "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
-    "render_draft",
+    "render_draft", "export_edit",
 }
 
 
@@ -348,7 +351,7 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
     after_brief_edit = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert after_brief_edit.exit_code == 0, after_brief_edit.output
     assert _executed_stages(after_brief_edit.output) == {
-        "analyze", "plan", "visual_check", "render_draft"
+        "analyze", "plan", "visual_check", "render_draft", "export_edit"
     }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -480,7 +483,9 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
     after_exclusion = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
 
     assert after_exclusion.exit_code == 0, after_exclusion.output
-    assert _executed_stages(after_exclusion.output) == {"plan", "visual_check", "render_draft"}
+    assert _executed_stages(after_exclusion.output) == {
+        "plan", "visual_check", "render_draft", "export_edit"
+    }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert unchanged_again.exit_code == 0, unchanged_again.output
@@ -577,7 +582,10 @@ def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, ma
 
     assert single_stage.exit_code == 0, single_stage.output
     assert "now depend on stale input" in single_stage.output
-    for stage_id in ("quality", "sync", "transcribe", "analyze", "plan", "visual_check", "render_draft"):
+    for stage_id in (
+        "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
+        "render_draft", "export_edit",
+    ):
         assert stage_id in single_stage.output
     # The notice only names stale stages; it must not run them itself.
     assert not _sidecar_for(project, "clip-02").exists()

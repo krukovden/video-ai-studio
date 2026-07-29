@@ -8,4 +8,5 @@ from videoai.stages import (  # noqa: F401
     s05_plan,
     s05b_visual_check,
     s06_render_draft,
+    s07_export_edit,
 )

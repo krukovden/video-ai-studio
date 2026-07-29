@@ -272,3 +272,17 @@ class DraftResult(BaseModel):
     path: str
     duration: float
     segment_count: int
+
+
+class ExportResult(BaseModel):
+    """What `export_edit` wrote for a human editor to open in DaVinci Resolve
+    (or any other OTIO/EDL-capable NLE)."""
+
+    otio_path: str
+    edl_path: str
+    clip_count: int
+    # Absolute source paths (from `ClipInfo.path`) that did not exist on disk at
+    # export time. The interchange files are still written with these references
+    # — Resolve's own "Relink Selected Clips" is the normal fix — this list just
+    # tells the creator up front which files it will ask about.
+    missing_media: list[str] = Field(default_factory=list)
