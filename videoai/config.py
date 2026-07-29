@@ -63,6 +63,12 @@ class PlanSettings(BaseModel):
     # Story-section name -> gain in dB, applied to every clip in that beat by
     # `build_timeline`. Unknown beat names are ignored silently.
     gain_db_by_beat: dict[str, float] = Field(default_factory=dict)
+    # The visual gate: refuse a draft in which a selected segment shows an adult
+    # filling or crossing the frame, or a shot that cannot be used at all. Both
+    # are on by default because the failure they catch (a draft that opens on an
+    # adult's head) is the one the creator has to watch the whole draft to find.
+    reject_adult_in_frame: bool = True
+    reject_unusable_shots: bool = True
 
 
 class Config(BaseModel):

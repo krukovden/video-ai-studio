@@ -5,6 +5,7 @@ from videoai.core.models import (
     Analysis,
     Manifest,
     PlanSection,
+    RejectedPhrases,
     StoryPlan,
     SyncMap,
     Timeline,
@@ -12,7 +13,7 @@ from videoai.core.models import (
 )
 from videoai.core.project import read_brief
 from videoai.core.registry import StageContext, stage
-from videoai.logic.inserts import is_insert_ref, resolve_insert_ref
+from videoai.logic.inserts import INSERT_PREFIX, insert_ref_clip_id, is_insert_ref, resolve_insert_ref
 from videoai.logic.timeline import build_timeline
 from videoai.logic.validate import validate_timeline
 from videoai.providers.base import resolve_llm
@@ -131,6 +132,8 @@ def _inserts_view(analysis: Analysis, sync: SyncMap, excluded: set[str]) -> str:
 
     lines: list[str] = []
     for insert in analysis.inserts:
+        if f"{INSERT_PREFIX}{insert.clip_id}" in excluded:
+            continue
         origin = _global_start(sync, insert.clip_id)
         where = "recording position unknown"
         if origin is not None:
@@ -151,10 +154,25 @@ def _inserts_view(analysis: Analysis, sync: SyncMap, excluded: set[str]) -> str:
     return "\n".join(lines)
 
 
+def _rejected_ids(ctx: StageContext) -> set[str]:
+    """Ids the visual gate refused on a previous round, if it has ever run.
+
+    The file is absent until something is rejected, which is the ordinary case;
+    an absent file withholds nothing.
+    """
+    if not ctx.store.exists("05c-rejected"):
+        return set()
+    return set(ctx.store.read("05c-rejected", RejectedPhrases).phrase_ids)
+
+
 @stage(
     id="plan",
     produces="05-timeline",
-    requires=("01-manifest", "01b-sync", "03-transcript", "04-analysis"),
+    # "05c-rejected" is written by the downstream visual gate and is deliberately
+    # not any stage's declared output: listing it here feeds its content into this
+    # stage's fingerprint — so a fresh rejection re-plans — without making the
+    # dependency graph circular.
+    requires=("01-manifest", "01b-sync", "03-transcript", "04-analysis", "05c-rejected"),
     provider_key="llm",
     model=Timeline,
     uses_brief=True,
@@ -173,7 +191,9 @@ def plan(ctx: StageContext) -> Timeline:
     analysis = ctx.store.read("04-analysis", Analysis)
 
     brief = read_brief(ctx.project_dir)
-    excluded = set(ctx.config.plan.exclude_phrases)
+    # A visually rejected id is withheld exactly like an excluded one: hidden from
+    # the prompt, and refused if it comes back anyway.
+    excluded = set(ctx.config.plan.exclude_phrases) | _rejected_ids(ctx)
 
     inserts_view = _inserts_view(analysis, sync_map, excluded)
     provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
@@ -215,6 +235,12 @@ def plan(ctx: StageContext) -> Timeline:
     for section in story.sections:
         for phrase_id in section.phrase_ids:
             if is_insert_ref(phrase_id):
+                if f"{INSERT_PREFIX}{insert_ref_clip_id(phrase_id)}" in excluded:
+                    raise RuntimeError(
+                        f"planner referenced excluded insert {phrase_id!r} in section "
+                        f"{section.name!r}: this clip is excluded and must not appear "
+                        "in the edit"
+                    )
                 # Raises a RuntimeError naming the reference for an unknown clip
                 # id, an inverted range, or one reaching past the clip's end.
                 resolve_insert_ref(phrase_id, manifest)

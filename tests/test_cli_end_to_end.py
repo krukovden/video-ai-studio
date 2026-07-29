@@ -25,6 +25,26 @@ def _write_words(project: Path, clip_id: str, words: list[dict]) -> Path:
     return sidecar
 
 
+def _clean_visual(count: int = 2) -> dict:
+    """Visual-check findings approving the first `count` selected segments.
+
+    Any full run now passes through the visual gate, and the gate refuses a
+    segment the model said nothing about — so every fixture that renders a draft
+    has to answer for the segments its plan selects. Findings for an index the
+    timeline does not have are ignored, so one generous fixture serves timelines
+    of different lengths.
+    """
+    return {
+        str(index): {
+            "adult_prominent": False,
+            "child_visible": True,
+            "unusable": False,
+            "note": "the child is holding the toy",
+        }
+        for index in range(count)
+    }
+
+
 def test_run_produces_draft_from_a_folder_of_clips(tmp_path: Path, make_clip, monkeypatch):
     project = tmp_path / "project"
     (project / "input").mkdir(parents=True)
@@ -49,6 +69,7 @@ def test_run_produces_draft_from_a_folder_of_clips(tmp_path: Path, make_clip, mo
              "visual_score": 7, "emotion": "calm", "is_failed_take": False,
              "shorts_candidate": False},
         ],
+        "visual": _clean_visual(2),
         "title": "Test Review",
         "description": "A test review.",
         "tags": ["toys"],
@@ -87,6 +108,7 @@ def test_second_run_skips_cached_stages(tmp_path: Path, make_clip, monkeypatch):
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
                       "visual_score": 8, "emotion": "excited", "is_failed_take": False,
                       "shorts_candidate": False}],
+        "visual": _clean_visual(2),
         "title": "T", "description": "D", "tags": [],
         "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
     }), encoding="utf-8")
@@ -106,7 +128,7 @@ def test_second_run_skips_cached_stages(tmp_path: Path, make_clip, monkeypatch):
 def test_stages_command_lists_pipeline_order():
     result = runner.invoke(app, ["stages"])
     assert result.exit_code == 0
-    for stage_id in ("ingest", "quality", "sync", "transcribe", "analyze", "plan", "render_draft"):
+    for stage_id in ("ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check", "render_draft"):
         assert stage_id in result.output
 
 
@@ -138,6 +160,7 @@ def test_run_with_video_folder_layout_produces_draft(tmp_path: Path, make_clip, 
              "visual_score": 7, "emotion": "calm", "is_failed_take": False,
              "shorts_candidate": False},
         ],
+        "visual": _clean_visual(2),
         "title": "Test Review",
         "description": "A test review.",
         "tags": ["toys"],
@@ -262,7 +285,10 @@ def _executed_stages(output: str) -> set[str]:
     return set()
 
 
-ALL_STAGE_IDS = {"ingest", "quality", "sync", "transcribe", "analyze", "plan", "render_draft"}
+ALL_STAGE_IDS = {
+    "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
+    "render_draft",
+}
 
 
 def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_clip, monkeypatch):
@@ -284,6 +310,7 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
                       "visual_score": 8, "emotion": "excited", "is_failed_take": False,
                       "shorts_candidate": False}],
+        "visual": _clean_visual(2),
         "title": "T", "description": "D", "tags": [],
         "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
     }), encoding="utf-8")
@@ -313,13 +340,16 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
         "segments": [{"phrase_id": "clip-01#001", "content": "a different reading", "delivery_score": 7,
                       "visual_score": 8, "emotion": "calm", "is_failed_take": False,
                       "shorts_candidate": False}],
+        "visual": _clean_visual(2),
         "title": "T2", "description": "D2", "tags": [],
         "sections": [{"name": "Opening", "goal": "open differently", "phrase_ids": ["clip-01#001"]}],
     }), encoding="utf-8")
 
     after_brief_edit = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert after_brief_edit.exit_code == 0, after_brief_edit.output
-    assert _executed_stages(after_brief_edit.output) == {"analyze", "plan", "render_draft"}
+    assert _executed_stages(after_brief_edit.output) == {
+        "analyze", "plan", "visual_check", "render_draft"
+    }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert unchanged_again.exit_code == 0, unchanged_again.output
@@ -347,6 +377,7 @@ def test_adding_a_video_file_reruns_every_stage(tmp_path: Path, make_clip, monke
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
                       "visual_score": 8, "emotion": "excited", "is_failed_take": False,
                       "shorts_candidate": False}],
+        "visual": _clean_visual(2),
         "title": "T", "description": "D", "tags": [],
         "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
     }), encoding="utf-8")
@@ -399,6 +430,7 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
              "visual_score": 3, "emotion": "neutral", "is_failed_take": False,
              "shorts_candidate": False},
         ],
+        "visual": _clean_visual(2),
         "title": "T", "description": "D", "tags": [],
         "sections": [
             {"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001", "clip-01#002"]},
@@ -436,6 +468,7 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
              "visual_score": 3, "emotion": "neutral", "is_failed_take": False,
              "shorts_candidate": False},
         ],
+        "visual": _clean_visual(2),
         "title": "T", "description": "D", "tags": [],
         "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
     }), encoding="utf-8")
@@ -447,7 +480,7 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
     after_exclusion = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
 
     assert after_exclusion.exit_code == 0, after_exclusion.output
-    assert _executed_stages(after_exclusion.output) == {"plan", "render_draft"}
+    assert _executed_stages(after_exclusion.output) == {"plan", "visual_check", "render_draft"}
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert unchanged_again.exit_code == 0, unchanged_again.output
@@ -470,6 +503,7 @@ def test_changing_a_render_setting_reruns_only_the_render(tmp_path: Path, make_c
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
                       "visual_score": 8, "emotion": "excited", "is_failed_take": False,
                       "shorts_candidate": False}],
+        "visual": _clean_visual(2),
         "title": "T", "description": "D", "tags": [],
         "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
     }), encoding="utf-8")
@@ -508,6 +542,7 @@ def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, ma
         "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
                       "visual_score": 8, "emotion": "excited", "is_failed_take": False,
                       "shorts_candidate": False}],
+        "visual": _clean_visual(2),
         "title": "T", "description": "D", "tags": [],
         "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
     }), encoding="utf-8")
@@ -542,8 +577,140 @@ def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, ma
 
     assert single_stage.exit_code == 0, single_stage.output
     assert "now depend on stale input" in single_stage.output
-    for stage_id in ("quality", "sync", "transcribe", "analyze", "plan", "render_draft"):
+    for stage_id in ("quality", "sync", "transcribe", "analyze", "plan", "visual_check", "render_draft"):
         assert stage_id in single_stage.output
     # The notice only names stale stages; it must not run them itself.
     assert not _sidecar_for(project, "clip-02").exists()
     assert _executed_stages(single_stage.output) == {"ingest"}
+
+
+# --- The self-correcting loop: plan, look at what was chosen, reject what is
+# visually bad, re-plan without it ---
+
+_CLEAN_SEGMENT = {"adult_prominent": False, "child_visible": True, "unusable": False,
+                  "note": "the child is holding the toy"}
+_ADULT_SEGMENT = {"adult_prominent": True, "child_visible": False, "unusable": False,
+                  "note": "an adult walks through the frame"}
+
+_TWO_PHRASE_WORDS = [
+    {"text": "hello", "start": 0.5, "end": 0.9},
+    {"text": "everyone", "start": 0.95, "end": 1.5},
+    {"text": "look", "start": 3.0, "end": 3.3},
+    {"text": "here", "start": 3.35, "end": 3.8},
+]
+
+_TWO_PHRASE_ANALYSIS = [
+    {"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
+     "visual_score": 8, "emotion": "excited", "is_failed_take": False,
+     "shorts_candidate": True},
+    {"phrase_id": "clip-01#002", "content": "demo", "delivery_score": 7,
+     "visual_score": 7, "emotion": "calm", "is_failed_take": False,
+     "shorts_candidate": False},
+]
+
+
+def _plan_doc(*phrase_ids: str) -> dict:
+    return {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "open", "phrase_ids": list(phrase_ids)}],
+    }
+
+
+def _seed_project(tmp_path: Path, make_clip, monkeypatch, payload: dict) -> tuple[Path, Path]:
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    llm_path = tmp_path / "llm.json"
+    llm_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
+
+    seed = runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
+    assert seed.exit_code == 0, seed.output
+    _write_words(project, "clip-01", _TWO_PHRASE_WORDS)
+    return project, config_path
+
+
+def test_auto_fix_replans_without_the_visually_rejected_segment(
+    tmp_path: Path, make_clip, monkeypatch
+):
+    """The whole point of the gate: the second plan, made without the shot that
+    had an adult in it, renders a draft rather than the creator finding the adult
+    themselves."""
+    payload = {
+        "segments": _TWO_PHRASE_ANALYSIS,
+        # One document per planning round: the first pick is refused, the second
+        # is made from a candidate list the rejected phrase has been removed from.
+        "plan": [_plan_doc("clip-01#001", "clip-01#002"), _plan_doc("clip-01#001")],
+        "visual": [{"0": _CLEAN_SEGMENT, "1": _ADULT_SEGMENT}, {"0": _CLEAN_SEGMENT}],
+    }
+    project, config_path = _seed_project(tmp_path, make_clip, monkeypatch, payload)
+
+    result = runner.invoke(
+        app, ["run", str(project), "--config", str(config_path), "--auto-fix", "2"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Auto-fix round 1 of 2" in result.output
+    assert "clip-01#002" in result.output
+    assert "an adult walks through the frame" in result.output
+    assert (project / "output" / "draft.mp4").exists()
+
+    rejected = json.loads((project / "work" / "05c-rejected.json").read_text(encoding="utf-8"))
+    assert rejected["phrase_ids"] == ["clip-01#002"]
+    timeline = json.loads((project / "work" / "05-timeline.json").read_text(encoding="utf-8"))
+    assert len(timeline["clips"]) == 1
+    assert timeline["clips"][0]["quote"] == "hello everyone"
+
+
+def test_auto_fix_zero_fails_immediately_and_names_every_rejected_segment(
+    tmp_path: Path, make_clip, monkeypatch
+):
+    payload = {
+        "segments": _TWO_PHRASE_ANALYSIS,
+        "plan": _plan_doc("clip-01#001", "clip-01#002"),
+        "visual": {"0": _ADULT_SEGMENT, "1": _ADULT_SEGMENT},
+    }
+    project, config_path = _seed_project(tmp_path, make_clip, monkeypatch, payload)
+
+    result = runner.invoke(
+        app, ["run", str(project), "--config", str(config_path), "--auto-fix", "0"]
+    )
+
+    assert result.exit_code != 0
+    combined = result.output + (result.stderr if result.stderr_bytes else "")
+    assert "Auto-fix round" not in combined
+    assert "visual_check" in combined
+    for phrase_id in ("clip-01#001", "clip-01#002"):
+        assert phrase_id in combined
+    assert "an adult walks through the frame" in combined
+    assert not (project / "output" / "draft.mp4").exists()
+
+
+def test_auto_fix_gives_up_after_its_cap_and_names_what_it_dropped(
+    tmp_path: Path, make_clip, monkeypatch
+):
+    """A model that keeps choosing badly must not loop forever, and the run that
+    gives up has to say which segments it refused."""
+    payload = {
+        "segments": _TWO_PHRASE_ANALYSIS,
+        "plan": [_plan_doc("clip-01#001", "clip-01#002"), _plan_doc("clip-01#001")],
+        "visual": [{"0": _CLEAN_SEGMENT, "1": _ADULT_SEGMENT}, {"0": _ADULT_SEGMENT}],
+    }
+    project, config_path = _seed_project(tmp_path, make_clip, monkeypatch, payload)
+
+    result = runner.invoke(
+        app, ["run", str(project), "--config", str(config_path), "--auto-fix", "1"]
+    )
+
+    assert result.exit_code != 0
+    combined = result.output + (result.stderr if result.stderr_bytes else "")
+    assert "Auto-fix round 1 of 1" in combined
+    assert "gave up after 1" in combined
+    assert "clip-01#001" in combined
+    assert not (project / "output" / "draft.mp4").exists()
+
+    # Both rounds' rejections survive, so a later run is not offered either shot.
+    rejected = json.loads((project / "work" / "05c-rejected.json").read_text(encoding="utf-8"))
+    assert rejected["phrase_ids"] == ["clip-01#002", "clip-01#001"]

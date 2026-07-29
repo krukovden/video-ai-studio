@@ -11,6 +11,7 @@ from videoai.core.models import (
     ClipTranscript,
     InsertClip,
     Manifest,
+    RejectedPhrases,
     SegmentAnalysis,
     StoryPlan,
     SyncMap,
@@ -366,3 +367,94 @@ def test_inserts_view_includes_description_when_present():
     view = _inserts_view(analysis, sync, set())
 
     assert "Filling the toy with paint using the syringe." in view
+
+
+# --- The visual gate's half of the loop: what the check rejected for what it
+# SHOWS must never be offered to the planner again ---
+
+
+def _reject(ctx: StageContext, *phrase_ids: str) -> None:
+    ctx.store.write("05c-rejected", RejectedPhrases(phrase_ids=list(phrase_ids)),
+                    fingerprint="derived")
+
+
+def _captured_prompt(monkeypatch) -> list[str]:
+    from videoai.providers.llm_mock import MockLLM
+
+    seen: list[str] = []
+    original = MockLLM.complete_json
+
+    def _capture(self, prompt, images, timeout):
+        seen.append(prompt)
+        return original(self, prompt, images, timeout)
+
+    monkeypatch.setattr(MockLLM, "complete_json", _capture)
+    return seen
+
+
+def test_visually_rejected_phrase_is_hidden_from_the_planner(tmp_path: Path, monkeypatch):
+    """Excluding one bad phrase by hand only moved the problem: the planner picked
+    its neighbour, which had the same adult in frame. The rejection has to reach
+    the candidate list itself, before the model ever sees it."""
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#001"]}],
+    }
+    ctx = _context(tmp_path, monkeypatch, payload, segments=_two_segments())
+    _reject(ctx, "clip-01#002")
+    seen = _captured_prompt(monkeypatch)
+
+    timeline = plan(ctx)
+
+    assert "clip-01#002" not in seen[0]
+    assert "bad moment" not in seen[0]
+    assert "clip-01#001" in seen[0]
+    assert all(clip.quote != "bad moment" for clip in timeline.clips)
+
+
+def test_model_reply_naming_a_visually_rejected_phrase_raises(tmp_path: Path, monkeypatch):
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#002"]}],
+    }
+    ctx = _context(tmp_path, monkeypatch, payload, segments=_two_segments())
+    _reject(ctx, "clip-01#002")
+
+    with pytest.raises(RuntimeError) as error:
+        plan(ctx)
+
+    assert "clip-01#002" in str(error.value)
+
+
+def test_visually_rejected_insert_is_hidden_and_refused(tmp_path: Path, monkeypatch):
+    """An insert is rejected by its reference, since it has no phrase of its own."""
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Popping", "goal": "x",
+                      "phrase_ids": ["clip-01#001", "insert:clip-10@2-5"]}],
+    }
+    ctx = _context(tmp_path, monkeypatch, payload,
+                   extra_clips=[_silent_clip()], inserts=[_insert()])
+    _reject(ctx, "insert:clip-10")
+    seen = _captured_prompt(monkeypatch)
+
+    with pytest.raises(RuntimeError) as error:
+        plan(ctx)
+
+    # The instructions use `insert:clip-10` in their own worked example, so the
+    # listing line is what has to be gone: "insert:<id> (<length>s, ...".
+    assert "insert:clip-10 (" not in seen[0]
+    assert "insert:clip-10@2-5" in str(error.value)
+
+
+def test_no_rejection_file_withholds_nothing(tmp_path: Path, monkeypatch):
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x",
+                      "phrase_ids": ["clip-01#001", "clip-01#002"]}],
+    }
+    ctx = _context(tmp_path, monkeypatch, payload, segments=_two_segments())
+
+    timeline = plan(ctx)
+
+    assert len(timeline.clips) == 2

@@ -32,3 +32,9 @@ sync:
 plan:
   exclude_phrases: []   # phrase ids to ban outright, e.g. clip-03#012
   gain_db_by_beat: {}   # beat name -> gain in dB, e.g. {Popping: -6}
+  # The visual gate over the segments the planner chose: refuse the draft when a
+  # selected shot has an adult filling or crossing the frame, or cannot be used
+  # at all. Rejected phrases land in work/05c-rejected.json and are withheld from
+  # every later planning round.
+  reject_adult_in_frame: true
+  reject_unusable_shots: true

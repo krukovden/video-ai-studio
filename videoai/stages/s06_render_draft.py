@@ -80,7 +80,10 @@ def _render_segment(
 @stage(
     id="render_draft",
     produces="06-draft",
-    requires=("01-manifest", "05-timeline"),
+    # "05b-visual" is declared so the visual gate is ordered before the render by
+    # the dependency graph rather than by import order: a gate that can run after
+    # the thing it guards is not a gate.
+    requires=("01-manifest", "05-timeline", "05b-visual"),
     model=DraftResult,
     config_keys=("render.audio_fade_seconds", "render.draft_crf"),
 )

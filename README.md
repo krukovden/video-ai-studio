@@ -55,9 +55,14 @@ Running the pipeline creates two more folders next to the brief:
 ## Use
 
 ```bash
-uv run videoai run projects/my-review
+uv run videoai run projects/my-review --auto-fix 2
 open projects/my-review/output/draft.mp4
 ```
+
+`--auto-fix N` closes the loop around the visual check: when a chosen shot turns
+out to have an adult filling the frame, or to be unusable, the segment is
+withheld and the edit is planned again without it, at most N times. Without it
+(`--auto-fix 0`, the default) the run stops and names every rejected segment.
 
 `videoai run` only re-runs what actually changed. Editing `project.yaml`,
 `notes.md` or `description/` re-runs `analyze` and `plan` but leaves `ingest`,
@@ -83,7 +88,7 @@ uv run videoai config                              # effective configuration
 
 ## Pipeline
 
-Seven stages run in order, each reading and writing artifacts under `work/`:
+Eight stages run in order, each reading and writing artifacts under `work/`:
 
 | Stage | Artifact | What it does |
 |---|---|---|
@@ -93,6 +98,7 @@ Seven stages run in order, each reading and writing artifacts under `work/`:
 | transcribe | `03-transcript` | Verbatim, word-level speech-to-text |
 | analyze | `04-analysis` | Scores every phrase for delivery, visual interest and shorts potential; also lists the clips too quiet to carry speech as silent visual inserts |
 | plan | `05-timeline` | Selects and orders phrases into sections, following the brief's arc when one is given, and cuts silent inserts in where they show what the child is talking about |
+| visual_check | `05b-visual` | Samples three frames from inside every selected segment and asks the model what they show; refuses the draft when an adult fills the frame or a shot is unusable, and records the offending phrase ids in `05c-rejected` |
 | render_draft | `06-draft` | Cuts the draft video with ffmpeg, with audio fades at every cut |
 
 See [`docs/state/STACK.md`](docs/state/STACK.md) for what runs each stage today

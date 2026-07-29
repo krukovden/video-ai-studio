@@ -23,6 +23,16 @@ def is_insert_ref(reference: str) -> bool:
     return reference.startswith(INSERT_PREFIX)
 
 
+def insert_ref_clip_id(reference: str) -> str:
+    """The clip id an insert reference names, with any range stripped off.
+
+    `insert:clip-12@4-7` and `insert:clip-12` both name the same shot, so a
+    decision made about that shot has to recognise either spelling of it.
+    """
+    body = reference[len(INSERT_PREFIX):]
+    return body.partition(RANGE_SEPARATOR)[0]
+
+
 def speech_density(word_count: int, duration: float) -> float:
     """Words per second. A zero-length clip carries no speech to measure, so it
     reports 0.0 rather than dividing by zero."""

@@ -6,5 +6,6 @@ from videoai.stages import (  # noqa: F401
     s03_transcribe,
     s04_analyze,
     s05_plan,
+    s05b_visual_check,
     s06_render_draft,
 )

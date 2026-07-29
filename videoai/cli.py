@@ -58,6 +58,11 @@ def run(
     stage_id: str | None = typer.Option(None, "--stage", help="Run a single stage by id"),
     force: bool = typer.Option(False, "--force", help="Ignore the cache and re-run"),
     debug: bool = typer.Option(False, "--debug", help="Re-raise stage failures with their traceback"),
+    auto_fix: int = typer.Option(
+        0, "--auto-fix", min=0,
+        help="When the visual check rejects segments, re-plan without them and check "
+             "again, at most this many times",
+    ),
 ) -> None:
     """Run the pipeline over a project folder."""
     clip_dir = resolve_clip_dir(project)
@@ -86,26 +91,44 @@ def run(
     media_fingerprint = _media_fingerprint(project)
     brief_fingerprint = _brief_fingerprint(project)
 
-    try:
-        executed = run_pipeline(
-            ctx,
-            only=stage_id,
-            force=force,
-            media_fingerprint=media_fingerprint,
-            brief_fingerprint=brief_fingerprint,
-        )
-    except StageFailure as failure:
-        typer.echo(f"Stage '{failure.stage_id}' failed: {failure.cause}", err=True)
-        typer.echo(
-            "Artifacts from earlier stages are kept, so fix the cause and re-run just "
-            f"this stage:\n  videoai run {project} --config {config_path} "
-            f"--stage {failure.stage_id}",
-            err=True,
-        )
-        if debug:
-            raise
-        typer.echo("Run again with --debug for the full traceback.", err=True)
-        raise typer.Exit(1) from failure
+    executed: list[str] = []
+    rounds = 0
+    while True:
+        try:
+            executed = run_pipeline(
+                ctx,
+                only=stage_id,
+                force=force,
+                media_fingerprint=media_fingerprint,
+                brief_fingerprint=brief_fingerprint,
+            )
+            break
+        except StageFailure as failure:
+            # Only a full run can self-correct: the fix is a fresh plan, and a
+            # `--stage visual_check` run would re-check the same timeline forever.
+            # `rounds` is capped by `--auto-fix` so the loop always terminates.
+            if failure.stage_id == "visual_check" and stage_id is None and rounds < auto_fix:
+                rounds += 1
+                typer.echo(f"Auto-fix round {rounds} of {auto_fix}: {failure.cause}")
+                typer.echo("Re-planning without the rejected segments.")
+                continue
+            typer.echo(f"Stage '{failure.stage_id}' failed: {failure.cause}", err=True)
+            if rounds:
+                typer.echo(
+                    f"Auto-fix gave up after {rounds} re-planning round(s); every "
+                    "rejected segment is listed above and in work/05c-rejected.json.",
+                    err=True,
+                )
+            typer.echo(
+                "Artifacts from earlier stages are kept, so fix the cause and re-run just "
+                f"this stage:\n  videoai run {project} --config {config_path} "
+                f"--stage {failure.stage_id}",
+                err=True,
+            )
+            if debug:
+                raise
+            typer.echo("Run again with --debug for the full traceback.", err=True)
+            raise typer.Exit(1) from failure
     if executed:
         typer.echo("Executed: " + ", ".join(executed))
     else:

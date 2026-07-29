@@ -234,6 +234,40 @@ class Timeline(BaseModel):
         return sum(clip.dur for clip in self.clips)
 
 
+class SegmentVisual(BaseModel):
+    """What the frames of one already-selected timeline segment actually show.
+
+    Every flag defaults to the pessimistic reading: nothing here may be inferred
+    from silence. `checked=False` means the model said nothing about this
+    segment, which is not the same as it saying the segment is fine.
+    """
+
+    index: int
+    src: str
+    adult_prominent: bool = False
+    child_visible: bool = False
+    unusable: bool = False
+    note: str = ""
+    checked: bool = False
+
+
+class VisualCheck(BaseModel):
+    provider: str
+    segments: list[SegmentVisual] = Field(default_factory=list)
+
+
+class RejectedPhrases(BaseModel):
+    """Phrase ids (and `insert:<clip_id>` references) the visual gate refused.
+
+    Written by the visual check and read back by the plan stage, which hides
+    them from the planner exactly like `plan.exclude_phrases`. The list only
+    ever grows: a shot rejected for what it shows is rejected for good, and a
+    later planning round must not be offered it again.
+    """
+
+    phrase_ids: list[str] = Field(default_factory=list)
+
+
 class DraftResult(BaseModel):
     path: str
     duration: float
