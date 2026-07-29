@@ -3337,6 +3337,7 @@ class SegmentAnalysis(BaseModel):
     delivery_score: int = 5
     visual_score: int = 5
     emotion: str = "neutral"
+    speaker: str = "unclear"
     is_failed_take: bool = False
     take_group: str | None = None
     shorts_candidate: bool = False
@@ -3472,6 +3473,7 @@ Score every phrase. Reply with one JSON document:
 {"segments": [
   {"phrase_id": "clip-01#001", "content": "one short clause describing what happens",
    "delivery_score": 1-10, "visual_score": 1-10, "emotion": "excited|calm|funny|neutral",
+   "speaker": "child|helper|both|unclear",
    "is_failed_take": true|false, "shorts_candidate": true|false}
 ]}
 
@@ -3479,8 +3481,13 @@ Rules:
 - Include every phrase id exactly once. Invent no ids.
 - delivery_score rates energy and clarity of speech; visual_score rates how
   interesting the phrase is likely to look on screen.
-- is_failed_take is true for restarts, cut-off sentences and obvious mistakes.
-- shorts_candidate is true only for self-contained, high-energy moments.
+- is_failed_take is true for restarts, cut-off sentences, obvious mistakes, and
+  anything said while the shot is clearly not usable. Most of this footage is
+  outtakes, so be willing to mark a lot of it failed.
+- speaker: an adult sometimes helps off or on camera. Mark who carries the line.
+  "helper" is not automatically bad — a helper question that sets up the child's
+  answer earns its place — but the child leads the video.
+- shorts_candidate is true only for self-contained, high-energy child moments.
 """
 
 
@@ -3578,6 +3585,7 @@ def analyze(ctx: StageContext) -> Analysis:
                 delivery_score=int(item.get("delivery_score", 5)),
                 visual_score=int(item.get("visual_score", 5)),
                 emotion=item.get("emotion", "neutral"),
+                speaker=item.get("speaker", "unclear"),
                 is_failed_take=bool(item.get("is_failed_take", False)),
                 take_group=takes.group_of(phrase.phrase_id),
                 shorts_candidate=bool(item.get("shorts_candidate", False)),
@@ -4105,6 +4113,10 @@ Rules:
 - Use only phrase ids from the list. Never invent ids and never repeat one.
 - Drop phrases marked as failed takes; when several phrases share a take group,
   keep exactly one — the best delivery.
+- The child is the presenter. Keep helper lines only where they carry the story,
+  such as a question the child then answers.
+- Most of the source material is unusable outtakes. Selecting a small fraction of
+  it is the expected outcome, not a mistake.
 - Open with the single strongest moment, then tell the review in a sensible order.
 - Aim for the target duration in the brief if one is given.
 - title is punchy and under 70 characters; description is two or three sentences.
@@ -4121,6 +4133,8 @@ def _segments_view(analysis: Analysis) -> str:
             flags.append(segment.take_group)
         if segment.shorts_candidate:
             flags.append("shorts")
+        if segment.speaker not in {"child", "unclear"}:
+            flags.append(segment.speaker)
         suffix = f" [{' '.join(flags)}]" if flags else ""
         lines.append(
             f"{segment.phrase_id} ({segment.end - segment.start:.1f}s, "
