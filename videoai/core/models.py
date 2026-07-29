@@ -307,6 +307,8 @@ class FinalResult(BaseModel):
     title_count: int = 0
     transition_count: int = 0
     caption_count: int = 0
+    cartoon_effect_count: int = 0
+    toy_reaction: bool = False
     outro: bool = False
     music_ducking: bool = False
     fully_decoded: bool = False

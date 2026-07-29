@@ -23,6 +23,7 @@ from __future__ import annotations
 import shutil
 import time
 import json
+import math
 import os
 import subprocess
 from dataclasses import dataclass
@@ -119,6 +120,140 @@ class _Caption:
     start: float
     end: float
     text: str
+
+
+@dataclass(frozen=True)
+class _CartoonEffect:
+    """One deterministic, locally rendered animation on the delivery clock."""
+
+    kind: str
+    start: float
+    duration: float
+    seed: int = 0
+
+
+_MAJOR_ACTIONS = (
+    ("box", "OPENING THE BOX!", ("box", "unbox", "open")),
+    ("injection", "INJECTION TIME!", ("inject", "shot", "syringe", "fill")),
+    ("popping", "POPPING TIME!", ("pop",)),
+)
+
+
+def _action_for_beat(beat: str) -> tuple[str, str] | None:
+    lowered = beat.strip().lower()
+    for key, label, words in _MAJOR_ACTIONS:
+        if any(word in lowered for word in words):
+            return key, label
+    return None
+
+
+def build_major_action_titles(
+    timeline: Timeline,
+    starts: list[float],
+    durations: list[float],
+    intro_offset: float,
+    title_seconds: float,
+    width: int,
+    height: int,
+) -> list[_TextOverlay]:
+    """Title only the first occurrence of a major viewer-facing action."""
+    seen: set[str] = set()
+    overlays: list[_TextOverlay] = []
+    for index, clip in enumerate(timeline.clips):
+        action = _action_for_beat(clip.beat)
+        if action is None or action[0] in seen:
+            continue
+        seen.add(action[0])
+        overlays.append(
+            _TextOverlay(
+                text=action[1],
+                start=intro_offset + starts[index],
+                duration=min(title_seconds, max(0.2, durations[index])),
+                width=width,
+                height=max(72, int(height * 0.14)),
+                y_expression="",
+                plate_alpha=0.62,
+                fade_in=0,
+                fade_out=0,
+            )
+        )
+    return overlays
+
+
+def build_cartoon_effects(
+    timeline: Timeline,
+    starts: list[float],
+    durations: list[float],
+    intro_offset: float,
+    title_seconds: float,
+) -> list[_CartoonEffect]:
+    """Place a small number of story-aware effects without another model call."""
+    effects: list[_CartoonEffect] = []
+    action_indices: dict[str, list[int]] = {}
+    for index, clip in enumerate(timeline.clips):
+        action = _action_for_beat(clip.beat)
+        if action is not None:
+            action_indices.setdefault(action[0], []).append(index)
+
+    def after_title(index: int) -> float:
+        room = max(0.0, durations[index] - 0.8)
+        return intro_offset + starts[index] + min(title_seconds + 0.15, room)
+
+    if action_indices.get("box"):
+        index = action_indices["box"][0]
+        effects.append(_CartoonEffect("box_fly", after_title(index), 1.05))
+
+    if action_indices.get("injection"):
+        index = action_indices["injection"][0]
+        close_up = next(
+            (
+                candidate
+                for candidate in action_indices["injection"]
+                if timeline.clips[candidate].is_insert
+            ),
+            None,
+        )
+        if close_up is not None:
+            close_up_start = intro_offset + starts[close_up]
+            effects.append(
+                _CartoonEffect("injection_burst", close_up_start + 0.12, 0.9)
+            )
+            effects.append(
+                _CartoonEffect(
+                    "toy_reaction",
+                    close_up_start + 1.12,
+                    min(3.2, max(1.0, durations[close_up] - 1.35)),
+                )
+            )
+        else:
+            effects.append(_CartoonEffect("injection_burst", after_title(index), 0.9))
+
+    pop_indices = action_indices.get("popping", [])
+    pop_times: list[float] = []
+    for index in pop_indices:
+        first = intro_offset + starts[index] + min(0.45, durations[index] / 3)
+        pop_times.append(first)
+        extra = 5.5
+        while extra < durations[index] - 0.5:
+            pop_times.append(intro_offset + starts[index] + extra)
+            extra += 6.0
+    # Leave the title readable, then use no more than five accents across the
+    # whole popping sequence.
+    first_pop = pop_indices[0] if pop_indices else None
+    minimum = after_title(first_pop) if first_pop is not None else 0.0
+    selected: list[float] = []
+    for at in sorted(pop_times):
+        at = max(at, minimum)
+        if selected and at - selected[-1] < 1.2:
+            continue
+        selected.append(at)
+        if len(selected) == 5:
+            break
+    effects.extend(
+        _CartoonEffect("pop", at, 0.62, seed=index)
+        for index, at in enumerate(selected)
+    )
+    return effects
 
 
 def _ass_time(seconds: float) -> str:
@@ -648,6 +783,182 @@ def _concat_copy(parts: list[Path], work_dir: Path, dst: Path) -> None:
     )
 
 
+def _draw_centered_text(
+    canvas, text: str, center: tuple[int, int], scale: float, color: tuple[int, int, int, int],
+    thickness: int,
+) -> None:
+    import cv2
+
+    size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, scale, thickness)
+    origin = (center[0] - size[0] // 2, center[1] + size[1] // 2)
+    cv2.putText(
+        canvas, text, origin, cv2.FONT_HERSHEY_DUPLEX, scale, color,
+        thickness, cv2.LINE_AA,
+    )
+
+
+def _draw_cartoon_effect(canvas, effect: _CartoonEffect, at: float) -> None:
+    """Draw one frame of a bright comic effect into an RGBA canvas."""
+    import cv2
+    import numpy as np
+
+    progress = min(1.0, max(0.0, (at - effect.start) / effect.duration))
+    width = canvas.shape[1]
+    height = canvas.shape[0]
+    fade = min(1.0, progress / 0.12, (1.0 - progress) / 0.18)
+    alpha = max(0, min(255, round(255 * fade)))
+    if alpha <= 0:
+        return
+
+    if effect.kind == "box_fly":
+        travel = 1.0 - (1.0 - progress) ** 3
+        box_w = int(width * 0.13)
+        box_h = int(height * 0.13)
+        x = int(-box_w + travel * width * 0.84)
+        y = int(height * 0.47 + math.sin(progress * math.pi * 2) * height * 0.035)
+        for offset in (0, int(width * 0.055), int(width * 0.11)):
+            cv2.line(
+                canvas,
+                (max(0, x - offset - int(width * 0.13)), y + box_h // 2),
+                (max(0, x - offset - int(width * 0.025)), y + box_h // 2),
+                (255, 220, 70, alpha),
+                max(3, height // 120),
+                cv2.LINE_AA,
+            )
+        cv2.rectangle(
+            canvas, (x, y), (x + box_w, y + box_h),
+            (225, 157, 62, alpha), -1, cv2.LINE_AA,
+        )
+        cv2.line(
+            canvas, (x + box_w // 2, y), (x + box_w // 2, y + box_h),
+            (120, 72, 24, alpha), max(2, height // 180), cv2.LINE_AA,
+        )
+        cv2.line(
+            canvas, (x, y + box_h // 2), (x + box_w, y + box_h // 2),
+            (120, 72, 24, alpha), max(2, height // 180), cv2.LINE_AA,
+        )
+        _draw_centered_text(
+            canvas, "WHOOSH!", (int(width * 0.72), int(height * 0.40)),
+            max(0.8, height / 720), (255, 244, 72, alpha),
+            max(2, height // 240),
+        )
+        return
+
+    if effect.kind == "injection_burst":
+        # Keep the burst around the toy/work surface rather than across the
+        # child's face or torso. The preferred event is a toy-only close-up.
+        center = (int(width * 0.52), int(height * 0.67))
+        radius = int(height * (0.06 + 0.18 * math.sin(progress * math.pi)))
+        for ray in range(12):
+            angle = ray * math.pi / 6
+            inner = radius * 0.58
+            outer = radius * (1.0 if ray % 2 else 1.22)
+            cv2.line(
+                canvas,
+                (
+                    center[0] + int(math.cos(angle) * inner),
+                    center[1] + int(math.sin(angle) * inner),
+                ),
+                (
+                    center[0] + int(math.cos(angle) * outer),
+                    center[1] + int(math.sin(angle) * outer),
+                ),
+                (255, 226, 55, alpha),
+                max(3, height // 135),
+                cv2.LINE_AA,
+            )
+        # A simple comic syringe entering the burst diagonally.
+        start = (center[0] + int(width * 0.16), center[1] - int(height * 0.18))
+        end = (center[0] + int(width * 0.025), center[1] - int(height * 0.02))
+        cv2.line(canvas, start, end, (85, 235, 255, alpha), max(10, height // 65), cv2.LINE_AA)
+        cv2.line(canvas, end, center, (245, 245, 255, alpha), max(2, height // 240), cv2.LINE_AA)
+        _draw_centered_text(
+            canvas, "ZAP!", (center[0], center[1]),
+            max(0.85, height / 650), (255, 255, 255, alpha),
+            max(2, height // 220),
+        )
+        return
+
+    if effect.kind == "toy_reaction":
+        shake = int(math.sin(progress * math.pi * 16) * width * 0.004)
+        eye_a = (int(width * 0.225) + shake, int(height * 0.46))
+        eye_b = (int(width * 0.285) + shake, int(height * 0.57))
+        axes = (max(12, int(width * 0.014)), max(18, int(height * 0.026)))
+        blink = 0.22 if 0.45 < progress < 0.52 else 1.0
+        eye_axes = (axes[0], max(3, int(axes[1] * blink)))
+        for eye in (eye_a, eye_b):
+            cv2.ellipse(canvas, eye, eye_axes, -28, 0, 360, (255, 255, 255, alpha), -1, cv2.LINE_AA)
+            cv2.circle(
+                canvas, (eye[0] - axes[0] // 4, eye[1] + axes[1] // 5),
+                max(4, axes[0] // 3), (25, 25, 35, alpha), -1, cv2.LINE_AA,
+            )
+            cv2.line(
+                canvas,
+                (eye[0] - axes[0], eye[1] - axes[1] - 8),
+                (eye[0] + axes[0], eye[1] - axes[1] - 2),
+                (35, 25, 30, alpha), max(3, height // 220), cv2.LINE_AA,
+            )
+        mouth = (int(width * 0.345) + shake, int(height * 0.65))
+        cv2.ellipse(
+            canvas, mouth, (max(10, int(width * 0.017)), max(18, int(height * 0.035))),
+            -25, 0, 360, (45, 20, 35, alpha), -1, cv2.LINE_AA,
+        )
+        bubble = (int(width * 0.68), int(height * 0.27))
+        axes_bubble = (int(width * 0.22), int(height * 0.105))
+        cv2.ellipse(canvas, bubble, axes_bubble, 0, 0, 360, (255, 255, 255, alpha), -1, cv2.LINE_AA)
+        cv2.ellipse(
+            canvas, bubble, axes_bubble, 0, 0, 360,
+            (35, 25, 45, alpha), max(3, height // 220), cv2.LINE_AA,
+        )
+        cv2.fillConvexPoly(
+            canvas,
+            np.array(
+                [
+                    (int(width * 0.52), int(height * 0.33)),
+                    (int(width * 0.43), int(height * 0.45)),
+                    (int(width * 0.57), int(height * 0.37)),
+                ],
+                dtype="int32",
+            ),
+            (255, 255, 255, alpha),
+            cv2.LINE_AA,
+        )
+        _draw_centered_text(
+            canvas, "OH NO! NO!", bubble, max(0.75, height / 760),
+            (35, 25, 45, alpha), max(2, height // 260),
+        )
+        return
+
+    if effect.kind == "pop":
+        positions = (
+            (0.54, 0.58), (0.43, 0.64), (0.61, 0.52), (0.48, 0.49), (0.58, 0.67),
+        )
+        px, py = positions[effect.seed % len(positions)]
+        center = (int(width * px), int(height * py))
+        radius = int(height * (0.025 + progress * 0.13))
+        colors = ((255, 225, 40, alpha), (80, 235, 255, alpha), (255, 85, 185, alpha))
+        for ring, color in enumerate(colors):
+            cv2.circle(
+                canvas, center, max(4, radius - ring * int(height * 0.022)),
+                color, max(3, height // 150), cv2.LINE_AA,
+            )
+        for ray in range(8):
+            angle = ray * math.pi / 4
+            inner = radius * 1.05
+            outer = radius * 1.38
+            cv2.line(
+                canvas,
+                (center[0] + int(math.cos(angle) * inner), center[1] + int(math.sin(angle) * inner)),
+                (center[0] + int(math.cos(angle) * outer), center[1] + int(math.sin(angle) * outer)),
+                colors[ray % len(colors)], max(3, height // 160), cv2.LINE_AA,
+            )
+        if progress < 0.72:
+            _draw_centered_text(
+                canvas, "POP!", center, max(0.8, height / 700),
+                (255, 255, 255, alpha), max(2, height // 220),
+            )
+
+
 def _render_graphics_track(
     path: Path,
     frame: tuple[int, int],
@@ -655,6 +966,7 @@ def _render_graphics_track(
     duration: float,
     captions: list[_Caption],
     titles: list[_TextOverlay],
+    effects: list[_CartoonEffect],
     work_dir: Path,
 ) -> None:
     """One finite alpha video containing every title and caption.
@@ -703,6 +1015,9 @@ def _render_graphics_track(
         for number in range(frame_count):
             at = number / fps
             canvas = np.zeros((height, width, 4), dtype=np.uint8)
+            for effect in effects:
+                if effect.start <= at < effect.start + effect.duration:
+                    _draw_cartoon_effect(canvas, effect, at)
             for start, end, y, image in assets:
                 if not (start <= at < end):
                     continue
@@ -898,23 +1213,20 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
     srt_path = ctx.output_dir / "final.srt"
     write_srt_captions(srt_path, captions)
 
-    title_overlays = [
-        _TextOverlay(
-            text=timeline.clips[index].beat.strip(),
-            start=probe(intro_path).duration + starts[index],
-            duration=min(settings.title_seconds, max(0.2, segment_durations[index])),
-            width=width, height=max(72, int(height * 0.14)),
-            y_expression="", plate_alpha=0.62, fade_in=0, fade_out=0,
-        )
-        for index in section_changes(timeline)
-        if timeline.clips[index].beat.strip()
-    ]
+    intro_offset = probe(intro_path).duration
+    title_overlays = build_major_action_titles(
+        timeline, starts, segment_durations, intro_offset,
+        settings.title_seconds, width, height,
+    )
     if not title_overlays:
         raise RuntimeError("production contract requires section titles")
+    cartoon_effects = build_cartoon_effects(
+        timeline, starts, segment_durations, intro_offset, settings.title_seconds,
+    )
 
     graphics = work_dir / "graphics.mov"
     _render_graphics_track(
-        graphics, frame, fps, total, captions, title_overlays, work_dir,
+        graphics, frame, fps, total, captions, title_overlays, cartoon_effects, work_dir,
     )
 
     music_dir = Path(settings.music_dir)
@@ -973,6 +1285,8 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
             "music": track.name,
             "music_ducking": True,
             "transitions": len(changes),
+            "cartoon_animations": len(cartoon_effects),
+            "toy_reaction": any(effect.kind == "toy_reaction" for effect in cartoon_effects),
             "closing_beat": has_closing_beat(timeline),
             "full_decode": True,
         },
@@ -1000,6 +1314,8 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
         title_count=len(title_overlays),
         transition_count=len(changes),
         caption_count=len(captions),
+        cartoon_effect_count=len(cartoon_effects),
+        toy_reaction=any(effect.kind == "toy_reaction" for effect in cartoon_effects),
         outro=True,
         music_track=track.name,
         music_attribution=attribution,
@@ -1010,6 +1326,7 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
             "delivery used finite multi-pass rendering",
             "source segments and picture master are lossless x264",
             "final.mp4 is the only lossy video generation",
+            "major-action titles only; cartoon effects rendered locally",
         ],
     )
 
@@ -1022,6 +1339,7 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
     # the final is only worth building after, and it is what `polish.enabled:
     # false` copies through.
     requires=("01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "06-draft"),
+    version="2",
     model=FinalResult,
     config_keys=(
         "polish.enabled",

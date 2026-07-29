@@ -21,7 +21,13 @@ from videoai.core.models import (
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
 from videoai.stages.s06_render_draft import render_draft
-from videoai.stages.s08_polish import build_captions, polish, write_ass_captions
+from videoai.stages.s08_polish import (
+    build_captions,
+    build_cartoon_effects,
+    build_major_action_titles,
+    polish,
+    write_ass_captions,
+)
 
 
 def test_captions_map_source_words_to_the_assembled_timeline(tmp_path: Path):
@@ -96,6 +102,45 @@ def test_approve_binds_the_review_to_the_current_timeline(tmp_path: Path):
     assert approval.timeline_hash == store.content_hash("05-timeline")
     assert approval.draft_hash
     assert approval.config_hash
+
+
+def test_titles_are_limited_to_major_actions_and_effects_follow_story_beats():
+    beats = [
+        ("Hook - Box Opens", False),
+        ("Meet the Toy", False),
+        ("Filling With Paint", False),
+        ("Filling With Paint", True),
+        ("Covered in Bubbles", True),
+        ("Popping Time", False),
+        ("Closing", False),
+    ]
+    timeline = Timeline(
+        fps=30,
+        width=1920,
+        height=1080,
+        clips=[
+            TimelineClip(
+                src="clip-01", offset=index * 4, dur=4, start=index * 4,
+                beat=beat, is_insert=is_insert,
+            )
+            for index, (beat, is_insert) in enumerate(beats)
+        ],
+    )
+    starts = [index * 4.0 for index in range(len(beats))]
+    durations = [4.0] * len(beats)
+
+    titles = build_major_action_titles(
+        timeline, starts, durations, 2.5, 2.0, 1920, 1080,
+    )
+    effects = build_cartoon_effects(timeline, starts, durations, 2.5, 2.0)
+
+    assert [title.text for title in titles] == [
+        "OPENING THE BOX!", "INJECTION TIME!", "POPPING TIME!",
+    ]
+    assert {effect.kind for effect in effects} >= {
+        "box_fly", "injection_burst", "toy_reaction", "pop",
+    }
+    assert sum(effect.kind == "pop" for effect in effects) <= 5
 
 
 def test_strict_delivery_applies_every_required_local_feature(
@@ -184,7 +229,9 @@ quality:
         width=640,
         height=360,
         clips=[
-            TimelineClip(src="clip-01", offset=0, dur=2, start=0, beat="Hook"),
+            TimelineClip(
+                src="clip-01", offset=0, dur=2, start=0, beat="Hook - Box Opens"
+            ),
             TimelineClip(
                 src="clip-01", offset=2, dur=2, start=2,
                 beat="Closing", quote="Thanks for watching",
@@ -222,6 +269,7 @@ quality:
     assert result.intro and result.outro
     assert result.title_count == 1
     assert result.caption_count == 2
+    assert result.cartoon_effect_count == 1
     assert result.transition_count == 1
     assert result.music_track == track.name
     assert result.music_ducking is True
