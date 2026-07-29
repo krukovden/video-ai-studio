@@ -3487,7 +3487,11 @@ Rules:
 - speaker: an adult sometimes helps off or on camera. Mark who carries the line.
   "helper" is not automatically bad — a helper question that sets up the child's
   answer earns its place — but the child leads the video.
-- shorts_candidate is true only for self-contained, high-energy child moments.
+- shorts_candidate is true for a moment that stands on its own without setup and
+  would make someone stop scrolling. What that looks like depends on the toy: a
+  genuine reaction, a satisfying thing happening on screen, a funny aside, or a
+  clear reveal. Do not require action or stunts — many toys are quiet, and a
+  calm review can still have standout moments.
 """
 
 
@@ -4122,6 +4126,9 @@ Rules:
 - Most of the source material is unusable outtakes. Selecting a small fraction of
   it is the expected outcome, not a mistake.
 - Open with the single strongest moment, then tell the review in a sensible order.
+  Strongest means most engaging for THIS toy, judged from the material you were
+  given, not most energetic. For a quiet toy that may be the best reaction or the
+  clearest look at the thing itself.
 - Aim for the target duration in the brief if one is given.
 - title is punchy and under 70 characters; description is two or three sentences.
 """
