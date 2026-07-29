@@ -5,6 +5,7 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "numpy>=2.1",
     "opencv-python-headless>=4.10",
+    "parakeet-mlx>=0.5.2",
     "pydantic>=2.13",
     "python-docx>=1.2.0",
     "python-dotenv>=1.0",

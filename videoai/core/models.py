@@ -43,3 +43,32 @@ class QualityReport(BaseModel):
             if clip.clip_id == clip_id:
                 return clip
         raise KeyError(f"unknown clip_id: {clip_id}")
+
+
+class Word(BaseModel):
+    text: str
+    start: float
+    end: float
+    confidence: float = 1.0
+
+
+class SpeechSpan(BaseModel):
+    start: float
+    end: float
+
+
+class ClipTranscript(BaseModel):
+    clip_id: str
+    words: list[Word] = Field(default_factory=list)
+    speech_spans: list[SpeechSpan] = Field(default_factory=list)
+
+
+class Transcript(BaseModel):
+    provider: str
+    clips: list[ClipTranscript] = Field(default_factory=list)
+
+    def by_id(self, clip_id: str) -> ClipTranscript:
+        for clip in self.clips:
+            if clip.clip_id == clip_id:
+                return clip
+        raise KeyError(f"unknown clip_id: {clip_id}")
