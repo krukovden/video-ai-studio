@@ -1,0 +1,40 @@
+# Example brief. Copy this next to your clips as project.yaml and edit it.
+# Everything except `title` is optional — the pipeline runs without any of it,
+# it just has less to work with.
+
+title: "Pimple Popping Stress Toy — Unboxing and Review"
+toy_name: "2-in-1 Refillable Pimple-Popping Stress Toy"
+language: en
+
+# Roughly how long the finished video should be. The planner aims for this.
+target_duration_seconds: 180
+
+# The sequence you actually shot. When this is present the planner follows it
+# instead of inventing its own structure, and names the sections after your beats.
+arc:
+  - "opens the package and reacts to what is inside"
+  - "holds the toy, feels it, says what it is"
+  - "fills it with paint using the syringe, shows different colours"
+  - "pops the pimples"
+
+# Moments that must survive the edit, in your words. The planner looks for footage
+# matching each one and says so in the description if it cannot find any.
+must_include:
+  - "the first reaction when the box opens"
+  - "loading the syringe with a colour"
+  - "the first successful pop"
+
+# Anything that must never reach the final video.
+avoid:
+  - "shots where the delivery label is readable"
+  - "the long stretch where nothing is happening"
+
+# playful | calm | epic — influences music and graphics in later stages.
+style: playful
+
+# Free-form notes. Anything you would tell a human editor belongs here.
+notes: |
+  Two colours were used, blue first and then red. The red one splatters more and
+  that reaction is the best moment of the shoot.
+  A parent helps hold the toy during filling — keep those bits only where the
+  child is still leading.
