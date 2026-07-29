@@ -52,6 +52,12 @@ def stage(
     def decorator(fn: Callable[[StageContext], BaseModel]):
         if id in REGISTRY:
             raise ValueError(f"stage already registered: {id}")
+        for existing in REGISTRY.values():
+            if existing.produces == produces:
+                raise ValueError(
+                    f"duplicate produces artifact '{produces}': "
+                    f"stages '{existing.id}' and '{id}' both produce it"
+                )
         REGISTRY[id] = StageSpec(
             id=id,
             produces=produces,

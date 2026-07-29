@@ -118,3 +118,58 @@ def test_provider_change_invalidates_stage(clean_registry, ctx: StageContext):
     )
     executed = run_pipeline(switched, only=None, force=False, extra_fingerprint="src")
     assert executed == ["only"]
+
+
+def test_duplicate_produces_raises(clean_registry):
+    @stage(id="first", produces="01-shared", requires=(), model=Payload)
+    def first(ctx: StageContext) -> Payload:
+        return Payload(value=1)
+
+    with pytest.raises(ValueError, match="01-shared"):
+
+        @stage(id="second", produces="01-shared", requires=(), model=Payload)
+        def second(ctx: StageContext) -> Payload:
+            return Payload(value=2)
+
+
+def test_only_runs_even_when_cached(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+    _register_two_stages(calls)
+    run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    calls.clear()
+    executed = run_pipeline(ctx, only="second", force=False, extra_fingerprint="src")
+    assert executed == ["second"]
+    assert calls == ["second"]
+
+
+def test_version_bump_invalidates_cache(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+
+    @stage(id="only", produces="01-only", requires=(), version="1", model=Payload)
+    def only_stage(ctx: StageContext) -> Payload:
+        calls.append("only")
+        return Payload(value=1)
+
+    run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    REGISTRY["only"] = StageSpec(
+        id="only",
+        produces="01-only",
+        requires=(),
+        provider_key=None,
+        version="2",
+        model=Payload,
+        fn=only_stage,
+    )
+    executed = run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    assert executed == ["only"]
+
+
+def test_missing_artifact_with_stale_fingerprint_reruns(clean_registry, ctx: StageContext):
+    calls: list[str] = []
+    _register_two_stages(calls)
+    run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    ctx.store.path("01-first").unlink()
+    calls.clear()
+    executed = run_pipeline(ctx, only=None, force=False, extra_fingerprint="src")
+    assert executed == ["first"]
+    assert calls == ["first"]

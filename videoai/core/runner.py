@@ -51,7 +51,17 @@ def run_pipeline(
             continue
         fingerprint = _fingerprint(spec, ctx, extra_fingerprint)
         cached = ctx.store.fingerprint(spec.produces)
-        if not force and cached == fingerprint and ctx.store.exists(spec.produces):
+        # An explicit `only=<id>` request always runs that stage, bypassing the
+        # cache: the caller asked for this stage to run now, and skipping it
+        # could rely on stale upstream fingerprints that were never re-evaluated
+        # (every other stage was skipped over via `continue` above).
+        skip_cached = (
+            only is None
+            and not force
+            and cached == fingerprint
+            and ctx.store.exists(spec.produces)
+        )
+        if skip_cached:
             continue
         artifact = spec.fn(ctx)
         if not isinstance(artifact, spec.model):
