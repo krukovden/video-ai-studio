@@ -8,11 +8,58 @@ from __future__ import annotations
 
 import re
 
-from videoai.core.models import Manifest, Timeline, Transcript
+from videoai.core.models import ClipInfo, Manifest, Timeline, Transcript
 
 MIN_SEGMENT_SECONDS = 0.3
 MIN_SPEECH_SECONDS = 0.25
 EPSILON = 0.01
+FPS_EPSILON = 0.01
+
+
+def _proxy_shape(clip: ClipInfo) -> tuple[float, float]:
+    """What the clip's proxy will look like, as (aspect ratio, frame rate).
+
+    Proxies scale to a fixed height with an even auto width, so two sources with
+    the same aspect ratio produce identically sized proxies however different
+    their originals are — and two with different aspect ratios never do.
+    """
+    aspect = round(clip.width / clip.height, 3) if clip.height else 0.0
+    return aspect, round(clip.fps, 2)
+
+
+def _geometry_violations(timeline: Timeline, known_clips: dict[str, ClipInfo]) -> list[str]:
+    """Every source in the timeline must yield the same proxy geometry and frame rate.
+
+    The draft concatenates rendered segments with `-c copy`, which accepts mixed
+    geometry without complaint and produces a garbled file: one rotated clip in a
+    home shoot is enough. Fail here, at plan time, with the clips named.
+    """
+    violations: list[str] = []
+    reference_id: str | None = None
+    reference_shape: tuple[float, float] | None = None
+    reported: set[str] = set()
+
+    for clip in timeline.clips:
+        source = known_clips.get(clip.src)
+        if source is None:
+            continue
+        shape = _proxy_shape(source)
+        if reference_shape is None:
+            reference_id, reference_shape = clip.src, shape
+            continue
+        same_aspect = abs(shape[0] - reference_shape[0]) < 1e-6
+        same_fps = abs(shape[1] - reference_shape[1]) <= FPS_EPSILON
+        if (same_aspect and same_fps) or clip.src in reported:
+            continue
+        reported.add(clip.src)
+        reference = known_clips[reference_id]
+        violations.append(
+            f"mixed source geometry: {clip.src} is {source.width}x{source.height} "
+            f"@{source.fps:.2f}fps but {reference_id} is "
+            f"{reference.width}x{reference.height} @{reference.fps:.2f}fps; "
+            "the draft concatenates their proxies with -c copy, which cannot mix them"
+        )
+    return violations
 
 
 def _normalise(text: str) -> str:
@@ -80,4 +127,6 @@ def validate_timeline(
             )
             if _normalise(clip.quote) not in _normalise(spoken):
                 violations.append(f"{label}: quote not found in segment audio range")
+
+    violations.extend(_geometry_violations(timeline, known_clips))
     return violations

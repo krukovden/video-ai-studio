@@ -175,3 +175,90 @@ def test_padding_clamped_at_source_boundary_is_still_judged_on_core_duration():
 
     violations = validate_timeline(timeline, manifest, Transcript(provider="mock", clips=[]))
     assert any("core speech shorter than" in v for v in violations)
+
+
+# --- Finding I3: mixed clip geometry silently corrupts the draft. Proxies scale
+# to a fixed height, so a portrait clip becomes 405x720 beside 1280x720 landscape
+# ones, and the concat demuxer's `-c copy` accepts that without an error ---
+
+
+def _mixed_manifest() -> Manifest:
+    return Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/landscape.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-02", path="/tmp/portrait.mp4", duration=30.0,
+                 width=1080, height=1920, fps=30.0, has_audio=True),
+    ])
+
+
+def _empty_transcript() -> Transcript:
+    return Transcript(provider="mock", clips=[])
+
+
+def test_timeline_mixing_portrait_and_landscape_sources_is_reported():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, _mixed_manifest(), _empty_transcript())
+
+    geometry = [v for v in violations if "mixed source geometry" in v]
+    assert len(geometry) == 1
+    assert "clip-01" in geometry[0]
+    assert "clip-02" in geometry[0]
+
+
+def test_uniform_timeline_reports_no_geometry_violation():
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                 width=3840, height=2160, fps=30.0, has_audio=True),
+        # Different pixel size, same aspect ratio: both proxies come out identical.
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, manifest, _empty_transcript())
+
+    assert not any("mixed source geometry" in v for v in violations)
+
+
+def test_mixed_frame_rate_is_reported():
+    manifest = Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+                 width=1920, height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+                 width=1920, height=1080, fps=60.0, has_audio=True),
+    ])
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, manifest, _empty_transcript())
+
+    assert any("mixed source geometry" in v and "60.00fps" in v for v in violations)
+
+
+def test_each_offending_source_is_reported_once_however_often_it_is_cut_in():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.0, dur=1.0, start=0.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=1.0, dur=1.0, start=1.0, quote="", core_dur=1.0),
+        TimelineClip(src="clip-02", offset=3.0, dur=1.0, start=2.0, quote="", core_dur=1.0),
+    )
+
+    violations = validate_timeline(timeline, _mixed_manifest(), _empty_transcript())
+
+    assert len([v for v in violations if "mixed source geometry" in v]) == 1
+
+
+def test_single_source_timeline_reports_no_geometry_violation():
+    timeline = _timeline(
+        TimelineClip(src="clip-01", offset=1.8, dur=1.4, start=0.0, quote="hello world",
+                     core_dur=1.0)
+    )
+    assert validate_timeline(timeline, _manifest(), _transcript()) == []
