@@ -3502,8 +3502,11 @@ def build_analysis_prompt(
             f"- {group.group_id}: {', '.join(group.phrase_ids)}" for group in takes.groups
         ]
         sections.append(
-            "Phrases suspected to be repeated attempts at the same line "
-            "(pick the best one, mark the others as failed takes):\n" + "\n".join(lines)
+            "Phrases that MIGHT be repeated attempts at the same line. This is a "
+            "guess made by text similarity, not a fact. Read them: if they really "
+            "are attempts at the same line, keep the best one and mark the rest as "
+            "failed takes. If they are different things the child said, keep them "
+            "all.\n" + "\n".join(lines)
         )
     quality_lines = [
         f"- {clip.clip_id}: blur={clip.blur:.2f} motion={clip.motion:.2f} "
@@ -4111,8 +4114,9 @@ ordering phrase ids. Reply with one JSON document:
 
 Rules:
 - Use only phrase ids from the list. Never invent ids and never repeat one.
-- Drop phrases marked as failed takes; when several phrases share a take group,
-  keep exactly one — the best delivery.
+- Drop phrases marked as failed takes. A take group is a suspicion, not a fact:
+  when its members really are attempts at one line, keep only the best delivery;
+  when they turn out to be different content, keep what belongs in the story.
 - The child is the presenter. Keep helper lines only where they carry the story,
   such as a question the child then answers.
 - Most of the source material is unusable outtakes. Selecting a small fraction of
