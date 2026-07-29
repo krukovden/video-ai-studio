@@ -29,6 +29,29 @@ Reference spec: `docs/superpowers/specs/2026-07-28-videoai-pipeline-design.md`.
 - Commit after every task using the exact command given in the task's final step.
 - Test media is generated at test time with ffmpeg `lavfi`; no binary media is committed to git.
 
+## Real Project Layout (authoritative)
+
+The creator's folders already exist and the pipeline adapts to them, not the other way round.
+A project directory looks like this — `video/` and `description/` are supplied by the creator,
+the rest the pipeline creates:
+
+```
+assets/1.Toy_Pimple_Popping/
+├── video/          # source clips (.MOV/.mp4), supplied
+├── description/    # brief: .docx/.md/.txt plus product photos, supplied
+├── work/           # artifacts and cache, created
+└── output/
+    ├── draft.mp4   # review draft
+    ├── video/      # approved final video (later plans)
+    └── shorts/     # shorts, created after approval (later plans)
+```
+
+Clip source directory resolution order: `input/` if it exists, else `video/`, else the project
+directory itself. macOS metadata files (`.DS_Store`, any dotfile, AppleDouble `._*`) are ignored
+everywhere. Real footage for the first project is 56 clips / 44.8 minutes of 4K HEVC 30 fps with
+stereo AAC, so anything that touches every clip must be cached and must not decode 4K when a
+proxy would do.
+
 ## File Structure
 
 | File | Responsibility |
@@ -41,6 +64,7 @@ Reference spec: `docs/superpowers/specs/2026-07-28-videoai-pipeline-design.md`.
 | `videoai/core/registry.py` | `StageSpec`, `StageContext`, `@stage` decorator, registry |
 | `videoai/core/runner.py` | Stage ordering, fingerprinting, skip/force logic |
 | `videoai/core/ffmpeg.py` | ffprobe/ffmpeg subprocess helpers |
+| `videoai/core/project.py` | Project layout resolution and creator-brief reading |
 | `videoai/logic/phrases.py` | Words → phrases → packed transcript (pure) |
 | `videoai/logic/takes.py` | Repeated-take detection (pure) |
 | `videoai/logic/timeline.py` | Analysis + StoryPlan → Timeline (pure) |
@@ -744,21 +768,38 @@ git commit -m "feat: stage registry and caching runner"
 
 ---
 
-### Task 4: ffmpeg helpers and the ingest stage
+### Task 4: ffmpeg helpers, project layout and the ingest stage
 
 **Files:**
-- Create: `videoai/core/ffmpeg.py`, `videoai/core/models.py`, `videoai/stages/s01_ingest.py`, `tests/conftest.py`
-- Test: `tests/test_ffmpeg.py`, `tests/test_stage_ingest.py`
+- Create: `videoai/core/ffmpeg.py`, `videoai/core/project.py`, `videoai/core/models.py`, `videoai/stages/s01_ingest.py`, `tests/conftest.py`
+- Test: `tests/test_ffmpeg.py`, `tests/test_project.py`, `tests/test_stage_ingest.py`
 
 **Interfaces:**
 - Consumes: `StageContext`, `stage` (Task 3).
 - Produces:
-  - `videoai/core/ffmpeg.py`: `probe(path: Path) -> ProbeResult` (dataclass with `duration: float, width: int, height: int, fps: float, has_audio: bool`), `extract_audio(src: Path, dst: Path) -> None` (16 kHz mono WAV, loudnorm applied), `make_proxy(src: Path, dst: Path, height: int) -> None`, `extract_frame(src: Path, at: float, dst: Path, height: int) -> None`, `run_ffmpeg(args: list[str]) -> None`.
-  - `videoai/core/models.py`: `ClipInfo`, `Manifest` (see code).
+  - `videoai/core/ffmpeg.py`: `ProbeResult` dataclass (`duration: float, width: int, height: int, fps: float, has_audio: bool`), `probe(path) -> ProbeResult`, `run_ffmpeg(args: list[str]) -> None`, `extract_audio(src, dst) -> None`, `make_proxy(src, dst, height) -> None`, `extract_frame(src, at, dst, height=360) -> None`, `list_video_files(directory: Path) -> list[Path]`, and the constant `VIDEO_SUFFIXES`.
+  - `videoai/core/project.py`: `resolve_clip_dir(project_dir: Path) -> Path`, `read_brief(project_dir: Path) -> str`.
+  - `videoai/core/models.py`: `ClipInfo`, `Manifest`.
   - Stage id `ingest`, artifact `01-manifest`, model `Manifest`.
-  - `tests/conftest.py`: fixture `make_clip(tmp_path, name, seconds, tone_hz)` returning a `Path` to a generated mp4.
+  - `tests/conftest.py`: fixture `make_clip(name, seconds, tone_hz, size)` returning a `Path` to a generated mp4 in `tmp_path`.
 
-- [ ] **Step 1: Write the test fixture helper**
+**Layout adaptation (this task owns it).** `StageContext.input_dir` is the *project* directory.
+Clips live in `resolve_clip_dir(project_dir)`, which prefers `input/`, then `video/`, then the
+project directory itself. `read_brief` concatenates, in this order and skipping whatever is
+absent: `project.yaml`, `notes.md`, and every `.md`, `.txt` and `.docx` inside `description/`.
+Files whose name starts with `.` or `._` are ignored everywhere.
+
+**Performance requirement.** Sources are 4K HEVC (56 clips, 44.8 minutes for the first real
+project). `make_proxy` decodes with `-hwaccel videotoolbox` and encodes with
+`h264_videotoolbox`, falling back to `libx264` when the hardware encoder is unavailable.
+
+- [ ] **Step 1: Add the docx dependency**
+
+```bash
+uv add python-docx
+```
+
+- [ ] **Step 2: Write the test fixture helper**
 
 `tests/conftest.py`:
 
@@ -770,6 +811,7 @@ import pytest
 
 
 def _generate_clip(path: Path, seconds: float, tone_hz: int, size: str = "320x240") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
             "ffmpeg", "-y", "-loglevel", "error",
@@ -791,14 +833,20 @@ def make_clip(tmp_path: Path):
     return _make
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [ ] **Step 3: Write the failing ffmpeg tests**
 
 `tests/test_ffmpeg.py`:
 
 ```python
 from pathlib import Path
 
-from videoai.core.ffmpeg import extract_audio, extract_frame, make_proxy, probe
+from videoai.core.ffmpeg import (
+    extract_audio,
+    extract_frame,
+    list_video_files,
+    make_proxy,
+    probe,
+)
 
 
 def test_probe_reads_stream_properties(make_clip):
@@ -812,91 +860,55 @@ def test_probe_reads_stream_properties(make_clip):
 
 def test_extract_audio_writes_wav(make_clip, tmp_path: Path):
     clip = make_clip("a.mp4", seconds=2.0)
-    wav = tmp_path / "a.wav"
+    wav = tmp_path / "out" / "a.wav"
     extract_audio(clip, wav)
     assert wav.exists() and wav.stat().st_size > 1000
 
 
 def test_make_proxy_scales_height(make_clip, tmp_path: Path):
     clip = make_clip("a.mp4", seconds=2.0, size="640x480")
-    proxy = tmp_path / "a-proxy.mp4"
+    proxy = tmp_path / "out" / "a-proxy.mp4"
     make_proxy(clip, proxy, height=240)
     assert probe(proxy).height == 240
 
 
+def test_make_proxy_keeps_audio(make_clip, tmp_path: Path):
+    clip = make_clip("a.mp4", seconds=2.0, size="640x480")
+    proxy = tmp_path / "out" / "a-proxy.mp4"
+    make_proxy(clip, proxy, height=240)
+    assert probe(proxy).has_audio is True
+
+
 def test_extract_frame_writes_image(make_clip, tmp_path: Path):
     clip = make_clip("a.mp4", seconds=3.0)
-    frame = tmp_path / "f.jpg"
+    frame = tmp_path / "frames" / "f.jpg"
     extract_frame(clip, at=1.0, dst=frame, height=180)
     assert frame.exists() and frame.stat().st_size > 500
+
+
+def test_list_video_files_sorts_and_filters(tmp_path: Path, make_clip):
+    make_clip("b.MOV", seconds=1.0).rename(tmp_path / "b.MOV")
+    make_clip("a.mp4", seconds=1.0).rename(tmp_path / "a.mp4")
+    (tmp_path / ".DS_Store").write_bytes(b"junk")
+    (tmp_path / "._a.mp4").write_bytes(b"junk")
+    (tmp_path / "notes.md").write_text("hello", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+
+    found = list_video_files(tmp_path)
+
+    assert [path.name for path in found] == ["a.mp4", "b.MOV"]
+
+
+def test_list_video_files_on_missing_directory_returns_empty(tmp_path: Path):
+    assert list_video_files(tmp_path / "nope") == []
 ```
 
-`tests/test_stage_ingest.py`:
+- [ ] **Step 4: Run the ffmpeg tests to verify they fail**
 
-```python
-from pathlib import Path
-
-from videoai.config import Config
-from videoai.core.models import Manifest
-from videoai.core.registry import StageContext
-from videoai.core.store import ArtifactStore
-from videoai.stages.s01_ingest import ingest
-
-
-def _context(tmp_path: Path) -> StageContext:
-    for name in ("input", "work", "output"):
-        (tmp_path / name).mkdir(exist_ok=True)
-    return StageContext(
-        project_dir=tmp_path,
-        input_dir=tmp_path / "input",
-        work_dir=tmp_path / "work",
-        output_dir=tmp_path / "output",
-        config=Config(),
-        store=ArtifactStore(tmp_path / "work"),
-    )
-
-
-def test_ingest_indexes_clips_sorted_by_name(tmp_path: Path, make_clip):
-    ctx = _context(tmp_path)
-    for name in ("b.mp4", "a.mp4"):
-        make_clip(name, seconds=2.0).rename(ctx.input_dir / name)
-
-    manifest = ingest(ctx)
-
-    assert isinstance(manifest, Manifest)
-    assert [clip.clip_id for clip in manifest.clips] == ["clip-01", "clip-02"]
-    assert [Path(clip.path).name for clip in manifest.clips] == ["a.mp4", "b.mp4"]
-    assert all(clip.duration > 1.5 for clip in manifest.clips)
-
-
-def test_ingest_creates_audio_and_proxy_files(tmp_path: Path, make_clip):
-    ctx = _context(tmp_path)
-    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "a.mp4")
-
-    manifest = ingest(ctx)
-
-    clip = manifest.clips[0]
-    assert Path(clip.audio_path).exists()
-    assert Path(clip.proxy_path).exists()
-
-
-def test_ingest_ignores_non_video_files(tmp_path: Path, make_clip):
-    ctx = _context(tmp_path)
-    make_clip("a.mp4", seconds=2.0).rename(ctx.input_dir / "a.mp4")
-    (ctx.input_dir / "project.yaml").write_text("title: test\n", encoding="utf-8")
-    (ctx.input_dir / "notes.md").write_text("hello", encoding="utf-8")
-
-    manifest = ingest(ctx)
-
-    assert len(manifest.clips) == 1
-```
-
-- [ ] **Step 3: Run the tests to verify they fail**
-
-Run: `uv run pytest tests/test_ffmpeg.py tests/test_stage_ingest.py -v`
+Run: `uv run pytest tests/test_ffmpeg.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'videoai.core.ffmpeg'`
 
-- [ ] **Step 4: Implement `videoai/core/ffmpeg.py`**
+- [ ] **Step 5: Implement `videoai/core/ffmpeg.py`**
 
 ```python
 """Thin, explicit wrappers over ffmpeg/ffprobe. No hidden defaults."""
@@ -905,6 +917,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".avi"}
@@ -956,6 +969,26 @@ def probe(path: Path) -> ProbeResult:
     )
 
 
+def list_video_files(directory: Path) -> list[Path]:
+    """Video files directly inside `directory`, sorted, macOS metadata excluded."""
+    if not directory.is_dir():
+        return []
+    return sorted(
+        path for path in directory.iterdir()
+        if path.is_file()
+        and not path.name.startswith((".", "._"))
+        and path.suffix.lower() in VIDEO_SUFFIXES
+    )
+
+
+@cache
+def _has_videotoolbox_encoder() -> bool:
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True
+    )
+    return "h264_videotoolbox" in result.stdout
+
+
 def extract_audio(src: Path, dst: Path) -> None:
     """16 kHz mono WAV with EBU R128 loudness normalisation, ready for ASR."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -968,14 +1001,30 @@ def extract_audio(src: Path, dst: Path) -> None:
 
 
 def make_proxy(src: Path, dst: Path, height: int) -> None:
+    """Small proxy for analysis and draft renders.
+
+    Sources are 4K HEVC, so decode and encode go through VideoToolbox when the
+    build supports it; software encoding is minutes per clip instead of seconds.
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
-    run_ffmpeg([
-        "-i", str(src),
-        "-vf", f"scale=-2:{height}",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-        "-c:a", "aac", "-b:a", "128k",
-        str(dst),
-    ])
+    scale = f"scale=-2:{height}"
+    if _has_videotoolbox_encoder():
+        args = [
+            "-hwaccel", "videotoolbox", "-i", str(src),
+            "-vf", scale,
+            "-c:v", "h264_videotoolbox", "-b:v", "2500k",
+            "-c:a", "aac", "-b:a", "128k",
+            str(dst),
+        ]
+    else:
+        args = [
+            "-i", str(src),
+            "-vf", scale,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-c:a", "aac", "-b:a", "128k",
+            str(dst),
+        ]
+    run_ffmpeg(args)
 
 
 def extract_frame(src: Path, at: float, dst: Path, height: int = 360) -> None:
@@ -987,7 +1036,280 @@ def extract_frame(src: Path, at: float, dst: Path, height: int = 360) -> None:
     ])
 ```
 
-- [ ] **Step 5: Implement `videoai/core/models.py` (manifest part)**
+- [ ] **Step 6: Run the ffmpeg tests to verify they pass**
+
+Run: `uv run pytest tests/test_ffmpeg.py -v`
+Expected: 7 passed
+
+- [ ] **Step 7: Write the failing project-layout tests**
+
+`tests/test_project.py`:
+
+```python
+from pathlib import Path
+
+import docx
+
+from videoai.core.project import read_brief, resolve_clip_dir
+
+
+def test_resolve_clip_dir_prefers_input(tmp_path: Path):
+    (tmp_path / "input").mkdir()
+    (tmp_path / "video").mkdir()
+    assert resolve_clip_dir(tmp_path) == tmp_path / "input"
+
+
+def test_resolve_clip_dir_falls_back_to_video(tmp_path: Path):
+    (tmp_path / "video").mkdir()
+    assert resolve_clip_dir(tmp_path) == tmp_path / "video"
+
+
+def test_resolve_clip_dir_falls_back_to_project_dir(tmp_path: Path):
+    assert resolve_clip_dir(tmp_path) == tmp_path
+
+
+def test_read_brief_returns_empty_string_when_nothing_present(tmp_path: Path):
+    assert read_brief(tmp_path) == ""
+
+
+def test_read_brief_includes_project_yaml_and_notes(tmp_path: Path):
+    (tmp_path / "project.yaml").write_text("title: Slime review\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("Keep the laugh at the end.", encoding="utf-8")
+
+    brief = read_brief(tmp_path)
+
+    assert "Slime review" in brief
+    assert "Keep the laugh at the end." in brief
+
+
+def test_read_brief_reads_docx_from_description(tmp_path: Path):
+    description = tmp_path / "description"
+    description.mkdir()
+    document = docx.Document()
+    document.add_paragraph("Pimple Popping Stress Toy")
+    document.add_paragraph("Refillable, two in one.")
+    document.save(description / "product.docx")
+
+    brief = read_brief(tmp_path)
+
+    assert "Pimple Popping Stress Toy" in brief
+    assert "Refillable, two in one." in brief
+
+
+def test_read_brief_reads_markdown_and_text_from_description(tmp_path: Path):
+    description = tmp_path / "description"
+    description.mkdir()
+    (description / "a.md").write_text("markdown content", encoding="utf-8")
+    (description / "b.txt").write_text("plain content", encoding="utf-8")
+
+    brief = read_brief(tmp_path)
+
+    assert "markdown content" in brief
+    assert "plain content" in brief
+
+
+def test_read_brief_ignores_macos_metadata_and_images(tmp_path: Path):
+    description = tmp_path / "description"
+    description.mkdir()
+    (description / ".DS_Store").write_bytes(b"junk")
+    (description / "._notes.md").write_bytes(b"junk")
+    (description / "photo.jpeg").write_bytes(b"\xff\xd8\xff")
+    (description / "real.md").write_text("real content", encoding="utf-8")
+
+    brief = read_brief(tmp_path)
+
+    assert brief.strip() == "real content"
+
+
+def test_read_brief_survives_an_unreadable_docx(tmp_path: Path):
+    description = tmp_path / "description"
+    description.mkdir()
+    (description / "broken.docx").write_bytes(b"not a real docx")
+    (description / "real.md").write_text("real content", encoding="utf-8")
+
+    brief = read_brief(tmp_path)
+
+    assert "real content" in brief
+    assert "broken.docx" in brief
+```
+
+- [ ] **Step 8: Run the project tests to verify they fail**
+
+Run: `uv run pytest tests/test_project.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'videoai.core.project'`
+
+- [ ] **Step 9: Implement `videoai/core/project.py`**
+
+```python
+"""Project folder conventions.
+
+The creator's folders came first, so the pipeline adapts to them: clips may sit
+in `input/` or `video/`, and the brief is whatever prose lives in `description/`.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+BRIEF_SUFFIXES = {".md", ".txt", ".docx"}
+
+
+def resolve_clip_dir(project_dir: Path) -> Path:
+    for name in ("input", "video"):
+        candidate = project_dir / name
+        if candidate.is_dir():
+            return candidate
+    return project_dir
+
+
+def _read_docx(path: Path) -> str:
+    import docx
+
+    document = docx.Document(str(path))
+    return "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+
+def _read_one(path: Path) -> str:
+    if path.suffix.lower() == ".docx":
+        try:
+            return _read_docx(path)
+        except Exception:
+            return f"[could not read {path.name}]"
+    try:
+        return path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return f"[could not read {path.name}]"
+
+
+def read_brief(project_dir: Path) -> str:
+    """Everything the creator wrote about this video, concatenated."""
+    parts: list[str] = []
+    for name in ("project.yaml", "notes.md"):
+        path = project_dir / name
+        if path.is_file():
+            parts.append(_read_one(path))
+
+    description = project_dir / "description"
+    if description.is_dir():
+        for path in sorted(description.iterdir()):
+            if (
+                path.is_file()
+                and not path.name.startswith((".", "._"))
+                and path.suffix.lower() in BRIEF_SUFFIXES
+            ):
+                parts.append(_read_one(path))
+
+    return "\n\n".join(part.strip() for part in parts if part.strip())
+```
+
+- [ ] **Step 10: Run the project tests to verify they pass**
+
+Run: `uv run pytest tests/test_project.py -v`
+Expected: 9 passed
+
+- [ ] **Step 11: Write the failing ingest tests**
+
+`tests/test_stage_ingest.py`:
+
+```python
+from pathlib import Path
+
+from videoai.config import Config
+from videoai.core.models import Manifest
+from videoai.core.registry import StageContext
+from videoai.core.store import ArtifactStore
+from videoai.stages.s01_ingest import ingest
+
+
+def _context(project: Path) -> StageContext:
+    (project / "work").mkdir(parents=True, exist_ok=True)
+    (project / "output").mkdir(parents=True, exist_ok=True)
+    return StageContext(
+        project_dir=project,
+        input_dir=project,
+        work_dir=project / "work",
+        output_dir=project / "output",
+        config=Config(),
+        store=ArtifactStore(project / "work"),
+    )
+
+
+def test_ingest_indexes_clips_from_video_folder(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("b.mp4", seconds=2.0).rename(clips / "b.mp4")
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+
+    manifest = ingest(_context(project))
+
+    assert isinstance(manifest, Manifest)
+    assert [clip.clip_id for clip in manifest.clips] == ["clip-01", "clip-02"]
+    assert [Path(clip.path).name for clip in manifest.clips] == ["a.mp4", "b.mp4"]
+    assert all(clip.duration > 1.5 for clip in manifest.clips)
+
+
+def test_ingest_creates_audio_and_proxy_files(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+
+    manifest = ingest(_context(project))
+
+    clip = manifest.clips[0]
+    assert Path(clip.audio_path).exists()
+    assert Path(clip.proxy_path).exists()
+
+
+def test_ingest_ignores_non_video_and_macos_metadata(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+    (clips / ".DS_Store").write_bytes(b"junk")
+    (clips / "IMG_8195.JPG").write_bytes(b"\xff\xd8\xff")
+    (project / "project.yaml").write_text("title: test\n", encoding="utf-8")
+
+    manifest = ingest(_context(project))
+
+    assert len(manifest.clips) == 1
+
+
+def test_ingest_is_idempotent_and_reuses_existing_media(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=2.0).rename(clips / "a.mp4")
+    ctx = _context(project)
+
+    first = ingest(ctx)
+    proxy = Path(first.clips[0].proxy_path)
+    marker = proxy.stat().st_mtime_ns
+
+    second = ingest(ctx)
+
+    assert second.clips[0].proxy_path == first.clips[0].proxy_path
+    assert Path(second.clips[0].proxy_path).stat().st_mtime_ns == marker
+
+
+def test_ingest_raises_when_no_clips_found(tmp_path: Path):
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+
+    try:
+        ingest(_context(project))
+    except RuntimeError as error:
+        assert "no video files" in str(error)
+    else:
+        raise AssertionError("expected RuntimeError")
+```
+
+- [ ] **Step 12: Run the ingest tests to verify they fail**
+
+Run: `uv run pytest tests/test_stage_ingest.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'videoai.core.models'`
+
+- [ ] **Step 13: Implement `videoai/core/models.py`**
 
 ```python
 """Artifact models. Every stage input and output is defined here."""
@@ -1018,39 +1340,47 @@ class Manifest(BaseModel):
         raise KeyError(f"unknown clip_id: {clip_id}")
 ```
 
-- [ ] **Step 6: Implement `videoai/stages/s01_ingest.py`**
+- [ ] **Step 14: Implement `videoai/stages/s01_ingest.py`**
 
 ```python
-"""s01 ingest: index input clips, normalise audio, build proxies."""
+"""s01 ingest: index the source clips, normalise audio, build proxies.
+
+Derived media is expensive (44 minutes of 4K HEVC in the first real project), so
+anything already on disk is reused; deleting `work/media` forces a rebuild.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
-from videoai.core.ffmpeg import VIDEO_SUFFIXES, extract_audio, make_proxy, probe
+from videoai.core.ffmpeg import extract_audio, list_video_files, make_proxy, probe
 from videoai.core.models import ClipInfo, Manifest
+from videoai.core.project import resolve_clip_dir
 from videoai.core.registry import StageContext, stage
 
 
 @stage(id="ingest", produces="01-manifest", requires=(), model=Manifest)
 def ingest(ctx: StageContext) -> Manifest:
-    sources = sorted(
-        path for path in ctx.input_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
-    )
+    clip_dir = resolve_clip_dir(ctx.input_dir)
+    sources = list_video_files(clip_dir)
     if not sources:
-        raise RuntimeError(f"no video files found in {ctx.input_dir}")
+        raise RuntimeError(f"no video files found in {clip_dir}")
 
     media_dir = ctx.work_dir / "media"
     clips: list[ClipInfo] = []
     for index, source in enumerate(sources, start=1):
         clip_id = f"clip-{index:02d}"
         info = probe(source)
+
         audio_path: Path | None = None
         if info.has_audio:
             audio_path = media_dir / f"{clip_id}.wav"
-            extract_audio(source, audio_path)
+            if not audio_path.exists():
+                extract_audio(source, audio_path)
+
         proxy_path = media_dir / f"{clip_id}-proxy.mp4"
-        make_proxy(source, proxy_path, height=ctx.config.render.draft_height)
+        if not proxy_path.exists():
+            make_proxy(source, proxy_path, height=ctx.config.render.draft_height)
+
         clips.append(
             ClipInfo(
                 clip_id=clip_id,
@@ -1067,19 +1397,17 @@ def ingest(ctx: StageContext) -> Manifest:
     return Manifest(clips=clips)
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [ ] **Step 15: Run every test written so far**
 
-Run: `uv run pytest tests/test_ffmpeg.py tests/test_stage_ingest.py -v`
-Expected: 7 passed
+Run: `uv run pytest -v`
+Expected: all tests pass (25 from Tasks 1-3 plus 21 new)
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 16: Commit**
 
 ```bash
-git add videoai/core/ffmpeg.py videoai/core/models.py videoai/stages/s01_ingest.py tests/conftest.py tests/test_ffmpeg.py tests/test_stage_ingest.py
-git commit -m "feat: ffmpeg helpers and ingest stage"
+git add videoai/core/ffmpeg.py videoai/core/project.py videoai/core/models.py videoai/stages/s01_ingest.py tests/conftest.py tests/test_ffmpeg.py tests/test_project.py tests/test_stage_ingest.py pyproject.toml uv.lock
+git commit -m "feat: ffmpeg helpers, project layout resolution and ingest stage"
 ```
-
----
 
 ### Task 5: Quality gate stage
 
