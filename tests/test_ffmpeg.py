@@ -1,4 +1,7 @@
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from videoai.core.ffmpeg import (
     extract_audio,
@@ -61,3 +64,67 @@ def test_list_video_files_sorts_and_filters(tmp_path: Path, make_clip):
 
 def test_list_video_files_on_missing_directory_returns_empty(tmp_path: Path):
     assert list_video_files(tmp_path / "nope") == []
+
+
+def test_probe_raises_when_duration_metadata_is_missing(tmp_path: Path):
+    # A raw H.264 elementary stream (no container) has no format.duration; ffprobe
+    # reports width/height/r_frame_rate but omits "duration" from the format section.
+    raw = tmp_path / "raw.h264"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "h264",
+            str(raw),
+        ],
+        check=True,
+    )
+
+    with pytest.raises(RuntimeError, match="duration"):
+        probe(raw)
+
+
+def test_extract_audio_failure_leaves_no_partial_or_temp_file(tmp_path: Path):
+    bad_input = tmp_path / "not-a-video.mp4"
+    bad_input.write_text("this is not video data", encoding="utf-8")
+    dst = tmp_path / "out" / "a.wav"
+
+    with pytest.raises(RuntimeError):
+        extract_audio(bad_input, dst)
+
+    assert not dst.exists()
+    assert list(dst.parent.iterdir()) == []
+
+
+def test_extract_audio_success_leaves_only_the_destination_file(make_clip, tmp_path: Path):
+    clip = make_clip("a.mp4", seconds=2.0)
+    dst = tmp_path / "out" / "a.wav"
+
+    extract_audio(clip, dst)
+
+    assert dst.exists() and dst.stat().st_size > 1000
+    assert [path.name for path in dst.parent.iterdir()] == [dst.name]
+
+
+def test_make_proxy_failure_leaves_no_partial_or_temp_file(tmp_path: Path):
+    bad_input = tmp_path / "not-a-video.mp4"
+    bad_input.write_text("this is not video data", encoding="utf-8")
+    dst = tmp_path / "out" / "a-proxy.mp4"
+
+    with pytest.raises(RuntimeError):
+        make_proxy(bad_input, dst, height=240)
+
+    assert not dst.exists()
+    assert list(dst.parent.iterdir()) == []
+
+
+def test_extract_frame_failure_leaves_no_partial_or_temp_file(tmp_path: Path):
+    bad_input = tmp_path / "not-a-video.mp4"
+    bad_input.write_text("this is not video data", encoding="utf-8")
+    dst = tmp_path / "frames" / "f.jpg"
+
+    with pytest.raises(RuntimeError):
+        extract_frame(bad_input, at=1.0, dst=dst, height=180)
+
+    assert not dst.exists()
+    assert list(dst.parent.iterdir()) == []

@@ -50,7 +50,7 @@ def read_brief(project_dir: Path) -> str:
         for path in sorted(description.iterdir()):
             if (
                 path.is_file()
-                and not path.name.startswith((".", "._"))
+                and not path.name.startswith(".")
                 and path.suffix.lower() in BRIEF_SUFFIXES
             ):
                 parts.append(_read_one(path))

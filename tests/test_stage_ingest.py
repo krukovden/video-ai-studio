@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 from videoai.config import Config
@@ -77,6 +78,30 @@ def test_ingest_is_idempotent_and_reuses_existing_media(tmp_path: Path, make_cli
 
     assert second.clips[0].proxy_path == first.clips[0].proxy_path
     assert Path(second.clips[0].proxy_path).stat().st_mtime_ns == marker
+
+
+def test_ingest_handles_clip_without_audio_stream(tmp_path: Path):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    video_only = clips / "a.mp4"
+    # make_clip always adds a tone track, so build a video-only source directly.
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            str(video_only),
+        ],
+        check=True,
+    )
+
+    manifest = ingest(_context(project))
+
+    clip = manifest.clips[0]
+    assert clip.has_audio is False
+    assert clip.audio_path is None
+    assert Path(clip.proxy_path).exists()
 
 
 def test_ingest_raises_when_no_clips_found(tmp_path: Path):
