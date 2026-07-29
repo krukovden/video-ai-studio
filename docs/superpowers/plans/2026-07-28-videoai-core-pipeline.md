@@ -4409,6 +4409,7 @@ def render_draft(ctx: StageContext) -> DraftResult:
 from videoai.stages import (  # noqa: F401
     s01_ingest,
     s02_quality,
+    s02b_sync,
     s03_transcribe,
     s04_analyze,
     s05_plan,
@@ -4516,7 +4517,7 @@ def test_second_run_skips_cached_stages(tmp_path: Path, make_clip, monkeypatch):
 def test_stages_command_lists_pipeline_order():
     result = runner.invoke(app, ["stages"])
     assert result.exit_code == 0
-    for stage_id in ("ingest", "quality", "transcribe", "analyze", "plan", "render_draft"):
+    for stage_id in ("ingest", "quality", "sync", "transcribe", "analyze", "plan", "render_draft"):
         assert stage_id in result.output
 ```
 
