@@ -91,8 +91,8 @@ Seven stages run in order, each reading and writing artifacts under `work/`:
 | quality | `02-quality` | Flags unusable footage (blur, motion) before any model sees it |
 | sync | `01b-sync` | Groups clips by camera, places every camera on one shared timeline, picks the camera to transcribe |
 | transcribe | `03-transcript` | Verbatim, word-level speech-to-text |
-| analyze | `04-analysis` | Scores every phrase for delivery, visual interest and shorts potential |
-| plan | `05-timeline` | Selects and orders phrases into sections, following the brief's arc when one is given |
+| analyze | `04-analysis` | Scores every phrase for delivery, visual interest and shorts potential; also lists the clips too quiet to carry speech as silent visual inserts |
+| plan | `05-timeline` | Selects and orders phrases into sections, following the brief's arc when one is given, and cuts silent inserts in where they show what the child is talking about |
 | render_draft | `06-draft` | Cuts the draft video with ffmpeg, with audio fades at every cut |
 
 See [`docs/state/STACK.md`](docs/state/STACK.md) for what runs each stage today
@@ -103,6 +103,6 @@ raise quality at each stage.
 
 - `videoai/stages/` — one file per stage; each reads and writes artifacts only
 - `videoai/providers/` — swappable implementations (local, subscription, paid)
-- `videoai/logic/` — pure functions: phrases, take detection, sync, timeline, validation
+- `videoai/logic/` — pure functions: phrases, take detection, sync, inserts, timeline, validation
 - `projects/<name>/work/` — artifacts and cache; safe to delete, everything rebuilds
 - `docs/state/` — what the stack is now and how to upgrade it

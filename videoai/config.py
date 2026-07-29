@@ -28,6 +28,10 @@ class AnalyzeSettings(BaseModel):
     max_keyframes: int = 60
     llm_model: str = "sonnet"
     llm_timeout_seconds: int = 600
+    # Below this many words per second a clip counts as a silent visual insert:
+    # footage with no narration to select it by, offered to the planner as a shot
+    # rather than as a line.
+    insert_max_words_per_second: float = 0.5
 
 
 class RenderSettings(BaseModel):

@@ -78,3 +78,15 @@ def test_plan_settings_are_immutable():
     settings = PlanSettings()
     with pytest.raises(Exception):
         settings.exclude_phrases = ["x"]
+
+
+def test_load_config_default_insert_threshold(tmp_path: Path):
+    config = load_config(tmp_path / "nope.yaml")
+    assert config.analyze.insert_max_words_per_second == 0.5
+
+
+def test_load_config_overrides_insert_threshold(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    path.write_text("analyze:\n  insert_max_words_per_second: 0.2\n", encoding="utf-8")
+    config = load_config(path)
+    assert config.analyze.insert_max_words_per_second == 0.2

@@ -104,7 +104,14 @@ def test_configured_model_reaches_the_claude_cli_invocation(monkeypatch):
 def test_analyze_stage_resolves_the_llm_with_the_configured_model(tmp_path, monkeypatch):
     """The stage, not just the resolver, has to hand the setting over."""
     from videoai.config import AnalyzeSettings, Config
-    from videoai.core.models import Analysis, ClipInfo, Manifest, QualityReport, Transcript
+    from videoai.core.models import (
+        Analysis,
+        ClipInfo,
+        Manifest,
+        QualityReport,
+        SyncMap,
+        Transcript,
+    )
     from videoai.core.registry import StageContext
     from videoai.core.store import ArtifactStore
     from videoai.providers.llm_mock import MockLLM
@@ -139,6 +146,7 @@ def test_analyze_stage_resolves_the_llm_with_the_configured_model(tmp_path, monk
         fps=30.0, has_audio=True,
     )])
     ctx.store.write("01-manifest", manifest, fingerprint="fp")
+    ctx.store.write("01b-sync", SyncMap(), fingerprint="fp")
     ctx.store.write("02-quality", QualityReport(), fingerprint="fp")
     ctx.store.write("03-transcript", Transcript(provider="mock"), fingerprint="fp")
     ctx.store.write("04-analysis", Analysis(provider="mock"), fingerprint="fp")

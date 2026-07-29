@@ -1,3 +1,5 @@
+import pytest
+
 from videoai.core.models import (
     Analysis,
     ClipInfo,
@@ -287,3 +289,122 @@ def test_build_timeline_never_produces_a_timeline_its_own_validator_rejects():
     timeline = build_timeline(plan, analysis, manifest, transcript, padding=0.15, fps=30.0)
     violations = validate_timeline(timeline, manifest, transcript)
     assert violations == []
+
+
+# --- Silent visual inserts: footage with no narration, which the phrase-based
+# selection could never reach, placed by `insert:<clip_id>` references ---
+
+
+def _insert_manifest() -> Manifest:
+    return Manifest(clips=[
+        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0, width=1920,
+                 height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0, width=1920,
+                 height=1080, fps=30.0, has_audio=True),
+        ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0, width=1920,
+                 height=1080, fps=30.0, has_audio=True),
+    ])
+
+
+def _insert_plan(*references: str) -> StoryPlan:
+    return StoryPlan(
+        sections=[PlanSection(name="Popping", goal="show the bubble",
+                              phrase_ids=list(references))],
+        title="T", description="D", tags=[],
+    )
+
+
+def test_bare_insert_reference_covers_the_whole_clip():
+    timeline = build_timeline(
+        _insert_plan("insert:clip-10"), _analysis(), _insert_manifest(), _transcript(),
+        padding=0.15, fps=30.0,
+    )
+    clip = timeline.clips[0]
+    assert clip.src == "clip-10"
+    assert clip.offset == 0.0
+    assert abs(clip.dur - 7.0) < 1e-6
+    assert clip.is_insert is True
+    assert clip.quote == ""
+    assert "visual insert" in clip.reason
+    assert clip.beat == "Popping"
+    assert abs(clip.core_dur - 7.0) < 1e-6
+
+
+def test_ranged_insert_reference_covers_exactly_that_span():
+    timeline = build_timeline(
+        _insert_plan("insert:clip-10@2-5"), _analysis(), _insert_manifest(), _transcript(),
+        padding=0.15, fps=30.0,
+    )
+    clip = timeline.clips[0]
+    assert clip.offset == 2.0
+    assert abs(clip.dur - 3.0) < 1e-6
+    assert abs(clip.core_dur - 3.0) < 1e-6
+    assert clip.is_insert is True
+
+
+def test_insert_is_not_padded_at_word_boundaries():
+    """Padding pushes a speech cut into neighbouring silence; an insert has no
+    words at either edge, so its span is used exactly as asked for."""
+    timeline = build_timeline(
+        _insert_plan("insert:clip-10@2-5"), _analysis(), _insert_manifest(), _transcript(),
+        padding=0.5, fps=30.0,
+    )
+    clip = timeline.clips[0]
+    assert clip.offset == 2.0
+    assert abs(clip.offset + clip.dur - 5.0) < 1e-6
+
+
+def test_unknown_insert_clip_id_raises_naming_the_reference():
+    with pytest.raises(RuntimeError) as error:
+        build_timeline(
+            _insert_plan("insert:clip-77"), _analysis(), _insert_manifest(), _transcript(),
+            padding=0.15, fps=30.0,
+        )
+    assert "insert:clip-77" in str(error.value)
+
+
+def test_insert_range_past_the_end_of_the_clip_raises_naming_the_reference():
+    with pytest.raises(RuntimeError) as error:
+        build_timeline(
+            _insert_plan("insert:clip-10@4-12"), _analysis(), _insert_manifest(),
+            _transcript(), padding=0.15, fps=30.0,
+        )
+    assert "insert:clip-10@4-12" in str(error.value)
+
+
+def test_inverted_insert_range_raises_naming_the_reference():
+    with pytest.raises(RuntimeError) as error:
+        build_timeline(
+            _insert_plan("insert:clip-10@5-2"), _analysis(), _insert_manifest(),
+            _transcript(), padding=0.15, fps=30.0,
+        )
+    assert "insert:clip-10@5-2" in str(error.value)
+
+
+def test_speech_and_inserts_share_one_contiguous_timeline():
+    plan = StoryPlan(
+        sections=[
+            PlanSection(name="Hook", goal="open", phrase_ids=["clip-01#001"]),
+            PlanSection(name="Popping", goal="show it",
+                        phrase_ids=["insert:clip-10@2-5", "clip-02#001"]),
+        ],
+        title="T", description="D", tags=[],
+    )
+    timeline = build_timeline(
+        plan, _analysis(), _insert_manifest(), _transcript(), padding=0.15, fps=30.0
+    )
+
+    assert [clip.src for clip in timeline.clips] == ["clip-01", "clip-10", "clip-02"]
+    assert [clip.is_insert for clip in timeline.clips] == [False, True, False]
+    position = 0.0
+    for clip in timeline.clips:
+        assert abs(clip.start - position) < 1e-6
+        position += clip.dur
+
+
+def test_insert_takes_the_gain_configured_for_its_beat():
+    timeline = build_timeline(
+        _insert_plan("insert:clip-10"), _analysis(), _insert_manifest(), _transcript(),
+        padding=0.15, fps=30.0, gain_db_by_beat={"Popping": -6.0},
+    )
+    assert timeline.clips[0].gain_db == -6.0

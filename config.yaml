@@ -17,6 +17,9 @@ analyze:
   keyframes_per_phrase: 1
   llm_model: sonnet
   llm_timeout_seconds: 600
+  # Clips quieter than this (words per second) are offered to the planner as
+  # silent visual inserts. A clip with no words at all always qualifies.
+  insert_max_words_per_second: 0.5
 
 render:
   draft_height: 720

@@ -395,3 +395,95 @@ def test_cached_keyframes_are_not_reused_across_sources(tmp_path: Path, make_cli
 
     assert probe(after[0]).width == 640  # 16:9 scaled to height 360
     assert after[0] != before[0]
+
+
+# --- Silent visual inserts: clips with (almost) no narration are recorded in the
+# analysis artifact, because nothing phrase-based downstream could ever find them ---
+
+
+def _seed_with_a_silent_clip(ctx: StageContext) -> None:
+    ctx.store.write(
+        "01-manifest",
+        Manifest(clips=[
+            # 3 words over 10s (0.3 words/s) is below the 0.5 default.
+            ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=10.0, width=320,
+                     height=240, fps=30.0, has_audio=True),
+            # 3 words over 2s (1.5 words/s) is ordinary narration.
+            ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=2.0, width=320,
+                     height=240, fps=30.0, has_audio=True),
+            # The close-up of the bubble popping: nobody says anything.
+            ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0, width=320,
+                     height=240, fps=30.0, has_audio=True),
+        ]),
+        fingerprint="fp",
+    )
+    ctx.store.write(
+        "02-quality",
+        QualityReport(clips=[
+            ClipQuality(clip_id=clip_id, blur=0.1, motion=0.2, black_ratio=0.0, usable=True)
+            for clip_id in ("clip-01", "clip-02", "clip-10")
+        ]),
+        fingerprint="fp",
+    )
+    words = [
+        Word(text="Look", start=0.0, end=0.3),
+        Word(text="here", start=0.35, end=0.7),
+        Word(text="Wow", start=2.0, end=2.4),
+    ]
+    ctx.store.write(
+        "03-transcript",
+        Transcript(provider="mock", clips=[
+            ClipTranscript(clip_id="clip-01", words=words),
+            ClipTranscript(clip_id="clip-02", words=words),
+            ClipTranscript(clip_id="clip-10", words=[]),
+        ]),
+        fingerprint="fp",
+    )
+
+
+def _payload_for(*phrase_ids: str) -> dict:
+    return {"segments": [
+        {"phrase_id": phrase_id, "content": "x", "delivery_score": 7, "visual_score": 7,
+         "emotion": "calm", "is_failed_take": False, "shorts_candidate": False}
+        for phrase_id in phrase_ids
+    ]}
+
+
+def test_quiet_and_silent_clips_are_recorded_as_inserts(tmp_path: Path, monkeypatch):
+    ctx = _context(tmp_path, monkeypatch, _payload_for(
+        "clip-01#001", "clip-01#002", "clip-02#001", "clip-02#002",
+    ))
+    _seed_with_a_silent_clip(ctx)
+
+    result = analyze(ctx)
+
+    inserts = {insert.clip_id: insert for insert in result.inserts}
+    assert "clip-01" in inserts  # 0.3 words/s, below the threshold
+    assert "clip-10" in inserts  # no words at all
+    assert "clip-02" not in inserts  # 1.5 words/s, ordinary narration
+    assert abs(inserts["clip-01"].speech_density - 0.3) < 1e-6
+    assert inserts["clip-10"].duration == 7.0
+    assert inserts["clip-10"].speech_density == 0.0
+
+
+def test_insert_threshold_is_configurable(tmp_path: Path, monkeypatch):
+    ctx = _context(tmp_path, monkeypatch, _payload_for(
+        "clip-01#001", "clip-01#002", "clip-02#001", "clip-02#002",
+    ))
+    _seed_with_a_silent_clip(ctx)
+    ctx = StageContext(
+        project_dir=ctx.project_dir,
+        input_dir=ctx.input_dir,
+        work_dir=ctx.work_dir,
+        output_dir=ctx.output_dir,
+        config=Config(
+            providers={"asr": "mock", "llm": "mock"},
+            analyze=AnalyzeSettings(insert_max_words_per_second=0.1),
+        ),
+        store=ctx.store,
+    )
+
+    result = analyze(ctx)
+
+    # Only the wordless clip survives a threshold below clip-01's 0.3 words/s.
+    assert [insert.clip_id for insert in result.inserts] == ["clip-10"]

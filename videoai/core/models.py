@@ -164,9 +164,23 @@ class SegmentAnalysis(BaseModel):
     scored: bool = True
 
 
+class InsertClip(BaseModel):
+    """A clip nobody narrates: a silent visual shot the planner may cut in.
+
+    Selection downstream is phrase-based, so a clip carrying no speech has no
+    phrase to be chosen by and could never reach the timeline on its own.
+    """
+
+    clip_id: str
+    duration: float
+    recorded_at: float | None = None
+    speech_density: float = 0.0
+
+
 class Analysis(BaseModel):
     provider: str
     segments: list[SegmentAnalysis] = Field(default_factory=list)
+    inserts: list[InsertClip] = Field(default_factory=list)
 
     def by_phrase(self, phrase_id: str) -> SegmentAnalysis:
         for segment in self.segments:
@@ -199,6 +213,9 @@ class TimelineClip(BaseModel):
     angles: list[str] = Field(default_factory=list)
     core_dur: float = 0.0
     gain_db: float = 0.0
+    # A silent visual insert rather than a line of speech. Rules that only make
+    # sense against words (word-boundary cuts, quote anchoring) do not apply to it.
+    is_insert: bool = False
 
 
 class Timeline(BaseModel):

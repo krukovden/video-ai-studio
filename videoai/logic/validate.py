@@ -120,6 +120,12 @@ def validate_timeline(
             )
         expected_position += clip.dur
 
+        # A silent visual insert is exempt from the two speech rules only: it has
+        # no words to cut inside and no quote to re-anchor. Every other rule above
+        # — contiguity, source bounds, minimum durations, geometry — still applies.
+        if clip.is_insert:
+            continue
+
         words = transcript.by_id(clip.src).words if clip.src in known_transcripts else []
         cut_in, cut_out = clip.offset, clip.offset + clip.dur
         for word in words:

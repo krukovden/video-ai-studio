@@ -18,6 +18,7 @@ from videoai.core.models import (
 from videoai.core.project import read_brief
 from videoai.core.registry import StageContext, stage
 from videoai.core.store import hash_parts
+from videoai.logic.inserts import detect_inserts
 from videoai.logic.phrases import build_phrases, pack_transcript
 from videoai.logic.takes import detect_take_groups
 from videoai.providers.base import resolve_llm
@@ -202,6 +203,7 @@ def _score_segment(phrase: Phrase, item: dict | None, takes: TakeGroups) -> Segm
         "analyze.keyframes_per_phrase",
         "analyze.max_keyframes",
         "analyze.llm_model",
+        "analyze.insert_max_words_per_second",
     ),
     prompt=INSTRUCTIONS,
 )
@@ -260,4 +262,9 @@ def analyze(ctx: StageContext) -> Analysis:
         )
 
     segments = [_score_segment(phrase, scored.get(phrase.phrase_id), takes) for phrase in index.phrases]
-    return Analysis(provider=provider.name, segments=segments)
+    # Insert candidates are measured, not scored: the model is asked about phrases,
+    # and these clips have no phrase to ask about.
+    inserts = detect_inserts(
+        manifest, transcript, ctx.config.analyze.insert_max_words_per_second
+    )
+    return Analysis(provider=provider.name, segments=segments, inserts=inserts)

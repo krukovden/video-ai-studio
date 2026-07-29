@@ -6,11 +6,13 @@ from videoai.core.models import (
     Manifest,
     PlanSection,
     StoryPlan,
+    SyncMap,
     Timeline,
     Transcript,
 )
 from videoai.core.project import read_brief
 from videoai.core.registry import StageContext, stage
+from videoai.logic.inserts import is_insert_ref, resolve_insert_ref
 from videoai.logic.timeline import build_timeline
 from videoai.logic.validate import validate_timeline
 from videoai.providers.base import resolve_llm
@@ -50,6 +52,24 @@ Rules:
   the list below entirely. If a moment you would expect to see is missing, that
   is why: do not try to reconstruct it from neighbouring phrases or invent a
   replacement for it.
+
+Silent visual inserts:
+- Some clips carry no narration at all. They are listed separately below, under
+  "Silent visual inserts", with their length and where they sit in the recording
+  relative to the narrated phrases. Nobody speaks on them: they are what the
+  camera saw, usually shot close up.
+- They exist to be cut in where they show what the child is talking about. A
+  close-up of the thing happening is often worth more than another line about it,
+  so use them.
+- Place one by putting "insert:<clip_id>" into a section's phrase_ids, at the
+  position in the sequence where it should appear — for example
+  "phrase_ids": ["clip-01#004", "insert:clip-10", "clip-01#005"].
+- Write "insert:<clip_id>@<start>-<end>", with times in seconds measured inside
+  that clip, to use only that part of it: "insert:clip-12@4-7".
+- Keep inserts short. Two to five seconds is usually right. Trim a long insert to
+  its best moment with the ranged form rather than using all of it.
+- Use only clip ids from the insert list, and keep each insert's range inside the
+  clip's own length.
 """
 
 
@@ -76,10 +96,57 @@ def _segments_view(analysis: Analysis, excluded: set[str]) -> str:
     return "\n".join(lines)
 
 
+def _global_start(sync: SyncMap, clip_id: str) -> float | None:
+    """Where this clip sits on the project-wide timeline, or None when sync never
+    placed it (a clip added after the sync map was written)."""
+    try:
+        return sync.by_id(clip_id).global_start
+    except KeyError:
+        return None
+
+
+def _inserts_view(analysis: Analysis, sync: SyncMap, excluded: set[str]) -> str:
+    """List every insert clip with its length and its place in recording order.
+
+    "Between these two phrases" is the only handle the planner has on a clip with
+    no words: it cannot read the clip, so the neighbouring narration is what tells
+    it which moment of the shoot this shot belongs to.
+    """
+    narrated: list[tuple[float, str]] = []
+    for segment in analysis.segments:
+        if segment.phrase_id in excluded:
+            continue
+        origin = _global_start(sync, segment.clip_id)
+        if origin is None:
+            continue
+        narrated.append((origin + segment.start, segment.phrase_id))
+    narrated.sort()
+
+    lines: list[str] = []
+    for insert in analysis.inserts:
+        origin = _global_start(sync, insert.clip_id)
+        where = "recording position unknown"
+        if origin is not None:
+            before = [name for at, name in narrated if at <= origin]
+            after = [name for at, name in narrated if at >= origin + insert.duration]
+            parts = []
+            if before:
+                parts.append(f"after {before[-1]}")
+            if after:
+                parts.append(f"before {after[0]}")
+            if parts:
+                where = "recorded " + " and ".join(parts)
+        lines.append(
+            f"insert:{insert.clip_id} ({insert.duration:.1f}s, "
+            f"{insert.speech_density:.2f} words/s) - {where}"
+        )
+    return "\n".join(lines)
+
+
 @stage(
     id="plan",
     produces="05-timeline",
-    requires=("01-manifest", "03-transcript", "04-analysis"),
+    requires=("01-manifest", "01b-sync", "03-transcript", "04-analysis"),
     provider_key="llm",
     model=Timeline,
     uses_brief=True,
@@ -93,17 +160,25 @@ def _segments_view(analysis: Analysis, excluded: set[str]) -> str:
 )
 def plan(ctx: StageContext) -> Timeline:
     manifest = ctx.store.read("01-manifest", Manifest)
+    sync_map = ctx.store.read("01b-sync", SyncMap)
     transcript = ctx.store.read("03-transcript", Transcript)
     analysis = ctx.store.read("04-analysis", Analysis)
 
     brief = read_brief(ctx.project_dir)
     excluded = set(ctx.config.plan.exclude_phrases)
 
+    inserts_view = _inserts_view(analysis, sync_map, excluded)
     provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
     prompt = "\n\n".join([
         INSTRUCTIONS,
         f"Creator brief:\n{brief}" if brief.strip() else "",
         f"Phrases:\n{_segments_view(analysis, excluded)}",
+        (
+            "Silent visual inserts (no narration on them at all - just what the "
+            f"camera saw):\n{inserts_view}"
+            if inserts_view
+            else ""
+        ),
     ]).strip()
     response = provider.complete_json(prompt, [], ctx.config.analyze.llm_timeout_seconds)
 
@@ -131,6 +206,11 @@ def plan(ctx: StageContext) -> Timeline:
     known = {segment.phrase_id for segment in analysis.segments}
     for section in story.sections:
         for phrase_id in section.phrase_ids:
+            if is_insert_ref(phrase_id):
+                # Raises a RuntimeError naming the reference for an unknown clip
+                # id, an inverted range, or one reaching past the clip's end.
+                resolve_insert_ref(phrase_id, manifest)
+                continue
             if phrase_id in excluded:
                 raise RuntimeError(
                     f"planner referenced excluded phrase id {phrase_id!r} in section "
