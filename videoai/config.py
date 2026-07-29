@@ -23,6 +23,7 @@ class AnalyzeSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     keyframes_per_phrase: int = 1
+    max_keyframes: int = 60
     llm_model: str = "sonnet"
     llm_timeout_seconds: int = 600
 

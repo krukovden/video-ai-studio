@@ -27,7 +27,13 @@ def _extract_json(text: str) -> dict:
         match = re.search(r"\{.*\}", text, flags=re.DOTALL)
         if not match:
             raise ValueError(f"no JSON object found in model reply: {text[:300]}")
-        return json.loads(match.group(0))
+        # The greedy match can span two sibling JSON objects (e.g. "{...} and {...}"),
+        # which is not valid JSON on its own; surface that as the same diagnostic
+        # ValueError rather than letting a raw JSONDecodeError escape.
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"could not parse JSON out of model reply: {text[:300]}") from exc
 
 
 class ClaudeCliLLM:
@@ -40,18 +46,21 @@ class ClaudeCliLLM:
         if images:
             listing = "\n".join(f"- {path}" for path in images)
             prompt = f"{prompt}\n\nReference frames (read them if useful):\n{listing}"
-        result = subprocess.run(
-            [
-                "claude", "-p", prompt,
-                "--output-format", "json",
-                "--model", self.model,
-                "--system-prompt", SYSTEM_PROMPT,
-                "--strict-mcp-config",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    "claude", "-p", prompt,
+                    "--output-format", "json",
+                    "--model", self.model,
+                    "--system-prompt", SYSTEM_PROMPT,
+                    "--strict-mcp-config",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"claude CLI timed out after {timeout} seconds") from exc
         if result.returncode != 0:
             raise RuntimeError(f"claude CLI failed: {result.stderr.strip()[:500]}")
         envelope = json.loads(result.stdout)

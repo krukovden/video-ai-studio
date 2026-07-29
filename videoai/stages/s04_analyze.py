@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from videoai.config import AnalyzeSettings
 from videoai.core.ffmpeg import extract_frame
 from videoai.core.models import (
     Analysis,
     Manifest,
+    Phrase,
     PhraseIndex,
     QualityReport,
     SegmentAnalysis,
@@ -74,10 +76,24 @@ def build_analysis_prompt(
     return "\n\n".join(sections)
 
 
-def _keyframes(ctx: StageContext, manifest: Manifest, index: PhraseIndex) -> list[Path]:
+def _keyframes(
+    ctx: StageContext, manifest: Manifest, index: PhraseIndex, settings: AnalyzeSettings
+) -> tuple[list[Path], bool]:
+    """Extract at most one cached frame per phrase, capped at `max_keyframes`.
+
+    Returns the frame paths plus whether the cap cut the list short, so the
+    caller can tell the model it is looking at a sample rather than everything.
+    `keyframes_per_phrase == 0` disables extraction entirely.
+    """
+    if settings.keyframes_per_phrase <= 0:
+        return [], False
     frames_dir = ctx.work_dir / "keyframes"
     paths: list[Path] = []
+    truncated = False
     for phrase in index.phrases:
+        if len(paths) >= settings.max_keyframes:
+            truncated = True
+            break
         clip = manifest.by_id(phrase.clip_id)
         target = frames_dir / f"{phrase.phrase_id.replace('#', '-')}.jpg"
         if not target.exists():
@@ -86,7 +102,79 @@ def _keyframes(ctx: StageContext, manifest: Manifest, index: PhraseIndex) -> lis
                 extract_frame(source, at=(phrase.start + phrase.end) / 2, dst=target)
         if target.exists():
             paths.append(target)
-    return paths
+    return paths, truncated
+
+
+def _coerce_score(value: object) -> tuple[int, bool]:
+    """Parse a 1..10 delivery/visual score defensively.
+
+    Returns (score, was_parsed). A missing, null, or unparseable value falls back
+    to the neutral 5 with was_parsed=False, so the caller can mark the segment
+    unscored instead of confusing a parse failure with a genuine middling score.
+    In-range-but-wrong values (e.g. 15) are clamped rather than rejected.
+    """
+    if value is None:
+        return 5, False
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        try:
+            score = int(float(value))
+        except (TypeError, ValueError):
+            return 5, False
+    return max(1, min(10, score)), True
+
+
+def _coerce_bool(value: object, default: bool) -> bool:
+    """Parse a boolean field defensively.
+
+    Real booleans pass through; "true"/"false" strings are recognised
+    case-insensitively (bool("false") would otherwise be True, silently
+    inverting is_failed_take); anything else falls back to `default`.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return default
+
+
+def _score_segment(phrase: Phrase, item: dict | None, takes: TakeGroups) -> SegmentAnalysis:
+    take_group = takes.group_of(phrase.phrase_id)
+    if item is None:
+        # The model never answered about this phrase at all: neutral defaults,
+        # but scored=False so a genuine middling score can't be confused with silence.
+        return SegmentAnalysis(
+            phrase_id=phrase.phrase_id,
+            clip_id=phrase.clip_id,
+            start=phrase.start,
+            end=phrase.end,
+            text=phrase.text,
+            take_group=take_group,
+            scored=False,
+        )
+    delivery_score, delivery_ok = _coerce_score(item.get("delivery_score"))
+    visual_score, visual_ok = _coerce_score(item.get("visual_score"))
+    return SegmentAnalysis(
+        phrase_id=phrase.phrase_id,
+        clip_id=phrase.clip_id,
+        start=phrase.start,
+        end=phrase.end,
+        text=phrase.text,
+        content=item.get("content", ""),
+        delivery_score=delivery_score,
+        visual_score=visual_score,
+        emotion=item.get("emotion", "neutral"),
+        speaker=item.get("speaker", "unclear"),
+        is_failed_take=_coerce_bool(item.get("is_failed_take"), False),
+        take_group=take_group,
+        shorts_candidate=_coerce_bool(item.get("shorts_candidate"), False),
+        scored=delivery_ok and visual_ok,
+    )
 
 
 @stage(
@@ -109,36 +197,46 @@ def analyze(ctx: StageContext) -> Analysis:
 
     provider = resolve_llm(ctx.config.providers["llm"])
     prompt = build_analysis_prompt(pack_transcript(index), takes, quality, read_brief(ctx.project_dir))
-    response = provider.complete_json(
-        prompt, _keyframes(ctx, manifest, index), ctx.config.analyze.llm_timeout_seconds
-    )
+    frames, truncated = _keyframes(ctx, manifest, index, ctx.config.analyze)
+    if truncated:
+        prompt += (
+            f"\n\nNote: only the first {ctx.config.analyze.max_keyframes} reference frames "
+            "are attached (capped); treat them as a sample of the footage, not full coverage."
+        )
+    response = provider.complete_json(prompt, frames, ctx.config.analyze.llm_timeout_seconds)
 
     known = {phrase.phrase_id for phrase in index.phrases}
+
+    # A silent failure here (missing/empty/truncated segments) would still return
+    # an Analysis full of plausible-looking neutral defaults, which downstream
+    # stages would use to make real cut decisions. Fail loudly instead.
+    raw_segments = response.get("segments")
+    if raw_segments is None:
+        raise RuntimeError("LLM reply is missing the 'segments' key")
+    if not isinstance(raw_segments, list):
+        raise RuntimeError(
+            f"LLM reply 'segments' must be a list, got {type(raw_segments).__name__}"
+        )
+    if not raw_segments and known:
+        raise RuntimeError(
+            f"LLM reply has an empty segments list but {len(known)} phrases were expected"
+        )
+
     scored: dict[str, dict] = {}
-    for item in response.get("segments", []):
+    for item in raw_segments:
         phrase_id = item.get("phrase_id")
         if phrase_id not in known:
             raise ValueError(f"model returned an unknown phrase_id: {phrase_id}")
         scored[phrase_id] = item
 
-    segments: list[SegmentAnalysis] = []
-    for phrase in index.phrases:
-        item = scored.get(phrase.phrase_id, {})
-        segments.append(
-            SegmentAnalysis(
-                phrase_id=phrase.phrase_id,
-                clip_id=phrase.clip_id,
-                start=phrase.start,
-                end=phrase.end,
-                text=phrase.text,
-                content=item.get("content", ""),
-                delivery_score=int(item.get("delivery_score", 5)),
-                visual_score=int(item.get("visual_score", 5)),
-                emotion=item.get("emotion", "neutral"),
-                speaker=item.get("speaker", "unclear"),
-                is_failed_take=bool(item.get("is_failed_take", False)),
-                take_group=takes.group_of(phrase.phrase_id),
-                shorts_candidate=bool(item.get("shorts_candidate", False)),
-            )
+    # A reply covering only a fraction of the phrases looks like success (every
+    # scored phrase has real values) but silently drops the rest to neutral
+    # defaults; a truncated reply is worse than no reply because it hides.
+    if known and len(scored) * 2 < len(known):
+        raise RuntimeError(
+            f"LLM reply answered only {len(scored)} of {len(known)} phrases "
+            "(fewer than half) - treating a truncated reply as a failure"
         )
+
+    segments = [_score_segment(phrase, scored.get(phrase.phrase_id), takes) for phrase in index.phrases]
     return Analysis(provider=provider.name, segments=segments)

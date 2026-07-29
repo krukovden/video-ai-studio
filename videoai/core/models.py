@@ -157,6 +157,7 @@ class SegmentAnalysis(BaseModel):
     is_failed_take: bool = False
     take_group: str | None = None
     shorts_candidate: bool = False
+    scored: bool = True
 
 
 class Analysis(BaseModel):
