@@ -1418,7 +1418,7 @@ git commit -m "feat: ffmpeg helpers, project layout resolution and ingest stage"
 
 **Interfaces:**
 - Consumes: `Manifest` artifact `01-manifest` (Task 4); `probe`, `extract_frame`.
-- Produces: models `ClipQuality` (fields `clip_id: str`, `blur: float`, `shake: float`, `black_ratio: float`, `usable: bool`) and `QualityReport` (`clips: list[ClipQuality]`, method `by_id`); stage id `quality`, artifact `02-quality`.
+- Produces: models `ClipQuality` (fields `clip_id: str`, `blur: float`, `motion: float`, `black_ratio: float`, `usable: bool`, `scored: bool`) and `QualityReport` (`clips: list[ClipQuality]`, method `by_id`); stage id `quality`, artifact `02-quality`.
 
 Blur is the mean Laplacian variance across sampled frames, inverted and normalised to 0..1 where higher means blurrier. Shake is the mean absolute difference between consecutive sampled frames, normalised to 0..1.
 
@@ -1528,7 +1528,7 @@ Expected: FAIL with `ImportError: cannot import name 'QualityReport'`
 class ClipQuality(BaseModel):
     clip_id: str
     blur: float
-    shake: float
+    motion: float
     black_ratio: float
     usable: bool
 
@@ -1580,7 +1580,8 @@ def _sample_frames(path: Path, duration: float, count: int) -> list[np.ndarray]:
 def _score_clip(clip_id: str, path: Path, duration: float) -> ClipQuality:
     frames = _sample_frames(path, duration, SAMPLE_COUNT)
     if not frames:
-        return ClipQuality(clip_id=clip_id, blur=1.0, shake=0.0, black_ratio=1.0, usable=False)
+        return ClipQuality(clip_id=clip_id, blur=0.0, motion=0.0, black_ratio=0.0,
+                           usable=False, scored=False)
 
     sharpness = [float(cv2.Laplacian(frame, cv2.CV_64F).var()) for frame in frames]
     blur = 1.0 - min(1.0, float(np.mean(sharpness)) / BLUR_REFERENCE)
@@ -1589,12 +1590,12 @@ def _score_clip(clip_id: str, path: Path, duration: float) -> ClipQuality:
         float(np.mean(np.abs(frames[i].astype(np.int16) - frames[i - 1].astype(np.int16))))
         for i in range(1, len(frames))
     ]
-    shake = min(1.0, float(np.mean(differences)) / 64.0) if differences else 0.0
+    motion = min(1.0, float(np.mean(differences)) / 64.0) if differences else 0.0
 
     black_ratio = sum(1 for frame in frames if float(np.mean(frame)) < BLACK_LUMA_THRESHOLD) / len(frames)
     usable = black_ratio < 0.5 and blur < 0.95
     return ClipQuality(
-        clip_id=clip_id, blur=blur, shake=shake, black_ratio=black_ratio, usable=usable
+        clip_id=clip_id, blur=blur, motion=motion, black_ratio=black_ratio, usable=usable
     )
 
 
@@ -2485,7 +2486,7 @@ def _seed_artifacts(ctx: StageContext) -> None:
     )
     ctx.store.write(
         "02-quality",
-        QualityReport(clips=[ClipQuality(clip_id="clip-01", blur=0.1, shake=0.2, black_ratio=0.0, usable=True)]),
+        QualityReport(clips=[ClipQuality(clip_id="clip-01", blur=0.1, motion=0.2, black_ratio=0.0, usable=True)]),
         fingerprint="fp",
     )
     ctx.store.write(
@@ -2563,7 +2564,7 @@ def test_prompt_contains_packed_transcript_and_rules(tmp_path: Path, monkeypatch
     prompt = build_analysis_prompt(
         packed="[clip-01#001] 0.00-0.70 Look here",
         takes=TakeGroups(),
-        quality=QualityReport(clips=[ClipQuality(clip_id="clip-01", blur=0.9, shake=0.1, black_ratio=0.0, usable=False)]),
+        quality=QualityReport(clips=[ClipQuality(clip_id="clip-01", blur=0.9, motion=0.1, black_ratio=0.0, usable=False)]),
         brief="Toy review",
     )
     assert "clip-01#001" in prompt
@@ -2752,7 +2753,8 @@ def build_analysis_prompt(
             "(pick the best one, mark the others as failed takes):\n" + "\n".join(lines)
         )
     quality_lines = [
-        f"- {clip.clip_id}: blur={clip.blur:.2f} shake={clip.shake:.2f} usable={clip.usable}"
+        f"- {clip.clip_id}: blur={clip.blur:.2f} motion={clip.motion:.2f} "
+        f"usable={clip.usable} scored={clip.scored}"
         for clip in quality.clips
     ]
     sections.append("Technical quality per clip:\n" + "\n".join(quality_lines))
