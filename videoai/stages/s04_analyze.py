@@ -183,6 +183,7 @@ def _score_segment(phrase: Phrase, item: dict | None, takes: TakeGroups) -> Segm
     requires=("01-manifest", "02-quality", "03-transcript"),
     provider_key="llm",
     model=Analysis,
+    uses_brief=True,
 )
 def analyze(ctx: StageContext) -> Analysis:
     manifest = ctx.store.read("01-manifest", Manifest)

@@ -66,6 +66,7 @@ def _segments_view(analysis: Analysis) -> str:
     requires=("01-manifest", "03-transcript", "04-analysis"),
     provider_key="llm",
     model=Timeline,
+    uses_brief=True,
 )
 def plan(ctx: StageContext) -> Timeline:
     manifest = ctx.store.read("01-manifest", Manifest)

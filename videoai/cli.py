@@ -9,18 +9,15 @@ import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import load_config
 from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir
 from videoai.core.registry import StageContext
-from videoai.core.runner import ordered_stages, run_pipeline
+from videoai.core.runner import ordered_stages, run_pipeline, stale_downstream
 from videoai.core.store import ArtifactStore, hash_parts
 
 app = typer.Typer(add_completion=False, help="Automated video pipeline.")
 
 
-def _source_fingerprint(project_dir: Path) -> str:
-    """Fingerprint everything that feeds the pipeline: the clips ingest will read,
-    plus the brief (project.yaml, notes.md, description/*) that analysis and plan
-    prompt on. A brief edit must invalidate the cache just like a new clip does."""
+def _media_fingerprint(project_dir: Path) -> str:
+    """Fingerprint every clip ingest will read, including per-camera subfolders."""
     parts: list[str] = []
-
     clip_dir = resolve_clip_dir(project_dir)
     cameras = list_camera_clips(clip_dir)
     for camera in sorted(cameras):
@@ -29,6 +26,14 @@ def _source_fingerprint(project_dir: Path) -> str:
                 stat = path.stat()
                 key = path.relative_to(project_dir) if path.is_relative_to(project_dir) else path
                 parts.append(f"{key}:{stat.st_size}:{int(stat.st_mtime)}")
+    return hash_parts(*parts)
+
+
+def _brief_fingerprint(project_dir: Path) -> str:
+    """Fingerprint the creator's brief: project.yaml, notes.md, and description/*.
+    Kept separate from the media fingerprint so an edit here only invalidates the
+    stages that actually read the brief (analyze, plan), not the whole pipeline."""
+    parts: list[str] = []
 
     for name in ("project.yaml", "notes.md"):
         path = project_dir / name
@@ -77,13 +82,28 @@ def run(
         store=ArtifactStore(work_dir),
     )
 
+    media_fingerprint = _media_fingerprint(project)
+    brief_fingerprint = _brief_fingerprint(project)
+
     executed = run_pipeline(
-        ctx, only=stage_id, force=force, extra_fingerprint=_source_fingerprint(project)
+        ctx,
+        only=stage_id,
+        force=force,
+        media_fingerprint=media_fingerprint,
+        brief_fingerprint=brief_fingerprint,
     )
     if executed:
         typer.echo("Executed: " + ", ".join(executed))
     else:
         typer.echo("Nothing to do — every stage is up to date.")
+
+    if stage_id is not None:
+        stale = stale_downstream(ctx, stage_id, media_fingerprint, brief_fingerprint)
+        if stale:
+            typer.echo(
+                "Note: " + ", ".join(stale) + " now depend on stale input from this "
+                "single-stage run — re-run without --stage to bring them up to date."
+            )
 
 
 @app.command()

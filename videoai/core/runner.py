@@ -31,8 +31,17 @@ def ordered_stages() -> list[StageSpec]:
     return _ordered_stages()
 
 
-def _fingerprint(spec: StageSpec, ctx: StageContext, extra_fingerprint: str) -> str:
-    parts = [spec.id, spec.version, extra_fingerprint]
+def _fingerprint(
+    spec: StageSpec, ctx: StageContext, media_fingerprint: str, brief_fingerprint: str
+) -> str:
+    # Every stage depends on the source media; only stages that actually read the
+    # creator's brief (analyze, plan) also depend on it. Everything downstream of
+    # those (e.g. render_draft, via its `requires` on 05-timeline) still picks up
+    # a brief change through the `requires`-fingerprint chain below, without
+    # needing to know about the brief itself.
+    parts = [spec.id, spec.version, media_fingerprint]
+    if spec.uses_brief:
+        parts.append(brief_fingerprint)
     if spec.provider_key:
         parts.append(f"{spec.provider_key}={ctx.config.providers.get(spec.provider_key, '')}")
     for name in spec.requires:
@@ -44,7 +53,8 @@ def run_pipeline(
     ctx: StageContext,
     only: str | None = None,
     force: bool = False,
-    extra_fingerprint: str = "",
+    media_fingerprint: str = "",
+    brief_fingerprint: str = "",
 ) -> list[str]:
     """Run stages in order. Returns ids of stages that actually executed."""
     if only is not None and only not in REGISTRY:
@@ -54,7 +64,7 @@ def run_pipeline(
     for spec in _ordered_stages():
         if only is not None and spec.id != only:
             continue
-        fingerprint = _fingerprint(spec, ctx, extra_fingerprint)
+        fingerprint = _fingerprint(spec, ctx, media_fingerprint, brief_fingerprint)
         cached = ctx.store.fingerprint(spec.produces)
         # An explicit `only=<id>` request always runs that stage, bypassing the
         # cache: the caller asked for this stage to run now, and skipping it
@@ -76,3 +86,21 @@ def run_pipeline(
         ctx.store.write(spec.produces, artifact, fingerprint)
         executed.append(spec.id)
     return executed
+
+
+def stale_downstream(
+    ctx: StageContext, ran_id: str, media_fingerprint: str, brief_fingerprint: str
+) -> list[str]:
+    """After running a single stage via `only=`, which cached stages (in pipeline
+    order) now disagree with a freshly recomputed fingerprint — i.e. whose artifact
+    was built against an input that has since moved on. `run_pipeline` always
+    re-executes an explicitly requested stage regardless of cache state, which can
+    leave everything downstream of it silently stale."""
+    stale: list[str] = []
+    for spec in _ordered_stages():
+        if spec.id == ran_id or not ctx.store.exists(spec.produces):
+            continue
+        fingerprint = _fingerprint(spec, ctx, media_fingerprint, brief_fingerprint)
+        if ctx.store.fingerprint(spec.produces) != fingerprint:
+            stale.append(spec.id)
+    return stale

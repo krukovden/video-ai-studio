@@ -187,7 +187,21 @@ def test_run_fails_with_no_video_files_anywhere(tmp_path: Path):
     assert "video/" in normalized
 
 
-def test_editing_brief_between_runs_reruns_analysis(tmp_path: Path, make_clip, monkeypatch):
+def _executed_stages(output: str) -> set[str]:
+    for line in output.splitlines():
+        if line.startswith("Executed: "):
+            return {stage.strip() for stage in line.removeprefix("Executed: ").split(",")}
+    return set()
+
+
+ALL_STAGE_IDS = {"ingest", "quality", "sync", "transcribe", "analyze", "plan", "render_draft"}
+
+
+def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_clip, monkeypatch):
+    """A brief edit is a normal working-loop action; it must not force re-probing,
+    re-scoring and re-transcribing every clip — only the stages that read the brief
+    (analyze, plan) and whatever depends on their output (render_draft, via the
+    timeline) should re-run."""
     project = tmp_path / "project"
     (project / "video").mkdir(parents=True)
     make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
@@ -213,17 +227,140 @@ def test_editing_brief_between_runs_reruns_analysis(tmp_path: Path, make_clip, m
                     {"text": "everyone", "start": 0.95, "end": 1.5}]),
         encoding="utf-8",
     )
+
     first = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert first.exit_code == 0, first.output
+    # `--stage ingest` already ran (and cached) ingest above with an unchanged
+    # media fingerprint, so this full run's cache correctly skips it.
+    assert _executed_stages(first.output) == ALL_STAGE_IDS - {"ingest"}
 
     cached = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert cached.exit_code == 0, cached.output
     assert "nothing to do" in cached.output.lower()
+    assert _executed_stages(cached.output) == set()
 
     # Different length so the fingerprint changes even if the filesystem's mtime
     # resolution is too coarse to register the edit within the same test run.
     notes.write_text("A much longer brief that changes the creative direction entirely.\n", encoding="utf-8")
 
-    result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    after_brief_edit = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert after_brief_edit.exit_code == 0, after_brief_edit.output
+    assert _executed_stages(after_brief_edit.output) == {"analyze", "plan", "render_draft"}
 
-    assert result.exit_code == 0, result.output
-    assert "analyze" in result.output
+    unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert unchanged_again.exit_code == 0, unchanged_again.output
+    assert "nothing to do" in unchanged_again.output.lower()
+    assert _executed_stages(unchanged_again.output) == set()
+
+
+def test_adding_a_video_file_reruns_every_stage(tmp_path: Path, make_clip, monkeypatch):
+    """Unlike a brief edit, a new clip changes what every stage sees (a new clip to
+    probe, score, sync and potentially transcribe), so it must invalidate everything."""
+    project = tmp_path / "project"
+    (project / "video" / "cam-a").mkdir(parents=True)
+    (project / "video" / "cam-b").mkdir(parents=True)
+    make_clip("a.mp4", seconds=6.0).rename(project / "video" / "cam-a" / "a.mp4")
+    make_clip("b.mp4", seconds=3.0).rename(project / "video" / "cam-b" / "b.mp4")
+
+    # Pin the primary camera so only cam-a's clip needs a mock ASR sidecar; cam-b
+    # is a secondary angle and is never transcribed.
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n  asr: mock\n  llm: mock\nsync:\n  primary_camera: cam-a\n", encoding="utf-8"
+    )
+    llm_path = tmp_path / "llm.json"
+    llm_path.write_text(json.dumps({
+        "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
+                      "visual_score": 8, "emotion": "excited", "is_failed_take": False,
+                      "shorts_candidate": False}],
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
+    }), encoding="utf-8")
+    monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
+
+    runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
+    manifest = json.loads((project / "work" / "01-manifest.json").read_text(encoding="utf-8"))
+    primary_clip_id = next(c["clip_id"] for c in manifest["clips"] if c["camera"] == "cam-a")
+    (project / "work" / "media" / f"{primary_clip_id}.words.json").write_text(
+        json.dumps([{"text": "hello", "start": 0.5, "end": 0.9},
+                    {"text": "everyone", "start": 0.95, "end": 1.5}]),
+        encoding="utf-8",
+    )
+
+    first = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert first.exit_code == 0, first.output
+    # `--stage ingest` already ran (and cached) ingest above with an unchanged
+    # media fingerprint, so this full run's cache correctly skips it.
+    assert _executed_stages(first.output) == ALL_STAGE_IDS - {"ingest"}
+
+    cached = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert "nothing to do" in cached.output.lower()
+
+    # A new clip on the secondary camera: no new sidecar needed (it's never
+    # transcribed), but it must still invalidate every stage's media fingerprint.
+    make_clip("c.mp4", seconds=2.0).rename(project / "video" / "cam-b" / "c.mp4")
+
+    after_new_clip = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+
+    assert after_new_clip.exit_code == 0, after_new_clip.output
+    assert _executed_stages(after_new_clip.output) == ALL_STAGE_IDS
+
+
+def test_single_stage_run_warns_about_stale_downstream_stages(tmp_path: Path, make_clip, monkeypatch):
+    """`--stage <id>` always re-runs that one stage regardless of cache state, which
+    can leave `output/draft.mp4` built from an older timeline with nothing to say
+    so. A single-stage run must name the now-stale downstream stages."""
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=6.0).rename(project / "video" / "a.mp4")
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("providers:\n  asr: mock\n  llm: mock\n", encoding="utf-8")
+    llm_path = tmp_path / "llm.json"
+    llm_path.write_text(json.dumps({
+        "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
+                      "visual_score": 8, "emotion": "excited", "is_failed_take": False,
+                      "shorts_candidate": False}],
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
+    }), encoding="utf-8")
+    monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
+
+    runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
+    (project / "work" / "media" / "clip-01.words.json").write_text(
+        json.dumps([{"text": "hello", "start": 0.5, "end": 0.9},
+                    {"text": "everyone", "start": 0.95, "end": 1.5}]),
+        encoding="utf-8",
+    )
+
+    full = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert full.exit_code == 0, full.output
+    # Nothing was skipped bypassing the cache, so the whole pipeline is in sync:
+    # no stale-downstream notice should appear after a full run.
+    assert "now depend on stale input" not in full.output
+
+    # Re-run only ingest. Nothing about the source changed, so its freshly
+    # computed manifest fingerprint is identical to before and downstream
+    # artifacts remain valid — no false-positive staleness warning.
+    noop_single_stage = runner.invoke(
+        app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"]
+    )
+    assert noop_single_stage.exit_code == 0, noop_single_stage.output
+    assert "now depend on stale input" not in noop_single_stage.output
+
+    # Add a clip (changes the media fingerprint), then re-run only ingest instead of
+    # the full pipeline: everything downstream of the manifest is now stale.
+    make_clip("b.mp4", seconds=2.0).rename(project / "video" / "b.mp4")
+    sidecar_for_new_clip = project / "work" / "media" / "clip-02.words.json"
+
+    single_stage = runner.invoke(
+        app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"]
+    )
+
+    assert single_stage.exit_code == 0, single_stage.output
+    assert "now depend on stale input" in single_stage.output
+    for stage_id in ("quality", "sync", "transcribe", "analyze", "plan", "render_draft"):
+        assert stage_id in single_stage.output
+    # The notice only names stale stages; it must not run them itself.
+    assert not sidecar_for_new_clip.exists()
+    assert _executed_stages(single_stage.output) == {"ingest"}

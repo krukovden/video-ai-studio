@@ -35,6 +35,7 @@ class StageSpec:
     version: str
     model: type[BaseModel]
     fn: Callable[[StageContext], BaseModel]
+    uses_brief: bool = False
 
 
 REGISTRY: dict[str, StageSpec] = {}
@@ -48,6 +49,7 @@ def stage(
     provider_key: str | None = None,
     version: str = "1",
     model: type[BaseModel],
+    uses_brief: bool = False,
 ):
     def decorator(fn: Callable[[StageContext], BaseModel]):
         if id in REGISTRY:
@@ -66,6 +68,7 @@ def stage(
             version=version,
             model=model,
             fn=fn,
+            uses_brief=uses_brief,
         )
         return fn
 
