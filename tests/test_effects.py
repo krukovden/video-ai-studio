@@ -411,6 +411,16 @@ def _effects_context(tmp_path: Path, config: Config) -> StageContext:
         ),
         fingerprint="transcript",
     )
+    # The placement step measures the footage; there is none here, so it finds
+    # nothing moving and leaves the model's own positions alone — which is what
+    # these tests are about.
+    ctx.store.write(
+        "01-manifest",
+        Manifest(clips=[ClipInfo(
+            clip_id="clip-01", path="clip-01.mp4", duration=30.0,
+            width=1920, height=1080, fps=30.0, has_audio=True)]),
+        fingerprint="manifest",
+    )
     return ctx
 
 

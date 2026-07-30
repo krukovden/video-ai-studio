@@ -18,6 +18,8 @@ could not say "none" would guarantee that every video got some.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from videoai.core.models import (
     Analysis,
     EffectEvent,
@@ -29,6 +31,9 @@ from videoai.core.models import (
 )
 from videoai.core.project import read_brief
 from videoai.core.registry import StageContext, stage
+from videoai.core.models import Manifest
+from videoai.core.project import resolve_media_path
+from videoai.logic.motion import busiest_cell
 from videoai.logic.observations import observed_moment_lines, observed_moments
 from videoai.logic.effects import (
     GRID_CELLS,
@@ -338,6 +343,55 @@ def parse_events(
     return sorted(events, key=lambda event: event.at_seconds)
 
 
+def place_on_motion(
+    events: list[EffectEvent],
+    timeline: Timeline,
+    manifest: Manifest,
+    resolve,
+) -> list[EffectEvent]:
+    """Put each accent where the picture is actually moving at that moment.
+
+    The model chooses WHICH moment deserves an accent and WHAT it should express,
+    both of which it is the right judge of. It has never seen the frame, so its
+    screen position is a guess — and on this project's first delivery exactly one
+    of seven landed anywhere near the action; the rest sat over a door, an empty
+    wall and a paper towel.
+
+    Where the picture changes is a subtraction between two frames. It is exact,
+    it costs nothing, and it belongs to the pipeline rather than to the model.
+
+    A still shot keeps the model's guess: with nothing moving there is nothing to
+    point at, and picking a cell anyway would be the very thing this replaces.
+    """
+    placed: list[EffectEvent] = []
+    for event in events:
+        clip, offset = _clip_at(timeline, event.at_seconds)
+        cell = None
+        if clip is not None:
+            try:
+                info = manifest.by_id(clip.src)
+                source = resolve(Path(info.proxy_path or info.path))
+                cell = busiest_cell(source, offset)
+            except Exception:
+                # Unreadable media is a shot we cannot measure, not a reason to
+                # discard a plan the creator is about to review.
+                cell = None
+        placed.append(
+            event.model_copy(update={"screen_position": cell}) if cell else event
+        )
+    return placed
+
+
+def _clip_at(timeline: Timeline, at_seconds: float):
+    """The timeline segment playing at `at_seconds`, and the offset in its source."""
+    clock = 0.0
+    for clip in timeline.clips:
+        if clock <= at_seconds < clock + clip.dur:
+            return clip, clip.offset + (at_seconds - clock)
+        clock += clip.dur
+    return None, 0.0
+
+
 def _effects_fingerprint_extras(ctx: StageContext) -> tuple[str, ...]:
     """The library's vocabulary. Adding a sprite changes what may be chosen, so a
     cached plan made without it is stale. Only the manifest is hashed: this stage
@@ -350,7 +404,9 @@ def _effects_fingerprint_extras(ctx: StageContext) -> tuple[str, ...]:
     produces="05d-effects",
     # "03-transcript" is here for the word timings the prompt carries: the model is
     # asked for a moment, and a moment is a word, not a segment.
-    requires=("03-transcript", "04-analysis", "05-timeline", "05a-storyplan"),
+    # "01-manifest" names the media the placement step measures: the model says
+    # which moment, and where on screen is worked out from the footage itself.
+    requires=("01-manifest", "03-transcript", "04-analysis", "05-timeline", "05a-storyplan"),
     provider_key="llm",
     model=EffectPlan,
     uses_brief=True,
@@ -379,6 +435,13 @@ def effects(ctx: StageContext) -> EffectPlan:
     )
     response = provider.complete_json(prompt, [], ctx.config.analyze.llm_timeout_seconds)
     events = parse_events(response, library, timeline.duration, settings.max_events)
+    # The model said which moments; the pipeline says where on screen.
+    events = place_on_motion(
+        events,
+        timeline,
+        ctx.store.read("01-manifest", Manifest),
+        lambda path: resolve_media_path(ctx.project_dir, str(path)),
+    )
     # The model chose which moments deserve an accent; the clock is the
     # pipeline's. Where the analysis actually watched the footage, each accent
     # is pulled onto the moment that was seen rather than the time that was
