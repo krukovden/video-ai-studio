@@ -124,6 +124,31 @@ def plan_reel(
     return spans
 
 
+def locate_in_source(
+    spans: list[ReelSpan], reel_time: float
+) -> tuple[str, float] | None:
+    """Where a moment on the reel's clock came from: (clip_id, time in that clip).
+
+    A model that watches the reel can only name times on the reel, and every
+    stage downstream works in source-clip time. This is the translation, and the
+    pipeline owns it: the model is asked what it saw, never where to put it.
+
+    A time outside the reel returns None rather than the nearest span. A moment
+    that is not in the file the model watched is one it did not see, and picking
+    a span for it would invent data the footage does not support.
+    """
+    if reel_time < 0:
+        return None
+    clock = 0.0
+    for span in spans:
+        # The boundary belongs to the span it starts: at exactly `clock + duration`
+        # the reel is already showing the next span's first frame.
+        if clock <= reel_time < clock + span.duration:
+            return span.clip_id, round(span.start + (reel_time - clock), 3)
+        clock += span.duration
+    return None
+
+
 def reel_index_lines(spans: list[ReelSpan]) -> list[str]:
     """The mapping the model needs: which phrase is where in the file it watches.
 

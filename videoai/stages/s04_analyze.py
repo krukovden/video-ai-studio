@@ -9,6 +9,7 @@ from videoai.core.models import (
     Analysis,
     InsertClip,
     Manifest,
+    Observation,
     Phrase,
     PhraseIndex,
     QualityReport,
@@ -21,7 +22,13 @@ from videoai.core.registry import StageContext, stage
 from videoai.core.store import hash_parts
 from videoai.logic.inserts import detect_inserts
 from videoai.logic.phrases import build_phrases, pack_transcript
-from videoai.logic.reel import ReelSpan, plan_reel, reel_index_lines, reel_seconds
+from videoai.logic.reel import (
+    ReelSpan,
+    locate_in_source,
+    plan_reel,
+    reel_index_lines,
+    reel_seconds,
+)
 from videoai.logic.takes import detect_take_groups
 from videoai.providers.base import resolve_llm
 
@@ -329,7 +336,73 @@ lands, whether a moment holds for as long as it should.
 
 Every phrase's position in the reel is listed below. Score by phrase id as usual;
 these times are only so you know which moment is which.
+
+Add a second key to your reply, alongside "segments":
+
+{"observations": [
+  {"at": 41.8, "kind": "action|emotion|reaction", "what": "one short clause"}
+]}
+
+This is a record of what you SAW, on the reel's clock. Rules:
+- "at" is the moment the thing happens in the reel, in seconds. Only report a
+  time you actually watched something at.
+- Be dense where something happens and silent where nothing does. Do not
+  describe every second: a list saying "still holding the toy" thirty times is
+  worse than no list. Aim for the moments a human editor would mark.
+- kind: "action" is a physical event (something opens, bursts, falls, is
+  pressed); "emotion" is what the presenter's face or voice does; "reaction" is
+  a response to something that just happened.
+- "what" is one short clause, concrete and visual. "the bubble finally gives
+  way", not "an interesting moment".
+- These times are used to place accents on real moments, so precision matters
+  more than coverage. An approximate time is worse than a missing one.
 """
+
+
+OBSERVATION_KINDS = ("action", "emotion", "reaction")
+
+
+def parse_observations(response: dict, spans: list[ReelSpan]) -> list[Observation]:
+    """What the model saw, translated from reel time into source-clip time.
+
+    Entries the pipeline cannot place are dropped rather than raised on: an
+    observation is evidence offered alongside the scores, and one unreadable
+    line is not a reason to throw away an analysis that cost real money. A time
+    outside the reel is dropped for a stronger reason — the model is describing
+    something it was not shown, and there is nothing to place.
+    """
+    raw = response.get("observations")
+    if not isinstance(raw, list):
+        return []
+
+    found: list[Observation] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        what = str(item.get("what", "") or "").strip()
+        if not what:
+            continue
+        try:
+            reel_at = float(item.get("at"))
+        except (TypeError, ValueError):
+            continue
+        located = locate_in_source(spans, reel_at)
+        if located is None:
+            continue
+        clip_id, at = located
+        kind = str(item.get("kind", "") or "").strip().lower()
+        found.append(
+            Observation(
+                clip_id=clip_id,
+                at=at,
+                reel_at=round(reel_at, 3),
+                kind=kind if kind in OBSERVATION_KINDS else "action",
+                what=what,
+            )
+        )
+    # Time order, so a reader (and a stage looking for the next moment after a
+    # cut) does not have to sort them again.
+    return sorted(found, key=lambda item: item.reel_at)
 
 
 def reel_prompt_section(spans: list[ReelSpan]) -> str:
@@ -514,4 +587,5 @@ def analyze(ctx: StageContext) -> Analysis:
         segments=segments,
         inserts=inserts,
         video_seconds=reel_seconds(spans) if reel is not None else 0.0,
+        observations=parse_observations(response, spans) if reel is not None else [],
     )

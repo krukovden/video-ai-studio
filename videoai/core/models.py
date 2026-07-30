@@ -182,10 +182,36 @@ class InsertClip(BaseModel):
     description: str = ""
 
 
+class Observation(BaseModel):
+    """One thing a model actually saw happen, put back on the source clock.
+
+    This is the only place a model's own timestamps enter the pipeline, and they
+    enter as evidence rather than as instructions: an observation says what
+    happened and when it was seen, and every stage that uses one still decides
+    for itself whether to act on it. It is the difference between a model reading
+    a printed timeline and guessing when a thing burst, and a model watching the
+    thing burst.
+
+    `reel_at` is kept alongside `at` so a finding can be checked against the file
+    the model was actually shown.
+    """
+
+    clip_id: str
+    at: float
+    reel_at: float
+    # action | emotion | reaction. A coarse split, so a stage can ask for the
+    # physical moments without wading through every flicker of expression.
+    kind: str = "action"
+    what: str = ""
+
+
 class Analysis(BaseModel):
     provider: str
     segments: list[SegmentAnalysis] = Field(default_factory=list)
     inserts: list[InsertClip] = Field(default_factory=list)
+    # What the model saw while watching, in source-clip time. Empty when the
+    # scores were made from a transcript and stills.
+    observations: list[Observation] = Field(default_factory=list)
     # Seconds of footage actually submitted to a video-capable model, and zero
     # when the scores were made from the transcript and stills. Video is the one
     # metered input in this pipeline and it is billed by the second, so what was
