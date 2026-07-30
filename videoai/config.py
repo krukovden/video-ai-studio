@@ -37,6 +37,24 @@ class AnalyzeSettings(BaseModel):
     # `keyframes_per_phrase`: turning phrase keyframes off must not silently turn
     # this off too, since insert descriptions are the whole point of an insert.
     describe_inserts: bool = True
+    # Hand the footage itself to a provider that can watch it, instead of a
+    # transcript and a still per phrase. Only takes effect when the stage's
+    # provider reads video — a still-only model keeps getting stills, so
+    # switching model never silently changes what the analysis was made from.
+    #
+    # This is the only metered thing in the pipeline, so it is a switch of its
+    # own rather than something implied by the provider: a creator must be able
+    # to say "not this run" without changing model.
+    submit_video: bool = True
+    # A moment does not start on the first syllable. Padding either side of a
+    # phrase buys the run-up and the reaction, which is usually where the
+    # delivery actually is.
+    video_padding_seconds: float = 0.6
+    # The budget, in seconds of footage submitted. Video is billed by the
+    # second — roughly 100 input tokens per second at low media resolution — so
+    # this is the one setting that decides what a run costs. 900s of speech is
+    # about 90k tokens: a few cents on a Flash model.
+    max_video_seconds: float = 900.0
 
 
 class RenderSettings(BaseModel):

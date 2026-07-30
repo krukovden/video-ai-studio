@@ -186,6 +186,11 @@ class Analysis(BaseModel):
     provider: str
     segments: list[SegmentAnalysis] = Field(default_factory=list)
     inserts: list[InsertClip] = Field(default_factory=list)
+    # Seconds of footage actually submitted to a video-capable model, and zero
+    # when the scores were made from the transcript and stills. Video is the one
+    # metered input in this pipeline and it is billed by the second, so what was
+    # paid for is recorded rather than left to be inferred from a bill.
+    video_seconds: float = 0.0
 
     def by_phrase(self, phrase_id: str) -> SegmentAnalysis:
         for segment in self.segments:

@@ -31,6 +31,16 @@ transcribe:
   overlap_duration_seconds: 15.0
 
 analyze:
+  # Hand the footage to the model instead of a transcript and stills. Only has
+  # an effect when this stage's provider can actually watch video (today that is
+  # gemini_api); a still-only model keeps getting stills either way.
+  #
+  # What is submitted is a REEL of the spoken spans, not the source: most of a
+  # review is silence and outtakes, and video is billed by the second. On a
+  # 29-minute shoot that is roughly 10 minutes submitted instead of 29.
+  submit_video: true
+  video_padding_seconds: 0.6   # buy the run-up and the reaction, not just the words
+  max_video_seconds: 900.0     # the cost ceiling: ~90k tokens at low resolution
   keyframes_per_phrase: 1
   llm_model: sonnet
   llm_timeout_seconds: 600

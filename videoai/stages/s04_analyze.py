@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from videoai.config import AnalyzeSettings
-from videoai.core.ffmpeg import extract_frame
+from videoai.core.ffmpeg import extract_frame, run_ffmpeg
 from videoai.core.models import (
     Analysis,
     InsertClip,
@@ -21,6 +21,7 @@ from videoai.core.registry import StageContext, stage
 from videoai.core.store import hash_parts
 from videoai.logic.inserts import detect_inserts
 from videoai.logic.phrases import build_phrases, pack_transcript
+from videoai.logic.reel import ReelSpan, plan_reel, reel_index_lines, reel_seconds
 from videoai.logic.takes import detect_take_groups
 from videoai.providers.base import resolve_llm
 
@@ -318,6 +319,89 @@ def _score_segment(phrase: Phrase, item: dict | None, takes: TakeGroups) -> Segm
     )
 
 
+REEL_INSTRUCTIONS = """You are also given the footage itself, as ONE reel.
+
+The reel is not the original recording: it is the spoken spans cut out and laid
+end to end, so the seconds between them — silence, fumbling, the seams between
+takes — are simply not there. Watch it, and judge delivery from what you see and
+hear rather than from the transcript alone: energy, timing, whether a reaction
+lands, whether a moment holds for as long as it should.
+
+Every phrase's position in the reel is listed below. Score by phrase id as usual;
+these times are only so you know which moment is which.
+"""
+
+
+def reel_prompt_section(spans: list[ReelSpan]) -> str:
+    """What to tell the model about the file it is watching."""
+    return "\n\n".join([
+        REEL_INSTRUCTIONS,
+        "Phrase positions in the reel:\n" + "\n".join(reel_index_lines(spans)),
+    ])
+
+
+def build_reel(manifest: Manifest, spans: list[ReelSpan], dst: Path) -> Path:
+    """Cut every span out of its clip and concatenate them into one file.
+
+    Cut from the proxies: token cost is duration times media resolution and
+    nothing else, so a 720p reel is billed exactly as a 4K one would be and
+    uploads in a fraction of the time. Re-encoded rather than stream-copied,
+    because a copy can only cut on a keyframe and would hand back seconds nobody
+    asked to pay for.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    parts: list[Path] = []
+    for index, span in enumerate(spans):
+        clip = manifest.by_id(span.clip_id)
+        source = Path(clip.proxy_path or clip.path)
+        if not source.is_file():
+            continue
+        part = dst.parent / f"{dst.stem}-{index:03d}.mp4"
+        run_ffmpeg([
+            "-y", "-loglevel", "error",
+            "-ss", f"{span.start:.3f}", "-i", str(source),
+            "-t", f"{span.duration:.3f}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "96k", "-ac", "1",
+            str(part),
+        ])
+        parts.append(part)
+    if not parts:
+        raise RuntimeError("no footage could be cut for the review reel")
+
+    listing = dst.parent / f"{dst.stem}-concat.txt"
+    listing.write_text(
+        "".join(f"file '{part.name}'\n" for part in parts), encoding="utf-8"
+    )
+    run_ffmpeg([
+        "-y", "-loglevel", "error",
+        "-f", "concat", "-safe", "0", "-i", str(listing),
+        "-c", "copy", str(dst),
+    ])
+    return dst
+
+
+def _review_reel(
+    ctx: StageContext, manifest: Manifest, index: PhraseIndex
+) -> tuple[Path | None, list[ReelSpan]]:
+    """The reel to submit, or None when there is nothing worth submitting."""
+    settings = ctx.config.analyze
+    spans = plan_reel(
+        index,
+        padding=settings.video_padding_seconds,
+        max_seconds=settings.max_video_seconds,
+    )
+    if not spans:
+        return None, []
+    try:
+        return build_reel(manifest, spans, ctx.work_dir / "reel" / "analyze-reel.mp4"), spans
+    except Exception:
+        # A reel that cannot be cut is a reason to fall back to stills, not to
+        # fail the run: the scores are worse, and the stage says so.
+        return None, []
+
+
 @stage(
     id="analyze",
     produces="04-analysis",
@@ -333,8 +417,13 @@ def _score_segment(phrase: Phrase, item: dict | None, takes: TakeGroups) -> Segm
         "analyze.llm_model",
         "analyze.insert_max_words_per_second",
         "analyze.describe_inserts",
+        # What the model was actually shown: submitting video, and how much of
+        # it, changes the scores as much as the prompt does.
+        "analyze.submit_video",
+        "analyze.video_padding_seconds",
+        "analyze.max_video_seconds",
     ),
-    prompt=INSTRUCTIONS,
+    prompt=INSTRUCTIONS + REEL_INSTRUCTIONS,
 )
 def analyze(ctx: StageContext) -> Analysis:
     manifest = ctx.store.read("01-manifest", Manifest)
@@ -350,13 +439,31 @@ def analyze(ctx: StageContext) -> Analysis:
     brief = read_brief(ctx.project_dir)
     provider = resolve_llm(ctx.config.llm_for("analyze"), ctx.config.analyze.llm_model)
     prompt = build_analysis_prompt(pack_transcript(index), takes, quality, brief)
-    frames, truncated = _keyframes(ctx, manifest, index, ctx.config.analyze)
-    if truncated:
-        prompt += (
-            f"\n\nNote: only the first {ctx.config.analyze.max_keyframes} reference frames "
-            "are attached (capped); treat them as a sample of the footage, not full coverage."
-        )
-    response = provider.complete_json(prompt, frames, ctx.config.analyze.llm_timeout_seconds)
+
+    # A model that can watch the footage is shown the spoken spans instead of
+    # stills; one that cannot keeps getting stills, so changing model never
+    # silently changes what the scores were made from.
+    reel: Path | None = None
+    spans: list[ReelSpan] = []
+    if ctx.config.analyze.submit_video and getattr(provider, "reads_video", False):
+        reel, spans = _review_reel(ctx, manifest, index)
+
+    if reel is not None:
+        prompt += "\n\n" + reel_prompt_section(spans)
+        frames: list[Path] = []
+    else:
+        frames, truncated = _keyframes(ctx, manifest, index, ctx.config.analyze)
+        if truncated:
+            prompt += (
+                f"\n\nNote: only the first {ctx.config.analyze.max_keyframes} reference frames "
+                "are attached (capped); treat them as a sample of the footage, not full coverage."
+            )
+    response = provider.complete_json(
+        prompt,
+        frames,
+        ctx.config.analyze.llm_timeout_seconds,
+        videos=[reel] if reel is not None else None,
+    )
 
     known = {phrase.phrase_id for phrase in index.phrases}
 
@@ -402,4 +509,9 @@ def analyze(ctx: StageContext) -> Analysis:
         insert.model_copy(update={"description": descriptions.get(insert.clip_id, "")})
         for insert in inserts
     ]
-    return Analysis(provider=provider.name, segments=segments, inserts=inserts)
+    return Analysis(
+        provider=provider.name,
+        segments=segments,
+        inserts=inserts,
+        video_seconds=reel_seconds(spans) if reel is not None else 0.0,
+    )
