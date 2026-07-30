@@ -9,7 +9,13 @@ import typer
 import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import load_config
 from videoai.core.models import Approval, DraftResult, FinalResult
-from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir, snapshot_output
+from videoai.core.project import (
+    BRIEF_SUFFIXES,
+    list_camera_clips,
+    resolve_clip_dir,
+    resolve_media_path,
+    snapshot_output,
+)
 from videoai.core.registry import StageContext
 from videoai.core.runner import StageFailure, ordered_stages, run_pipeline, stale_downstream
 from videoai.core.store import ArtifactStore, hash_file, hash_parts
@@ -326,3 +332,116 @@ def config(path: Path = typer.Option(Path("config.yaml"), help="Config file path
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("preview-effects")
+def preview_effects(
+    project: Path = typer.Argument(..., help="Project whose planned effects to draw"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+) -> None:
+    """Draw every planned accent on the frame it will land on, for approval.
+
+    An effect plan read as text cannot be judged: a name and a timestamp say
+    nothing about whether the accent covers a face, points at what is happening,
+    or sits in an empty corner. This writes a page showing each one composited
+    exactly as the delivery would, next to where the picture is actually moving.
+    """
+    import base64  # noqa: F401  (used via the preview module)
+
+    import cv2
+
+    from videoai.core.models import EffectPlan, Manifest, StoryPlan, Timeline
+    from videoai.logic.effects import load_library
+    from videoai.logic.effects_preview import (
+        EffectProposal,
+        compose_preview,
+        render_preview_html,
+    )
+    from videoai.logic.motion import busiest_cell
+    from videoai.stages.s08_polish import _sprite_base_image
+
+    work_dir = project / "work"
+    store = ArtifactStore(work_dir)
+    for name in ("05-timeline", "05d-effects"):
+        if not store.exists(name):
+            raise typer.BadParameter(
+                f"{name} is missing; run the pipeline through the effects stage first"
+            )
+    timeline = store.read("05-timeline", Timeline)
+    plan = store.read("05d-effects", EffectPlan)
+    manifest = store.read("01-manifest", Manifest)
+    story = store.read("05a-storyplan", StoryPlan) if store.exists("05a-storyplan") else StoryPlan()
+    if not plan.events:
+        typer.echo("No effects were planned, so there is nothing to approve.")
+        return
+
+    library = load_library(Path(plan.library) if plan.library else None)
+    frame = (timeline.width, timeline.height)
+    preview_dir = work_dir / "effects-preview"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+
+    # Each event sits on the edit's clock; the source frame behind it is found by
+    # walking the timeline, so the preview shows the same footage the delivery
+    # will cut — not the draft, which is a different encode.
+    proposals: list[EffectProposal] = []
+    for index, event in enumerate(plan.events):
+        clip, offset = _clip_at(timeline, event.at_seconds)
+        if clip is None:
+            continue
+        source = resolve_media_path(project, manifest.by_id(clip.src).proxy_path
+                                    or manifest.by_id(clip.src).path)
+        capture = cv2.VideoCapture(str(source))
+        capture.set(cv2.CAP_PROP_POS_MSEC, offset * 1000.0)
+        ok, picture = capture.read()
+        capture.release()
+        if not ok:
+            continue
+        picture = cv2.resize(picture, frame, interpolation=cv2.INTER_AREA)
+        sprite = _sprite_base_image(library, event, frame, preview_dir, index)
+        drawn = compose_preview(
+            picture, sprite, event, library, busiest_cell(source, offset)
+        )
+        # JPEG, not PNG: these are photographs with one flat overlay, and seven
+        # full-resolution PNGs made a 40MB page nobody wants to open.
+        preview_width = 1280
+        if drawn.shape[1] > preview_width:
+            scale = preview_width / drawn.shape[1]
+            drawn = cv2.resize(
+                drawn,
+                (preview_width, max(1, round(drawn.shape[0] * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        ok, encoded = cv2.imencode(".jpg", drawn, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        if not ok:
+            continue
+        proposals.append(
+            EffectProposal(
+                index=index,
+                event=event,
+                measured_cell=busiest_cell(source, offset),
+                image_jpeg=encoded.tobytes(),
+            )
+        )
+
+    output_dir = project / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / "effects-preview.html"
+    target.write_text(
+        render_preview_html(proposals, story.title or project.name), encoding="utf-8"
+    )
+    agree = sum(1 for item in proposals if item.agrees_with_motion)
+    typer.echo(f"Drew {len(proposals)} accent(s): {target}")
+    typer.echo(
+        f"{agree} of {len(proposals)} sit where the picture is actually moving. "
+        "Open the page, then say which to keep, move or drop."
+    )
+
+
+def _clip_at(timeline, at_seconds: float):
+    """The timeline segment playing at `at_seconds`, and the offset inside its source."""
+    clock = 0.0
+    for clip in timeline.clips:
+        if clock <= at_seconds < clock + clip.dur:
+            return clip, clip.offset + (at_seconds - clock)
+        clock += clip.dur
+    return None, 0.0
