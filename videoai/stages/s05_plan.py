@@ -208,7 +208,7 @@ def plan(ctx: StageContext) -> Timeline:
     excluded = set(ctx.config.plan.exclude_phrases) | _rejected_ids(ctx)
 
     inserts_view = _inserts_view(analysis, sync_map, excluded)
-    provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
+    provider = resolve_llm(ctx.config.llm_for("plan"), ctx.config.analyze.llm_model)
     prompt = "\n\n".join([
         INSTRUCTIONS,
         f"Creator brief:\n{brief}" if brief.strip() else "",

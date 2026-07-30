@@ -185,7 +185,7 @@ def _describe_inserts(
     frames_by_clip = _insert_keyframes(ctx, manifest, inserts, ctx.config.analyze)
     if not frames_by_clip:
         return {}
-    provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
+    provider = resolve_llm(ctx.config.llm_for("analyze"), ctx.config.analyze.llm_model)
     prompt = build_insert_description_prompt(inserts, frames_by_clip, brief)
     all_frames = [frame for frames in frames_by_clip.values() for frame in frames]
     try:
@@ -348,7 +348,7 @@ def analyze(ctx: StageContext) -> Analysis:
     ctx.store.write("03c-takes", takes, fingerprint="derived")
 
     brief = read_brief(ctx.project_dir)
-    provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
+    provider = resolve_llm(ctx.config.llm_for("analyze"), ctx.config.analyze.llm_model)
     prompt = build_analysis_prompt(pack_transcript(index), takes, quality, brief)
     frames, truncated = _keyframes(ctx, manifest, index, ctx.config.analyze)
     if truncated:

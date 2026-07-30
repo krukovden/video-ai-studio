@@ -146,12 +146,47 @@ class Config(BaseModel):
     # only copy of a previous final.mp4. Bookkeeping, not pipeline content: no
     # stage's fingerprint depends on this setting.
     output_snapshots: bool = True
+    # A different model for one stage, without touching the others. Models are
+    # interchangeable editorial voices and they are not equally worth paying for
+    # at every step: watching the footage is worth a metered call, naming a
+    # section title is not. Keyed by stage id, e.g. {"analyze": "gemini_api"}.
+    llm_by_stage: dict[str, str] = Field(default_factory=dict)
+
+    def llm_for(self, stage_id: str) -> str:
+        """The provider this stage should call: its override, or the default."""
+        return self.llm_by_stage.get(stage_id) or self.providers.get("llm", "")
 
     @model_validator(mode="after")
     def _check_provider_keys(self) -> "Config":
         for key in self.providers:
             if key not in PROVIDER_KEYS:
                 raise ValueError(f"unknown provider key: {key}")
+        return self
+
+    @model_validator(mode="after")
+    def _check_stage_overrides(self) -> "Config":
+        """Refuse an override naming a stage that does not exist or does not call
+        a model. Either is a typo, and a typo here is silent: the stage would
+        keep the default while the creator believed they had switched it."""
+        if not self.llm_by_stage:
+            return self
+        # Imported here, not at module scope: the registry imports config.
+        from videoai.core.registry import REGISTRY
+
+        import videoai.stages  # noqa: F401  (registers every stage)
+
+        for stage_id in self.llm_by_stage:
+            spec = REGISTRY.get(stage_id)
+            if spec is None:
+                known = ", ".join(sorted(s.id for s in REGISTRY.values() if s.provider_key == "llm"))
+                raise ValueError(
+                    f"llm_by_stage names an unknown stage: {stage_id} (model-calling "
+                    f"stages are: {known})"
+                )
+            if spec.provider_key != "llm":
+                raise ValueError(
+                    f"llm_by_stage names '{stage_id}', which does not call a model"
+                )
         return self
 
 
@@ -173,4 +208,5 @@ def load_config(path: Path | None = None) -> Config:
         effects=EffectsSettings(**(raw.get("effects") or {})),
         polish=PolishSettings(**(raw.get("polish") or {})),
         output_snapshots=raw.get("output_snapshots", defaults.output_snapshots),
+        llm_by_stage=raw.get("llm_by_stage") or {},
     )

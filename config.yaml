@@ -1,8 +1,25 @@
-# Provider selection per stage. Switching a value re-runs only the affected
-# stages (fingerprints include the provider name).
+# Provider selection. Switching a value re-runs only the affected stages
+# (fingerprints include the provider each stage will actually call).
 providers:
   asr: parakeet      # parakeet | mock
-  llm: claude_cli    # claude_cli | codex_cli | mock
+  # The default editorial voice for every model-calling stage.
+  # claude_cli | codex_cli | gemini_cli | gemini_api | mock
+  llm: claude_cli
+
+# A different model for one stage, without touching the others. Models are
+# interchangeable here, so replacing one is this line and nothing else.
+#
+# Only `gemini_api` can watch the footage itself; every other provider is handed
+# the transcript and a few stills. That is the reason to point `analyze` at it
+# and leave the cheap stages where they are:
+#
+# llm_by_stage:
+#   analyze: gemini_api
+#
+# Cost is duration x resolution only — re-encoding the clips smaller saves
+# upload time, not tokens. At low media resolution (~100 tokens/second) a
+# 29-minute source runs about 5 cents on gemini-2.5-flash.
+llm_by_stage: {}
 
 transcribe:
   phrase_gap_seconds: 0.5

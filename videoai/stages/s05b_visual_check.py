@@ -213,7 +213,7 @@ def visual_check(ctx: StageContext) -> VisualCheck:
     timeline = ctx.store.read("05-timeline", Timeline)
 
     frames_by_index = _segment_frames(ctx, manifest, timeline)
-    provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
+    provider = resolve_llm(ctx.config.llm_for("visual_check"), ctx.config.analyze.llm_model)
 
     findings: dict[int, dict] = {}
     if frames_by_index:

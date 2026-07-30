@@ -68,7 +68,14 @@ def _fingerprint(
     if spec.uses_brief:
         parts.append(brief_fingerprint)
     if spec.provider_key:
-        provider = ctx.config.providers.get(spec.provider_key, "")
+        # The provider this stage will actually call, which may be its own
+        # override rather than the pipeline default: pointing one stage at a
+        # different model has to re-run that stage and only that stage.
+        provider = (
+            ctx.config.llm_for(spec.id)
+            if spec.provider_key == "llm"
+            else ctx.config.providers.get(spec.provider_key, "")
+        )
         parts.append(f"{spec.provider_key}={provider}")
         if spec.provider_key == "llm":
             # The provider's own fixed instruction is as much a part of the prompt

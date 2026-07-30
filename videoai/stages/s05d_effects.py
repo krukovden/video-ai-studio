@@ -308,7 +308,7 @@ def effects(ctx: StageContext) -> EffectPlan:
     if not timeline.clips:
         return EffectPlan(provider="", library=str(library.directory))
 
-    provider = resolve_llm(ctx.config.providers["llm"], ctx.config.analyze.llm_model)
+    provider = resolve_llm(ctx.config.llm_for("effects"), ctx.config.analyze.llm_model)
     prompt = build_effects_prompt(
         library, timeline, transcript, analysis, story, read_brief(ctx.project_dir)
     )
