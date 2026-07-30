@@ -201,3 +201,33 @@ def test_the_submitted_seconds_are_recorded(tmp_path: Path, monkeypatch):
     )
     assert result.video_seconds > 0
     assert result.video_seconds < 8.0  # not the whole source
+
+
+def test_a_reel_that_cannot_be_built_stops_the_run(tmp_path: Path, monkeypatch):
+    """Found on real footage: the reel failed to cut, the stage quietly fell back
+    to stills, and the run still paid 75k tokens for a transcript-quality
+    analysis. Asking to watch the footage and silently not watching it is exactly
+    the degradation the production contract forbids."""
+    source = _clip(tmp_path / "clip-01.mp4")
+
+    class _VideoLLM:
+        name = "fake_video"
+        reads_video = True
+
+        def complete_json(self, prompt, images, timeout, videos=None):
+            raise AssertionError("the provider must never be reached")
+
+    monkeypatch.setattr(
+        "videoai.stages.s04_analyze.resolve_llm", lambda *a, **k: _VideoLLM()
+    )
+    ctx = _context(tmp_path, Config(analyze=AnalyzeSettings(submit_video=True)), source)
+    # The manifest points at footage that is not there.
+    manifest = ctx.store.read(Manifest.__name__ and "01-manifest", Manifest)
+    broken = manifest.model_copy(update={"clips": [
+        manifest.clips[0].model_copy(update={"path": "nowhere/gone.mp4",
+                                             "proxy_path": "nowhere/gone.mp4"})
+    ]})
+    ctx.store.write("01-manifest", broken, fingerprint="m")
+
+    with pytest.raises(FileNotFoundError, match="gone.mp4"):
+        analyze(ctx)

@@ -69,6 +69,12 @@ TOKENS_PER_SECOND = {"default": 300, "low": 100}
 # transcodes it first, and referencing it too early fails.
 POLL_SECONDS = 2.0
 
+# Codes worth trying again: the service is busy or rate-limiting, not refusing.
+# A 4xx says the request itself is wrong and will be wrong next time too.
+RETRYABLE_CODES = frozenset({429, 500, 502, 503, 504})
+RETRY_ATTEMPTS = 4
+RETRY_BACKOFF_SECONDS = 4.0
+
 
 @dataclass(frozen=True)
 class Usage:
@@ -212,19 +218,36 @@ class GeminiApiLLM:
         return _reply_text(document)
 
     def _generate_document(self, body: dict, timeout: int) -> dict:
-        request = urllib.request.Request(
-            INTERACTIONS_URL,
-            data=json.dumps(body).encode("utf-8"),
-            headers=self._headers({"Content-Type": "application/json"}),
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                document = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")[:500]
-            raise RuntimeError(f"Gemini API failed ({error.code}): {detail}") from error
-        return document
+        """Ask for a completion, retrying only what is worth retrying.
+
+        A busy service answers 500 "high demand", and throwing away a reel that
+        has just been uploaded — fifteen minutes of footage, already paid for in
+        time — because of a temporary spike is the wrong response. A 4xx is not
+        retried: the request is wrong and will be just as wrong next time.
+        """
+        payload = json.dumps(body).encode("utf-8")
+        last: Exception | None = None
+        for attempt in range(RETRY_ATTEMPTS):
+            request = urllib.request.Request(
+                INTERACTIONS_URL,
+                data=payload,
+                headers=self._headers({"Content-Type": "application/json"}),
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                detail = error.read().decode("utf-8", errors="replace")[:500]
+                failure = RuntimeError(f"Gemini API failed ({error.code}): {detail}")
+                if error.code not in RETRYABLE_CODES:
+                    raise failure from error
+                last = failure
+            except urllib.error.URLError as error:
+                last = RuntimeError(f"Gemini API unreachable: {error}")
+            if attempt < RETRY_ATTEMPTS - 1:
+                time.sleep(RETRY_BACKOFF_SECONDS * (2 ** attempt))
+        raise last if last else RuntimeError("Gemini API failed for an unknown reason")
 
     # ---- the protocol ------------------------------------------------------
 

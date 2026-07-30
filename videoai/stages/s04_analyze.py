@@ -17,7 +17,7 @@ from videoai.core.models import (
     TakeGroups,
     Transcript,
 )
-from videoai.core.project import read_brief
+from videoai.core.project import read_brief, resolve_media_path
 from videoai.core.registry import StageContext, stage
 from videoai.core.store import hash_parts
 from videoai.logic.inserts import detect_inserts
@@ -422,7 +422,9 @@ def reel_prompt_section(spans: list[ReelSpan]) -> str:
     ])
 
 
-def build_reel(manifest: Manifest, spans: list[ReelSpan], dst: Path) -> Path:
+def build_reel(
+    manifest: Manifest, spans: list[ReelSpan], dst: Path, project_dir: Path | None = None
+) -> Path:
     """Cut every span out of its clip and concatenate them into one file.
 
     Cut from the proxies: token cost is duration times media resolution and
@@ -435,12 +437,13 @@ def build_reel(manifest: Manifest, spans: list[ReelSpan], dst: Path) -> Path:
     parts: list[Path] = []
     for index, span in enumerate(spans):
         clip = manifest.by_id(span.clip_id)
-        source = Path(clip.proxy_path or clip.path)
-        if not source.is_file():
-            continue
+        # Resolved rather than trusted: the manifest's paths are relative to the
+        # directory ingest ran in, which a later run has no way to know.
+        source = resolve_media_path(
+            project_dir or dst.parent, clip.proxy_path or clip.path
+        )
         part = dst.parent / f"{dst.stem}-{index:03d}.mp4"
         run_ffmpeg([
-            "-y", "-loglevel", "error",
             "-ss", f"{span.start:.3f}", "-i", str(source),
             "-t", f"{span.duration:.3f}",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
@@ -457,7 +460,6 @@ def build_reel(manifest: Manifest, spans: list[ReelSpan], dst: Path) -> Path:
         "".join(f"file '{part.name}'\n" for part in parts), encoding="utf-8"
     )
     run_ffmpeg([
-        "-y", "-loglevel", "error",
         "-f", "concat", "-safe", "0", "-i", str(listing),
         "-c", "copy", str(dst),
     ])
@@ -480,12 +482,17 @@ def _review_reel(
     )
     if not spans:
         return None, []
-    try:
-        return build_reel(manifest, spans, ctx.work_dir / "reel" / "analyze-reel.mp4"), spans
-    except Exception:
-        # A reel that cannot be cut is a reason to fall back to stills, not to
-        # fail the run: the scores are worse, and the stage says so.
-        return None, []
+    # No `except` here on purpose. Falling back to stills would return a
+    # transcript-quality analysis — and still charge for it — while the config
+    # said to watch the footage, which is precisely the silent degradation the
+    # production contract forbids. If the reel cannot be cut, say so and stop.
+    reel = build_reel(
+        manifest,
+        spans,
+        ctx.work_dir / "reel" / "analyze-reel.mp4",
+        project_dir=ctx.project_dir,
+    )
+    return reel, spans
 
 
 @stage(

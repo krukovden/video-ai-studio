@@ -9,6 +9,7 @@ upload, wait, generate — and each is replaced.
 """
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
@@ -187,3 +188,64 @@ def test_a_reply_without_usage_does_not_invent_one(provider, monkeypatch):
     })
     provider.complete_json("p", [], 10)
     assert provider.last_usage is None
+
+
+def test_a_transient_server_error_is_retried(provider, monkeypatch):
+    """Met on a real run: a 500 'high demand' threw away a 15-minute reel that
+    had just been uploaded. Transient means try again, not start over."""
+    import urllib.error
+
+    attempts = {"n": 0}
+
+    def flaky(request, timeout):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise urllib.error.HTTPError(
+                "u", 500, "high demand", {}, io.BytesIO(b'{"error":{"code":"api_error"}}')
+            )
+        return io.BytesIO(json.dumps({
+            "steps": [{"type": "model_output", "content": [{"type": "text", "text": "{}"}]}]
+        }).encode())
+
+    monkeypatch.setattr("videoai.providers.llm_gemini_api.time.sleep", lambda s: None)
+    monkeypatch.setattr(
+        "videoai.providers.llm_gemini_api.urllib.request.urlopen",
+        lambda request, timeout=None: _as_context(flaky(request, timeout)),
+    )
+    assert provider._generate_document({"model": "m"}, 10) == {
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": "{}"}]}]
+    }
+    assert attempts["n"] == 3
+
+
+def test_a_bad_request_is_not_retried(provider, monkeypatch):
+    """A 400 says the request is wrong; sending it again wastes the upload and
+    the creator's time."""
+    import urllib.error
+
+    attempts = {"n": 0}
+
+    def always_400(request, timeout=None):
+        attempts["n"] += 1
+        raise urllib.error.HTTPError(
+            "u", 400, "bad", {}, io.BytesIO(b'{"error":{"message":"Unknown parameter"}}')
+        )
+
+    monkeypatch.setattr("videoai.providers.llm_gemini_api.time.sleep", lambda s: None)
+    monkeypatch.setattr(
+        "videoai.providers.llm_gemini_api.urllib.request.urlopen", always_400
+    )
+    with pytest.raises(RuntimeError, match="400"):
+        provider._generate_document({"model": "m"}, 10)
+    assert attempts["n"] == 1
+
+
+class _as_context:
+    def __init__(self, stream):
+        self._stream = stream
+
+    def __enter__(self):
+        return self._stream
+
+    def __exit__(self, *exc):
+        return False

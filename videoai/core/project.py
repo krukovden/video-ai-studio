@@ -128,3 +128,33 @@ def read_brief(project_dir: Path) -> str:
                 parts.append(_read_one(path))
 
     return "\n\n".join(part.strip() for part in parts if part.strip())
+
+
+def resolve_media_path(project_dir: Path, raw_path: str) -> Path:
+    """The file a manifest entry points at, found from wherever this run happens.
+
+    A manifest records the path ingest was handed. When the CLI was invoked with a
+    relative project directory — the normal case — that path is relative to *that
+    run's* working directory, which nothing in the file records. So a later run
+    from a different directory (a worktree, a scheduled job, another checkout)
+    cannot simply trust it.
+
+    Tried in order: as recorded, under the project folder, and then under each
+    parent of the project folder. The last of those is what actually finds
+    `assets/<project>/video/clip.mov` when ingest ran from the repository root.
+
+    A miss raises and names every place it looked. Falling back to "no footage"
+    is how a run silently produces a worse result than the one that was asked
+    for.
+    """
+    recorded = Path(raw_path)
+    if recorded.is_absolute():
+        candidates = [recorded]
+    else:
+        candidates = [recorded, project_dir / recorded]
+        candidates += [parent / recorded for parent in project_dir.resolve().parents]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    looked = ", ".join(str(candidate) for candidate in candidates[:4])
+    raise FileNotFoundError(f"media not found: {raw_path} (looked in {looked}, ...)")
