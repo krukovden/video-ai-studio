@@ -217,6 +217,13 @@ class Analysis(BaseModel):
     # metered input in this pipeline and it is billed by the second, so what was
     # paid for is recorded rather than left to be inferred from a bill.
     video_seconds: float = 0.0
+    # What the provider reported spending, when it reports anything. The Gemini
+    # API exposes no balance and no quota header, so a reply's own accounting is
+    # the only honest measure of a run's cost — and it is worth keeping, because
+    # nothing else will tell you afterwards.
+    input_tokens: int = 0
+    output_tokens: int = 0
+    video_tokens: int = 0
 
     def by_phrase(self, phrase_id: str) -> SegmentAnalysis:
         for segment in self.segments:

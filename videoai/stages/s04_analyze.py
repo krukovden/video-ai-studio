@@ -598,10 +598,16 @@ def analyze(ctx: StageContext) -> Analysis:
         insert.model_copy(update={"description": descriptions.get(insert.clip_id, "")})
         for insert in inserts
     ]
+    # Recorded straight off the provider when it kept any: an estimate would be
+    # a guess about the one thing in this pipeline that costs money.
+    usage = getattr(provider, "last_usage", None)
     return Analysis(
         provider=provider.name,
         segments=segments,
         inserts=inserts,
         video_seconds=reel_seconds(spans) if reel is not None else 0.0,
         observations=parse_observations(response, spans) if reel is not None else [],
+        input_tokens=usage.input_tokens if usage else 0,
+        output_tokens=usage.output_tokens if usage else 0,
+        video_tokens=usage.video_tokens if usage else 0,
     )

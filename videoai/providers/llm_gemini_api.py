@@ -37,6 +37,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 from videoai.providers.json_reply import extract_json
@@ -67,6 +68,44 @@ TOKENS_PER_SECOND = {"default": 300, "low": 100}
 # An uploaded video is not usable the instant the bytes land: the service
 # transcodes it first, and referencing it too early fails.
 POLL_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class Usage:
+    """What one call actually cost, as the API reported it.
+
+    There is no balance endpoint and no quota header on this API, so a reply's
+    own accounting is the only honest measure of what a run spent. Kept split by
+    modality because video is the expensive part and the whole point of the
+    budget settings is to control it.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    video_tokens: int = 0
+    text_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+def _read_usage(document: dict) -> Usage | None:
+    """The reply's own token accounting, or None when it did not report any."""
+    raw = document.get("usage")
+    if not isinstance(raw, dict):
+        return None
+    by_modality = {
+        str(entry.get("modality", "")).lower(): int(entry.get("tokens", 0))
+        for entry in raw.get("input_tokens_by_modality") or []
+        if isinstance(entry, dict)
+    }
+    return Usage(
+        input_tokens=int(raw.get("total_input_tokens", 0)),
+        output_tokens=int(raw.get("total_output_tokens", 0)),
+        video_tokens=by_modality.get("video", 0),
+        text_tokens=by_modality.get("text", 0),
+    )
 
 
 def video_token_estimate(seconds: float, media_resolution: str = "default") -> int:
@@ -101,6 +140,9 @@ class GeminiApiLLM:
     def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
         self.model = model or DEFAULT_MODEL
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        # What the most recent call reported spending. The caller records it, so
+        # a finished run can say what it cost rather than what it estimated.
+        self.last_usage: Usage | None = None
 
     # ---- the three HTTP seams, kept small so tests can replace them ---------
 
@@ -165,6 +207,11 @@ class GeminiApiLLM:
         raise RuntimeError(f"Gemini did not finish processing {uri} within {timeout} seconds")
 
     def _generate(self, body: dict, timeout: int) -> str:
+        document = self._generate_document(body, timeout)
+        self.last_usage = _read_usage(document)
+        return _reply_text(document)
+
+    def _generate_document(self, body: dict, timeout: int) -> dict:
         request = urllib.request.Request(
             INTERACTIONS_URL,
             data=json.dumps(body).encode("utf-8"),
@@ -177,7 +224,7 @@ class GeminiApiLLM:
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"Gemini API failed ({error.code}): {detail}") from error
-        return _reply_text(document)
+        return document
 
     # ---- the protocol ------------------------------------------------------
 

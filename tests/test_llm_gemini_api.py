@@ -158,3 +158,32 @@ def test_a_thought_step_is_never_read_as_the_answer():
     ]})
     assert "think" not in text
     assert text == '{"a": 1}'
+
+
+def test_the_usage_of_the_last_call_is_kept(provider, monkeypatch):
+    """The API exposes no balance and no quota headers, so the only honest
+    measure of what a run cost is what each reply reports it used."""
+    monkeypatch.setattr(provider, "_generate_document", lambda body, timeout: {
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": "{}"}]}],
+        "usage": {"total_input_tokens": 402, "total_output_tokens": 10,
+                  "input_tokens_by_modality": [{"modality": "video", "tokens": 378},
+                                               {"modality": "text", "tokens": 24}]},
+    })
+    provider.complete_json("p", [], 10)
+
+    assert provider.last_usage is not None
+    assert provider.last_usage.input_tokens == 402
+    assert provider.last_usage.output_tokens == 10
+    assert provider.last_usage.video_tokens == 378
+
+
+def test_usage_is_absent_until_a_call_is_made():
+    assert GeminiApiLLM(api_key="k").last_usage is None
+
+
+def test_a_reply_without_usage_does_not_invent_one(provider, monkeypatch):
+    monkeypatch.setattr(provider, "_generate_document", lambda body, timeout: {
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": "{}"}]}],
+    })
+    provider.complete_json("p", [], 10)
+    assert provider.last_usage is None
