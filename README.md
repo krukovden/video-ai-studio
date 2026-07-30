@@ -374,13 +374,15 @@ The production layers are:
   `polish.outro_seconds`.
 - **A section title** wherever a timeline clip's beat differs from the one
   before it, naming that beat for `polish.title_seconds` behind a
-  semi-transparent plate in the upper safe area.
+  semi-transparent plate. It is a lower third: the plate sits inside the bottom
+  title-safe area, below the presenter.
 - **Word-timed captions** generated locally from `03-transcript.json`. They are
   grouped into compact chunks (`polish.caption_words`, four by default), mapped
   through cuts to delivery time and written to `output/final.srt`, ready for a
   viewer-controlled YouTube caption track. Set `polish.burn_captions: true`
-  only when every phrase must be permanently rasterised into the lower safe
-  area. Neither mode depends on ffmpeg's optional libass or drawtext support.
+  only when every phrase must be permanently rasterised into the picture, in
+  which case the caption lane sits directly above the section-title lower third
+  so the two can never collide. Neither mode depends on ffmpeg's optional libass or drawtext support.
 - **A music bed** from `polish.music_dir`, chosen by your brief's `style`
   when that names a track the library has and otherwise by a stable digest of
   the project's name, so the same project always gets the same music. It is

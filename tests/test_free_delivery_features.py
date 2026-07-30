@@ -21,7 +21,15 @@ from videoai.core.models import (
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
 from videoai.stages.s06_render_draft import render_draft
-from videoai.stages.s08_polish import build_captions, polish, write_ass_captions
+from videoai.stages.s08_polish import (
+    build_captions,
+    build_section_titles,
+    caption_lane_y,
+    lower_third_y,
+    polish,
+    section_title_height,
+    write_ass_captions,
+)
 
 
 def test_captions_map_source_words_to_the_assembled_timeline(tmp_path: Path):
@@ -96,6 +104,63 @@ def test_approve_binds_the_review_to_the_current_timeline(tmp_path: Path):
     assert approval.timeline_hash == store.content_hash("05-timeline")
     assert approval.draft_hash
     assert approval.config_hash
+
+
+def test_every_section_change_gets_a_generic_lower_third_named_by_its_beat():
+    """No keyword matching, no hardcoded labels: the beat the planner wrote is the
+    title, and every section change gets one."""
+    beats = ["Hook", "Hook", "The Middle Bit", "Something Else", "Closing"]
+    timeline = Timeline(
+        fps=30,
+        width=1920,
+        height=1080,
+        clips=[
+            TimelineClip(src="clip-01", offset=index * 4, dur=4, start=index * 4, beat=beat)
+            for index, beat in enumerate(beats)
+        ],
+    )
+    starts = [index * 4.0 for index in range(len(beats))]
+
+    titles = build_section_titles(
+        timeline, starts, [4.0] * len(beats), 2.5, 2.0, 1920, 1080,
+    )
+
+    assert [title.text for title in titles] == ["The Middle Bit", "Something Else", "Closing"]
+    assert titles[0].start == pytest.approx(2.5 + 8.0)
+    assert titles[0].duration == pytest.approx(2.0)
+
+
+def test_a_section_title_with_a_blank_beat_is_skipped():
+    timeline = Timeline(
+        fps=30,
+        width=1920,
+        height=1080,
+        clips=[
+            TimelineClip(src="clip-01", offset=0, dur=4, start=0, beat="Hook"),
+            TimelineClip(src="clip-01", offset=4, dur=4, start=4, beat="  "),
+        ],
+    )
+
+    assert build_section_titles(timeline, [0.0, 4.0], [4.0, 4.0], 0.0, 2.0, 1920, 1080) == []
+
+
+def test_section_titles_stay_in_the_bottom_safe_area():
+    y = lower_third_y(frame_height=1080, overlay_height=151)
+
+    assert y == 865
+    assert y > 1080 // 2
+    assert y + 151 <= int(1080 * 0.95)
+
+
+def test_the_burned_caption_lane_cannot_collide_with_the_section_title_lane():
+    for height in (240, 720, 1080, 2160):
+        title_height = section_title_height(height)
+        title_y = lower_third_y(height, title_height)
+        caption_height = max(80, int(height * 0.12))
+        caption_y = caption_lane_y(height, caption_height, title_height)
+
+        assert caption_y + caption_height <= title_y, height
+        assert caption_y >= 0, height
 
 
 def test_strict_delivery_applies_every_required_local_feature(

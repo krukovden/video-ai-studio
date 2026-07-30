@@ -121,6 +121,62 @@ class _Caption:
     text: str
 
 
+def lower_third_y(frame_height: int, overlay_height: int) -> int:
+    """Place an overlay inside the bottom title-safe area.
+
+    The six-percent bottom margin keeps the whole plate inside the title-safe
+    area of a 16:9 delivery frame, so nothing is clipped by an overscanning TV.
+    """
+    return max(0, frame_height - overlay_height - int(frame_height * 0.06))
+
+
+def section_title_height(frame_height: int) -> int:
+    """The height of a section-title strip on a frame this tall."""
+    return max(72, int(frame_height * 0.14))
+
+
+def caption_lane_y(frame_height: int, caption_height: int, title_height: int) -> int:
+    """The burned-caption lane: immediately above the section-title lower third.
+
+    Burned captions and section titles both want the bottom of the frame, and a
+    section title can begin mid-sentence. The titles own the lower third, so the
+    caption lane is placed above them with a small gap instead of on top of them.
+    """
+    gap = max(8, int(frame_height * 0.015))
+    return max(0, lower_third_y(frame_height, title_height) - caption_height - gap)
+
+
+def build_section_titles(
+    timeline: Timeline,
+    starts: list[float],
+    durations: list[float],
+    intro_offset: float,
+    title_seconds: float,
+    width: int,
+    height: int,
+) -> list[_TextOverlay]:
+    """A lower third naming the beat wherever the story moves to a new section.
+
+    Generic by design: the beat text is whatever the planner named the section,
+    so nothing here has to know what the video is about.
+    """
+    return [
+        _TextOverlay(
+            text=timeline.clips[index].beat.strip(),
+            start=intro_offset + starts[index],
+            duration=min(title_seconds, max(0.2, durations[index])),
+            width=width,
+            height=section_title_height(height),
+            y_expression="",
+            plate_alpha=0.62,
+            fade_in=0,
+            fade_out=0,
+        )
+        for index in section_changes(timeline)
+        if timeline.clips[index].beat.strip()
+    ]
+
+
 def _ass_time(seconds: float) -> str:
     centiseconds = max(0, round(seconds * 100))
     hours, rest = divmod(centiseconds, 360000)
@@ -669,22 +725,24 @@ def _render_graphics_track(
 
     width, height = frame
     assets: list[tuple[float, float, int, np.ndarray]] = []
+    title_height = section_title_height(height)
+    title_y = lower_third_y(height, title_height)
     for index, title in enumerate(titles):
         image_path = work_dir / f"section-title-{index:02d}.png"
         render_text_image(
-            image_path, title.text, int(width * 0.74), max(72, int(height * 0.14)),
+            image_path, title.text, int(width * 0.74), title_height,
             plate_alpha=0.62, max_lines=2,
         )
         image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
-        # Section titles live in the upper safe area; captions occupy the lower
-        # safe area. Keeping the two lanes separate prevents busy, unreadable
-        # stacks whenever a new section begins during speech.
-        assets.append((title.start, title.start + title.duration, int(height * 0.08), image))
-    caption_y = int(height * 0.80)
+        # A section title is a lower third: below the presenter, inside the
+        # bottom title-safe area.
+        assets.append((title.start, title.start + title.duration, title_y, image))
+    caption_height = max(80, int(height * 0.12))
+    caption_y = caption_lane_y(height, caption_height, title_height)
     for index, caption in enumerate(captions):
         image_path = work_dir / f"caption-{index:03d}.png"
         render_text_image(
-            image_path, caption.text, int(width * 0.78), max(80, int(height * 0.12)),
+            image_path, caption.text, int(width * 0.78), caption_height,
             plate_alpha=0.72, max_lines=2,
         )
         image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
@@ -889,8 +947,9 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
     measured_picture = probe(picture)
     total = measured_picture.duration
 
+    intro_offset = probe(intro_path).duration
     captions = build_captions(
-        timeline, transcript, starts, [], 0.0, probe(intro_path).duration,
+        timeline, transcript, starts, [], 0.0, intro_offset,
         settings.caption_words,
     )
     if settings.captions_enabled and not captions:
@@ -898,17 +957,10 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
     srt_path = ctx.output_dir / "final.srt"
     write_srt_captions(srt_path, captions)
 
-    title_overlays = [
-        _TextOverlay(
-            text=timeline.clips[index].beat.strip(),
-            start=probe(intro_path).duration + starts[index],
-            duration=min(settings.title_seconds, max(0.2, segment_durations[index])),
-            width=width, height=max(72, int(height * 0.14)),
-            y_expression="", plate_alpha=0.62, fade_in=0, fade_out=0,
-        )
-        for index in section_changes(timeline)
-        if timeline.clips[index].beat.strip()
-    ]
+    title_overlays = build_section_titles(
+        timeline, starts, segment_durations, intro_offset,
+        settings.title_seconds, width, height,
+    )
     if not title_overlays:
         raise RuntimeError("production contract requires section titles")
 
