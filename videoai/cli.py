@@ -347,6 +347,8 @@ def preview_effects(
     and position the delivery would use, next to where the picture is actually
     moving — and lets the creator untick, drag or swap it there.
     """
+    import base64
+
     import cv2
 
     from videoai.core.models import EffectPlan, Manifest, StoryPlan, Timeline
@@ -426,7 +428,7 @@ def preview_effects(
                 index=index, event=event, motion_xy=motion_xy, motion_cell=cell,
                 frame_jpeg=frame_bytes.tobytes(), sprite_png=sprite_bytes.tobytes(),
                 sprite_width=width_frac, sprite_height=height_frac,
-                start_x=x_frac, start_y=y_frac,
+                start_x=x_frac, start_y=y_frac, frame_size=frame,
             )
         )
 
@@ -436,7 +438,7 @@ def preview_effects(
     target.write_text(
         render_preview_html(
             proposals, story.title or project.name,
-            [sprite.name for sprite in library.sprites],
+            _sprite_choices(library, frame),
         ),
         encoding="utf-8",
     )
@@ -505,6 +507,47 @@ def apply_effects(
         f"Applied: {kept} kept, {dropped} dropped, {moved} moved, {swapped} swapped."
     )
     typer.echo("Re-run the delivery to render them: videoai produce " + str(project))
+
+
+def _sprite_choices(library, frame: tuple[int, int]) -> list[dict]:
+    """Every sprite the library offers, small enough to embed in a page.
+
+    Each carries its own picture and aspect so the page can swap the drawing AND
+    resize it the way the compositor would. Downscaled hard: the preview shows
+    them a couple of hundred pixels wide, and fifty-seven full-resolution PNGs
+    would be a page nobody waits for.
+    """
+    import base64
+
+    import cv2
+
+    from videoai.logic.effects import SPRITE_SCALES
+
+    choices: list[dict] = []
+    for sprite in library.sprites:
+        image = cv2.imread(str(library.path_of(sprite)), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            continue
+        preview_height = 192
+        scale = preview_height / image.shape[0]
+        small = cv2.resize(
+            image,
+            (max(1, round(image.shape[1] * scale)), preview_height),
+            interpolation=cv2.INTER_AREA,
+        )
+        ok, encoded = cv2.imencode(".png", small)
+        if not ok:
+            continue
+        choices.append({
+            "name": sprite.name,
+            "aspect": round(image.shape[1] / image.shape[0], 4),
+            # What fraction of the frame's height a medium accent occupies; the
+            # page multiplies by the aspect to get its width.
+            "height_frac": SPRITE_SCALES["medium"],
+            "takes_text": sprite.takes_text,
+            "data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+        })
+    return choices
 
 
 def _clip_at(timeline, at_seconds: float):

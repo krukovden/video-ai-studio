@@ -49,6 +49,8 @@ class EffectProposal:
     sprite_height: float
     start_x: float
     start_y: float
+    # The delivery frame this was laid out against.
+    frame_size: tuple[int, int] = (1920, 1080)
 
 
 def proposal_geometry(
@@ -81,9 +83,18 @@ def proposal_geometry(
 
 
 def render_preview_html(
-    proposals: list[EffectProposal], title: str, sprite_names: list[str]
+    proposals: list[EffectProposal],
+    title: str,
+    sprite_choices: list[dict],
 ) -> str:
-    """One self-contained page: the plan, drawn, and editable in place."""
+    """One self-contained page: the plan, drawn, and editable in place.
+
+    `sprite_choices` carries every sprite the library offers — its picture and
+    its aspect ratio — so choosing a different one actually changes the picture.
+    An earlier version embedded only the sprite already planned, which meant the
+    dropdown changed the answer while the frame went on showing the old drawing:
+    a preview that stops previewing the moment you use it.
+    """
     payload = [
         {
             "index": item.index,
@@ -107,6 +118,11 @@ def render_preview_html(
                 if item.motion_xy
                 else None
             ),
+            # The frame's own shape, so the page can convert a sprite height
+            # (a fraction of frame HEIGHT) into a CSS width (a fraction of frame
+            # WIDTH) when a swap resizes it.
+            "frame_w": item.frame_size[0],
+            "frame_h": item.frame_size[1],
             "frame": base64.b64encode(item.frame_jpeg).decode("ascii"),
             "sprite": base64.b64encode(item.sprite_png).decode("ascii"),
         }
@@ -114,7 +130,7 @@ def render_preview_html(
     ]
     return (
         _PAGE.replace("__TITLE__", html.escape(title))
-        .replace("__SPRITES__", json.dumps(sprite_names))
+        .replace("__SPRITES__", json.dumps(sprite_choices))
         .replace("__DATA__", json.dumps(payload))
     )
 
@@ -191,6 +207,9 @@ _PAGE = """<!doctype html>
 <script>
 const SPRITES = __SPRITES__;
 const DATA = __DATA__;
+// Sprite heights are a fraction of the frame's HEIGHT while CSS widths are a
+// fraction of its WIDTH, so converting between them needs the frame's shape.
+const FRAME_ASPECT = DATA.length ? (DATA[0].frame_h / DATA[0].frame_w) : (9 / 16);
 const state = DATA.map(d => ({...d, x0:d.x, y0:d.y, name0:d.name}));
 
 function el(tag, cls, inner) {
@@ -258,20 +277,29 @@ function build() {
 
     const row = el('div', 'row');
     const pick = el('select');
-    SPRITES.forEach(n => {
+    SPRITES.forEach(sp => {
       const o = el('option');
-      o.value = n; o.textContent = n; o.selected = (n === s.name);
+      o.value = sp.name; o.textContent = sp.name; o.selected = (sp.name === s.name);
       pick.append(o);
     });
     const note = el('p', 'hint');
     pick.onchange = () => {
       s.name = pick.value;
-      // The drawing cannot change without re-rendering the page, so say so
-      // rather than showing the old sprite as if it were the new one.
-      const changed = s.name !== s.name0;
-      sprite.style.opacity = changed ? '0.4' : '1';
-      note.textContent = changed
-        ? 'swapped — the picture still shows ' + s.name0 + ' until this is re-rendered'
+      const chosen = SPRITES.find(sp => sp.name === s.name);
+      // Swap the drawing, and resize it the way the compositor would: height is
+      // a fixed fraction of the frame for this scale, width follows the new
+      // sprite's own aspect. Keep the centre so a swap does not also move it.
+      const cx = s.x + s.w / 2, cy = s.y + s.h / 2;
+      s.h = chosen.height_frac;
+      s.w = chosen.height_frac * chosen.aspect * FRAME_ASPECT;
+      s.x = Math.min(1 - s.w, Math.max(0, cx - s.w / 2));
+      s.y = Math.min(1 - s.h, Math.max(0, cy - s.h / 2));
+      img.src = 'data:image/png;base64,' + chosen.data;
+      sprite.style.width = (s.w * 100) + '%';
+      sprite.style.left = (s.x * 100) + '%';
+      sprite.style.top = (s.y * 100) + '%';
+      note.textContent = chosen.takes_text
+        ? 'this one is a speech bubble — its real size comes from the words in it'
         : '';
       refresh();
     };
