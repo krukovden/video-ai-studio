@@ -48,7 +48,12 @@ SPRITE_SCALES = {"small": 0.14, "medium": 0.22, "large": 0.32}
 # grow to as a fraction of the frame's width.
 BUBBLE_WIDTH_FRACTIONS = {"small": 0.26, "medium": 0.36, "large": 0.48}
 
-ANIMATIONS = ("pop-in", "pulse", "shake", "drift-up", "none")
+ANIMATIONS = (
+    "pop-in", "pulse", "shake", "drift-up", "none",
+    # Added because five motions made every video look the same: whatever the
+    # accent was, it arrived the same way.
+    "squash", "bounce", "spin-in", "swing", "zoom-punch",
+)
 # Where a sprite's visual weight sits, i.e. which point of it is put on the cell's
 # anchor point. A speech bubble's tail points down, so "bottom" puts the bubble
 # above the cell and the tail on it.
@@ -272,13 +277,25 @@ def library_fingerprint(directory: Path | None = None) -> str:
 
 @dataclass(frozen=True)
 class SpriteTransform:
-    """One frame of a built-in motion, in units of the sprite's own size."""
+    """One frame of a built-in motion, in units of the sprite's own size.
 
-    scale: float = 1.0
+    Width and height scale separately so a motion can squash and stretch. That
+    one distinction is most of what separates a cartoon accent from a sticker
+    that merely changes size: a thing that lands flattens, and a thing that
+    launches draws out.
+    """
+
+    scale_x: float = 1.0
+    scale_y: float = 1.0
     dx: float = 0.0
     dy: float = 0.0
     rotation: float = 0.0
     alpha: float = 1.0
+
+    @property
+    def scale(self) -> float:
+        """The single scale, for callers that do not care about the difference."""
+        return (self.scale_x + self.scale_y) / 2.0
 
 
 def _fade_envelope(progress: float) -> float:
@@ -295,6 +312,55 @@ def animation_transform(animation: str, progress: float) -> SpriteTransform:
     """
     progress = max(0.0, min(1.0, progress))
     alpha = _fade_envelope(progress)
+
+    if animation == "squash":
+        # Stretch on the way in, flatten on landing, settle. The classic beat.
+        if progress < 0.25:
+            step = progress / 0.25
+            return SpriteTransform(scale_x=1.0 - 0.28 * (1 - step), scale_y=1.0 + 0.34 * (1 - step),
+                                   alpha=alpha)
+        if progress < 0.45:
+            step = (progress - 0.25) / 0.20
+            return SpriteTransform(scale_x=1.0 + 0.30 * sin(pi * step),
+                                   scale_y=1.0 - 0.26 * sin(pi * step), alpha=alpha)
+        wobble = 0.10 * sin(2.0 * pi * 2.2 * (progress - 0.45)) * (1.0 - progress)
+        return SpriteTransform(scale_x=1.0 + wobble, scale_y=1.0 - wobble, alpha=alpha)
+
+    if animation == "bounce":
+        # Falls in, hits, and rebounds twice with the height dying away. `dy` is
+        # negative above the resting point, which is where it starts.
+        damped = (1.0 - progress) ** 2
+        height = abs(cos(2.0 * pi * 1.6 * progress)) * damped
+        squash = 0.18 * damped * max(0.0, cos(2.0 * pi * 1.6 * progress))
+        return SpriteTransform(
+            scale_x=1.0 + squash, scale_y=1.0 - squash,
+            dy=-0.55 * height, alpha=alpha,
+        )
+
+    if animation == "spin-in":
+        settle = 1.0 - (1.0 - progress) ** 3
+        return SpriteTransform(
+            scale_x=0.4 + 0.6 * settle, scale_y=0.4 + 0.6 * settle,
+            rotation=-160.0 * (1.0 - settle), alpha=alpha,
+        )
+
+    if animation == "swing":
+        # A pendulum losing energy: it crosses upright rather than leaning.
+        return SpriteTransform(
+            rotation=14.0 * sin(2.0 * pi * 1.7 * progress) * (1.0 - progress) ** 0.7,
+            alpha=alpha,
+        )
+
+    if animation == "zoom-punch":
+        # Arrives too big and slams down to size, with a touch of tilt.
+        if progress < 0.22:
+            step = progress / 0.22
+            scale = 1.9 - 0.9 * (1.0 - (1.0 - step) ** 3)
+        else:
+            scale = 1.0 + 0.06 * sin(2.0 * pi * 2.0 * (progress - 0.22)) * (1.0 - progress)
+        return SpriteTransform(scale_x=scale, scale_y=scale,
+                               rotation=-6.0 * (1.0 - progress) ** 2, alpha=alpha)
+
     if animation == "pop-in":
         # Overshoot, then settle: a sprite that arrives at exactly its final size
         # reads as a cut, not as a pop.
@@ -305,11 +371,10 @@ def animation_transform(animation: str, progress: float) -> SpriteTransform:
             scale = 1.18 - 0.18 * step * step * (3.0 - 2.0 * step)
         else:
             scale = 1.0
-        return SpriteTransform(scale=scale, alpha=alpha)
+        return SpriteTransform(scale_x=scale, scale_y=scale, alpha=alpha)
     if animation == "pulse":
-        return SpriteTransform(
-            scale=1.0 + 0.09 * sin(2.0 * pi * 1.5 * progress), alpha=alpha
-        )
+        beat = 1.0 + 0.09 * sin(2.0 * pi * 1.5 * progress)
+        return SpriteTransform(scale_x=beat, scale_y=beat, alpha=alpha)
     if animation == "shake":
         # Decaying so the last frames are still rather than frozen mid-wobble.
         return SpriteTransform(
@@ -317,8 +382,9 @@ def animation_transform(animation: str, progress: float) -> SpriteTransform:
             alpha=alpha,
         )
     if animation == "drift-up":
+        grow = 1.0 + 0.10 * progress
         return SpriteTransform(
-            scale=1.0 + 0.10 * progress,
+            scale_x=grow, scale_y=grow,
             dy=-0.34 * progress,
             alpha=alpha * (1.0 - 0.7 * progress),
         )

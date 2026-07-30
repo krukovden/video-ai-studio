@@ -791,13 +791,21 @@ def _transform_sprite(image, transform: SpriteTransform):
     import cv2
     import numpy as np
 
-    scale = max(0.01, transform.scale)
-    width = max(1, round(image.shape[1] * scale))
-    height = max(1, round(image.shape[0] * scale))
+    # Separate axes so a squash actually squashes: a motion that flattens on
+    # landing and draws out on launch is most of what makes an accent read as
+    # cartoon rather than as a sticker changing size.
+    width = max(1, round(image.shape[1] * max(0.01, transform.scale_x)))
+    height = max(1, round(image.shape[0] * max(0.01, transform.scale_y)))
     out = cv2.resize(
         image,
         (width, height),
-        interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR,
+        # Shrinking wants area averaging, growing wants interpolation; a squash
+        # does both at once, so pick by whichever axis moved further.
+        interpolation=(
+            cv2.INTER_AREA
+            if max(transform.scale_x, transform.scale_y) < 1.0
+            else cv2.INTER_LINEAR
+        ),
     )
     if abs(transform.rotation) > 0.01:
         pad = max(2, round(max(width, height) * 0.12))
