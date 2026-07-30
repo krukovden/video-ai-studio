@@ -480,33 +480,27 @@ def _render_card(
         accent,
         -1,
     )
-    rgba = path.with_suffix(".rgba.png")
-    render_text_image(
-        rgba, title, int(width * 0.82), int(height * 0.42),
-        plate_alpha=0.0, max_lines=3,
-    )
-    overlay = cv2.imread(str(rgba), cv2.IMREAD_UNCHANGED)
-    x = (width - overlay.shape[1]) // 2
-    y = int(height * 0.20)
-    alpha = overlay[:, :, 3:4].astype(np.float32) / 255.0
-    image[y:y + overlay.shape[0], x:x + overlay.shape[1]] = (
-        overlay[:, :, :3] * alpha
-        + image[y:y + overlay.shape[0], x:x + overlay.shape[1]] * (1 - alpha)
-    ).astype(np.uint8)
-    if subtitle.strip():
-        sub = path.with_suffix(".subtitle.png")
+    def stamp(strip: Path, text: str, strip_width: int, strip_height: int,
+              max_lines: int, top_fraction: float) -> None:
         render_text_image(
-            sub, subtitle, int(width * 0.72), int(height * 0.13),
-            plate_alpha=0.0, max_lines=2,
+            strip, text, strip_width, strip_height, plate_alpha=0.0,
+            max_lines=max_lines,
         )
-        layer = cv2.imread(str(sub), cv2.IMREAD_UNCHANGED)
-        sx = (width - layer.shape[1]) // 2
-        sy = int(height * 0.74)
-        alpha = layer[:, :, 3:4].astype(np.float32) / 255.0
-        image[sy:sy + layer.shape[0], sx:sx + layer.shape[1]] = (
-            layer[:, :, :3] * alpha
-            + image[sy:sy + layer.shape[0], sx:sx + layer.shape[1]] * (1 - alpha)
-        ).astype(np.uint8)
+        # The strip is RGBA; the card is the BGR image cv2 will write. Reversing
+        # the colour channels here is what keeps a coloured title from coming out
+        # of the card with its red and blue swapped.
+        layer = _load_rgba(strip)[:, :, ::-1]
+        colour, alpha = layer[:, :, 1:], layer[:, :, :1].astype(np.float32) / 255.0
+        x = (width - layer.shape[1]) // 2
+        y = int(height * top_fraction)
+        region = image[y:y + layer.shape[0], x:x + layer.shape[1]]
+        region[:] = (colour * alpha + region * (1 - alpha)).astype(np.uint8)
+
+    stamp(path.with_suffix(".rgba.png"), title, int(width * 0.82),
+          int(height * 0.42), 3, 0.20)
+    if subtitle.strip():
+        stamp(path.with_suffix(".subtitle.png"), subtitle, int(width * 0.72),
+              int(height * 0.13), 2, 0.74)
     if not cv2.imwrite(str(path), image):
         raise RuntimeError(f"could not render card image: {path}")
 

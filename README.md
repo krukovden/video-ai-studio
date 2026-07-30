@@ -382,7 +382,10 @@ The production layers are:
   viewer-controlled YouTube caption track. Set `polish.burn_captions: true`
   only when every phrase must be permanently rasterised into the picture, in
   which case the caption lane sits directly above the section-title lower third
-  so the two can never collide. Neither mode depends on ffmpeg's optional libass or drawtext support.
+  so the two can never collide. Neither mode depends on ffmpeg's optional libass
+  or drawtext support: every strip of text is rasterised with Pillow and a real
+  system font (Arial Rounded MT Bold when macOS has it, then Arial Bold,
+  Helvetica, and Pillow's own face on a machine that has none).
 - **A music bed** from `polish.music_dir`, chosen by your brief's `style`
   when that names a track the library has and otherwise by a stable digest of
   the project's name, so the same project always gets the same music. It is
@@ -395,12 +398,22 @@ The production layers are:
 - **A fade-through-black transition of `polish.transition_frames`** at story
   section boundaries. Cuts inside a section stay hard cuts.
 
-With `polish.strict_contract: true`, required elements do not silently
-degrade. Missing captions, music, closing beat, approval, resolution, or a
-failed full decode makes production fail and prevents an invalid
-`final.mp4`. The authoritative requirements are in
-`production-contract.yaml`. Set strict mode false only for legacy preview/test
-workflows; `videoai produce` refuses to run in that mode.
+Required elements never silently degrade. There is one delivery renderer and
+`production-contract.yaml` always applies to it: missing captions, music,
+closing beat, resolution, an unducked bed, no emitted transition, a proxy among
+the segment inputs, or a failed full decode makes production fail and removes
+`final.mp4`, `final.srt` and `production-report.json` rather than leaving an
+`output/` folder that describes a delivery which is not there. The measurements
+those rules are checked against are in `output/production-report.json`.
+
+Preflight runs before any frame is cut: the contract's frame against
+`polish.output_height` and the source's display aspect, the music library, the
+closing beat, and the free disk space. An unsatisfiable delivery fails in
+seconds instead of after a 4K render.
+
+`polish.enabled: false` is the one way to skip delivery. It copies the review
+draft to `output/preview-fallback.mp4`, records what that file is missing, and
+writes no `final.mp4`.
 
 When `polish.require_approval: true`, delivery stops after the draft until the
 creator approves the exact current timeline:
