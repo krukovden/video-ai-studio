@@ -373,8 +373,8 @@ The production layers are:
   wrote into `05a-storyplan`, plus an **outro card** of
   `polish.outro_seconds`.
 - **Major-action titles only.** The first box opening, injection/filling step,
-  and popping step get a short lower-third title in the bottom safe area.
-  Minor beat changes, inserts, and the closing do not create another title.
+  and popping step get a short title in the upper safe area. Minor beat changes,
+  inserts, and the closing do not create another title.
 - **Local cartoon accents** rendered into the same finite alpha track: a fast
   flying-box sticker, a syringe impact burst, spaced pop rings, and—when the
   injection section contains a toy-only close-up—an animated English

@@ -180,11 +180,6 @@ def build_major_action_titles(
     return overlays
 
 
-def lower_third_y(frame_height: int, overlay_height: int) -> int:
-    """Place an overlay inside the bottom title-safe area."""
-    return max(0, frame_height - overlay_height - int(frame_height * 0.06))
-
-
 def build_cartoon_effects(
     timeline: Timeline,
     starts: list[float],
@@ -978,13 +973,10 @@ def _render_graphics_track(
             plate_alpha=0.62, max_lines=2,
         )
         image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
-        # Major-action labels are lower thirds. Keeping them below the child's
-        # face matters more than reserving a separate caption lane because
-        # captions are delivered as a viewer-controlled sidecar by default.
-        # The six-percent bottom margin keeps the complete plate inside the
-        # title-safe area on 16:9 delivery frames.
-        title_y = lower_third_y(height, image.shape[0])
-        assets.append((title.start, title.start + title.duration, title_y, image))
+        # Section titles live in the upper safe area; captions occupy the lower
+        # safe area. Keeping the two lanes separate prevents busy, unreadable
+        # stacks whenever a new section begins during speech.
+        assets.append((title.start, title.start + title.duration, int(height * 0.08), image))
     caption_y = int(height * 0.80)
     for index, caption in enumerate(captions):
         image_path = work_dir / f"caption-{index:03d}.png"
@@ -1342,7 +1334,7 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
     # the final is only worth building after, and it is what `polish.enabled:
     # false` copies through.
     requires=("01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "06-draft"),
-    version="4",
+    version="3",
     model=FinalResult,
     config_keys=(
         "polish.enabled",

@@ -25,7 +25,6 @@ from videoai.stages.s08_polish import (
     build_captions,
     build_cartoon_effects,
     build_major_action_titles,
-    lower_third_y,
     polish,
     write_ass_captions,
 )
@@ -142,14 +141,6 @@ def test_titles_are_limited_to_major_actions_and_effects_follow_story_beats():
         "box_fly", "injection_burst", "toy_reaction", "pop",
     }
     assert sum(effect.kind == "pop" for effect in effects) <= 5
-
-
-def test_section_titles_stay_in_the_bottom_safe_area():
-    y = lower_third_y(frame_height=1080, overlay_height=151)
-
-    assert y == 865
-    assert y > 1080 // 2
-    assert y + 151 <= int(1080 * 0.95)
 
 
 def test_strict_delivery_applies_every_required_local_feature(
