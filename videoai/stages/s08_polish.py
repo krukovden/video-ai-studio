@@ -152,6 +152,10 @@ class _EffectOverlay:
     anchor: str
     animation: str
     image: object
+    # Where the creator dragged it, as a fraction of the frame. When set it wins
+    # over `cell`: nine cells are what a model aims with, and a person who can
+    # see the shot can say "just above his hand".
+    point: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -818,6 +822,10 @@ def build_effect_overlays(
     planned = cumulative_starts([clip.dur for clip in timeline.clips])
     overlays: list[_EffectOverlay] = []
     for index, event in enumerate(events):
+        if not event.keep:
+            # Turned down on the approval page. Dropped here rather than earlier
+            # so the plan keeps the record of what was considered and refused.
+            continue
         segment = 0
         for candidate, start in enumerate(planned):
             if event.at_seconds + 1e-6 >= start:
@@ -835,6 +843,7 @@ def build_effect_overlays(
                 anchor=sprite.anchor,
                 animation=sprite.animation,
                 image=image,
+                point=(event.x, event.y) if event.x is not None and event.y is not None else None,
             )
         )
     return overlays
@@ -910,9 +919,18 @@ def _render_graphics_track(
                 progress = (at - effect.start) / effect.duration
                 transform = animation_transform(effect.animation, progress)
                 sprite = _transform_sprite(effect.image, transform)
-                x, y = place_sprite(
-                    (sprite.shape[1], sprite.shape[0]), effect.cell, effect.anchor, frame
-                )
+                if effect.point is not None:
+                    # A dragged point is the sprite's centre, which is what a
+                    # person aims at; clamped so a drag to the edge cannot push
+                    # the accent off the frame.
+                    x = round(effect.point[0] * frame[0] - sprite.shape[1] / 2)
+                    y = round(effect.point[1] * frame[1] - sprite.shape[0] / 2)
+                    x = min(max(x, 0), max(0, frame[0] - sprite.shape[1]))
+                    y = min(max(y, 0), max(0, frame[1] - sprite.shape[0]))
+                else:
+                    x, y = place_sprite(
+                        (sprite.shape[1], sprite.shape[0]), effect.cell, effect.anchor, frame
+                    )
                 _blend_at(
                     canvas,
                     sprite,

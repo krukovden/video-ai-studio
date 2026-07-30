@@ -339,25 +339,24 @@ def preview_effects(
     project: Path = typer.Argument(..., help="Project whose planned effects to draw"),
     config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
 ) -> None:
-    """Draw every planned accent on the frame it will land on, for approval.
+    """Draw every planned accent on the frame it lands on, for approval.
 
     An effect plan read as text cannot be judged: a name and a timestamp say
     nothing about whether the accent covers a face, points at what is happening,
-    or sits in an empty corner. This writes a page showing each one composited
-    exactly as the delivery would, next to where the picture is actually moving.
+    or sits in an empty corner. This writes a page showing each one at the size
+    and position the delivery would use, next to where the picture is actually
+    moving — and lets the creator untick, drag or swap it there.
     """
-    import base64  # noqa: F401  (used via the preview module)
-
     import cv2
 
     from videoai.core.models import EffectPlan, Manifest, StoryPlan, Timeline
     from videoai.logic.effects import load_library
     from videoai.logic.effects_preview import (
         EffectProposal,
-        compose_preview,
+        proposal_geometry,
         render_preview_html,
     )
-    from videoai.logic.motion import busiest_cell
+    from videoai.logic.motion import busiest_cell, cell_centre
     from videoai.stages.s08_polish import _sprite_base_image
 
     work_dir = project / "work"
@@ -380,16 +379,13 @@ def preview_effects(
     preview_dir = work_dir / "effects-preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
 
-    # Each event sits on the edit's clock; the source frame behind it is found by
-    # walking the timeline, so the preview shows the same footage the delivery
-    # will cut — not the draft, which is a different encode.
-    proposals: list[EffectProposal] = []
+    proposals = []
     for index, event in enumerate(plan.events):
         clip, offset = _clip_at(timeline, event.at_seconds)
         if clip is None:
             continue
-        source = resolve_media_path(project, manifest.by_id(clip.src).proxy_path
-                                    or manifest.by_id(clip.src).path)
+        info = manifest.by_id(clip.src)
+        source = resolve_media_path(project, info.proxy_path or info.path)
         capture = cv2.VideoCapture(str(source))
         capture.set(cv2.CAP_PROP_POS_MSEC, offset * 1000.0)
         ok, picture = capture.read()
@@ -397,29 +393,40 @@ def preview_effects(
         if not ok:
             continue
         picture = cv2.resize(picture, frame, interpolation=cv2.INTER_AREA)
-        sprite = _sprite_base_image(library, event, frame, preview_dir, index)
-        drawn = compose_preview(
-            picture, sprite, event, library, busiest_cell(source, offset)
-        )
-        # JPEG, not PNG: these are photographs with one flat overlay, and seven
-        # full-resolution PNGs made a 40MB page nobody wants to open.
+
+        # JPEG, not PNG: these are photographs, and seven full-resolution PNGs
+        # made a 40MB page nobody wants to open.
         preview_width = 1280
-        if drawn.shape[1] > preview_width:
-            scale = preview_width / drawn.shape[1]
-            drawn = cv2.resize(
-                drawn,
-                (preview_width, max(1, round(drawn.shape[0] * scale))),
+        if picture.shape[1] > preview_width:
+            scale = preview_width / picture.shape[1]
+            picture = cv2.resize(
+                picture, (preview_width, max(1, round(picture.shape[0] * scale))),
                 interpolation=cv2.INTER_AREA,
             )
-        ok, encoded = cv2.imencode(".jpg", drawn, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        ok, frame_bytes = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, 88])
         if not ok:
             continue
+
+        sprite = _sprite_base_image(library, event, frame, preview_dir, index)
+        ok, sprite_bytes = cv2.imencode(".png", sprite)
+        if not ok:
+            continue
+        width_frac, height_frac, x_frac, y_frac = proposal_geometry(
+            event, library, (sprite.shape[1], sprite.shape[0]), frame
+        )
+
+        cell = busiest_cell(source, offset)
+        motion_xy = None
+        if cell:
+            cx, cy = cell_centre(cell, frame[0], frame[1])
+            motion_xy = (cx / frame[0], cy / frame[1])
+
         proposals.append(
             EffectProposal(
-                index=index,
-                event=event,
-                measured_cell=busiest_cell(source, offset),
-                image_jpeg=encoded.tobytes(),
+                index=index, event=event, motion_xy=motion_xy, motion_cell=cell,
+                frame_jpeg=frame_bytes.tobytes(), sprite_png=sprite_bytes.tobytes(),
+                sprite_width=width_frac, sprite_height=height_frac,
+                start_x=x_frac, start_y=y_frac,
             )
         )
 
@@ -427,14 +434,77 @@ def preview_effects(
     output_dir.mkdir(parents=True, exist_ok=True)
     target = output_dir / "effects-preview.html"
     target.write_text(
-        render_preview_html(proposals, story.title or project.name), encoding="utf-8"
+        render_preview_html(
+            proposals, story.title or project.name,
+            [sprite.name for sprite in library.sprites],
+        ),
+        encoding="utf-8",
     )
-    agree = sum(1 for item in proposals if item.agrees_with_motion)
+    agree = sum(
+        1 for item in proposals
+        if item.motion_cell and item.motion_cell == item.event.screen_position
+    )
     typer.echo(f"Drew {len(proposals)} accent(s): {target}")
     typer.echo(
         f"{agree} of {len(proposals)} sit where the picture is actually moving. "
-        "Open the page, then say which to keep, move or drop."
+        "Open it, adjust, then Download decisions and run 'videoai apply-effects'."
     )
+
+
+@app.command("apply-effects")
+def apply_effects(
+    project: Path = typer.Argument(..., help="Project to apply the decisions to"),
+    decisions: Path = typer.Option(
+        ..., "--decisions", help="effects-decisions.json downloaded from the preview page"
+    ),
+) -> None:
+    """Write the creator's decisions from the approval page into the effect plan.
+
+    Dropped accents are kept in the plan and marked, rather than deleted: a
+    decision that vanishes is one the next re-plan will happily make again, and
+    the record of what was looked at and turned down is worth keeping.
+    """
+    import json as _json
+
+    from videoai.core.models import EffectPlan
+
+    store = ArtifactStore(project / "work")
+    if not store.exists("05d-effects"):
+        raise typer.BadParameter("this project has no effect plan to apply decisions to")
+    plan = store.read("05d-effects", EffectPlan)
+    document = _json.loads(decisions.read_text(encoding="utf-8"))
+
+    by_index = {int(item["index"]): item for item in document.get("events", [])}
+    known = {sprite for sprite in {event.effect_name for event in plan.events}}
+    updated, dropped, moved, swapped = [], 0, 0, 0
+    for index, event in enumerate(plan.events):
+        choice = by_index.get(index)
+        if choice is None:
+            updated.append(event)
+            continue
+        changes = {"keep": bool(choice.get("keep", True))}
+        if not changes["keep"]:
+            dropped += 1
+        name = str(choice.get("effect_name") or event.effect_name)
+        if name != event.effect_name:
+            changes["effect_name"] = name
+            swapped += 1
+        if choice.get("moved") and choice.get("x") is not None:
+            changes["x"] = float(choice["x"])
+            changes["y"] = float(choice["y"])
+            moved += 1
+        updated.append(event.model_copy(update=changes))
+
+    store.write(
+        "05d-effects",
+        plan.model_copy(update={"events": updated}),
+        fingerprint="creator-approved",
+    )
+    kept = sum(1 for event in updated if event.keep)
+    typer.echo(
+        f"Applied: {kept} kept, {dropped} dropped, {moved} moved, {swapped} swapped."
+    )
+    typer.echo("Re-run the delivery to render them: videoai produce " + str(project))
 
 
 def _clip_at(timeline, at_seconds: float):

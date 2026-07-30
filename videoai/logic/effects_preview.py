@@ -1,183 +1,381 @@
-"""Showing the creator each accent on the frame it will actually land on.
+"""The approval page: every accent on its own frame, and changeable there.
 
-An effect plan is a list of names and timestamps. Read as text it is impossible
-to judge: "comic_starburst at 131.14s, bottom-right" tells you nothing about
-whether it covers the child's face, points at the thing that is happening, or
-sits in an empty corner. On this project's first delivery every one of them was
-placed from a model's guess at a timeline it had never seen, and they landed
-more or less at random.
+An effect plan read as text cannot be judged. "comic_starburst at 131.14s,
+bottom-right" says nothing about whether it covers a face, points at what is
+happening, or sits over a paper towel — and on this project's first delivery it
+was the last of those, seven times over.
 
-So this renders the proposal: the real frame, at the real moment, with the real
-sprite composited at the size and position the delivery would use — plus, beside
-it, where the picture is actually moving at that instant. What the creator
-approves is then what they get, and the two pictures side by side make a bad
-placement obvious in a second.
+So the plan is drawn instead of described, and then made editable in place:
+untick an accent to drop it, drag it to where it belongs, or swap it for a
+different one. Nine grid cells are enough for a model to aim with and far too
+coarse for someone who can see the shot; dragging gives a real coordinate.
 
-Nothing here decides anything. It draws the plan so a human can accept it,
-change it, or throw it out.
+The page writes nothing by itself. It produces a decisions document the pipeline
+reads back, so what reaches the render is exactly what was approved — and the
+frames, which are of a child, never leave the machine.
 """
 from __future__ import annotations
 
 import base64
+import html
+import json
 from dataclasses import dataclass
-from pathlib import Path
 
 from videoai.core.models import EffectEvent
-from videoai.logic.effects import (
-    EffectLibrary,
-    animation_transform,
-    cell_anchor_point,
-    place_sprite,
-)
-from videoai.logic.motion import GRID_CELLS, busiest_cell, cell_centre
+from videoai.logic.effects import EffectLibrary, place_sprite
 
-# The instant of the animation to draw: past the pop-in overshoot, before the
+# The instant of the animation to draw: past a pop-in's overshoot and before the
 # fade, which is what the accent looks like for most of its life.
 PREVIEW_PROGRESS = 0.5
 
 
 @dataclass(frozen=True)
 class EffectProposal:
-    """One accent, drawn on its own frame and ready to be judged."""
+    """One accent, with everything the page needs to show and change it."""
 
     index: int
     event: EffectEvent
-    # Where the picture is actually moving at that moment, or None when nothing
-    # is. Shown next to the chosen cell so a mismatch is visible rather than
-    # buried in a log.
-    measured_cell: str | None
-    image_jpeg: bytes
+    # Where the picture is actually moving at that moment, as a fraction of the
+    # frame, or None when nothing is. Drawn as a target so a bad placement is
+    # visible rather than buried in a log.
+    motion_xy: tuple[float, float] | None
+    motion_cell: str | None
+    # The frame, and the sprite as its own image so the page can move it.
+    frame_jpeg: bytes
+    sprite_png: bytes
+    # The sprite's rendered size and placed position, as fractions of the frame,
+    # so the page works at whatever size the browser shows it.
+    sprite_width: float
+    sprite_height: float
+    start_x: float
+    start_y: float
 
-    @property
-    def agrees_with_motion(self) -> bool:
-        return self.measured_cell is not None and self.measured_cell == self.event.screen_position
 
-
-def compose_preview(
-    frame_bgr,
-    sprite_rgba,
+def proposal_geometry(
     event: EffectEvent,
     library: EffectLibrary,
-    measured_cell: str | None,
-):
-    """The frame with the accent on it, the grid drawn, and the motion marked."""
-    import cv2
-    import numpy as np
+    sprite_size: tuple[int, int],
+    frame: tuple[int, int],
+) -> tuple[float, float, float, float]:
+    """The sprite's size and top-left, as fractions of the frame.
 
-    picture = frame_bgr.copy()
-    height, width = picture.shape[:2]
-
-    # The nine cells, faint, so a position can be read off the picture.
-    for index in (1, 2):
-        cv2.line(picture, (width * index // 3, 0), (width * index // 3, height),
-                 (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.line(picture, (0, height * index // 3), (width, height * index // 3),
-                 (255, 255, 255), 1, cv2.LINE_AA)
-
-    # Where the picture is really moving, as a hollow green box.
-    if measured_cell:
-        cx, cy = cell_centre(measured_cell, width, height)
-        size = max(24, height // 9)
-        cv2.rectangle(picture, (cx - size, cy - size), (cx + size, cy + size),
-                      (0, 230, 0), 3, cv2.LINE_AA)
-
-    # The accent itself, exactly as the delivery would place it.
-    sprite = library.get(event.effect_name)
-    transform = animation_transform(sprite.animation, PREVIEW_PROGRESS)
-    scale = max(0.01, transform.scale)
-    drawn = cv2.resize(
-        sprite_rgba,
-        (max(1, round(sprite_rgba.shape[1] * scale)),
-         max(1, round(sprite_rgba.shape[0] * scale))),
-        interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR,
+    Honours a dragged coordinate when there is one and falls back to the grid
+    cell the plan proposed, so the page always opens showing exactly what the
+    delivery would currently produce.
+    """
+    width, height = frame
+    sprite_width, sprite_height = sprite_size
+    if event.x is not None and event.y is not None:
+        # A dragged point is the sprite's CENTRE: that is what a person aims at.
+        left = event.x * width - sprite_width / 2
+        top = event.y * height - sprite_height / 2
+    else:
+        sprite = library.get(event.effect_name)
+        left, top = place_sprite(sprite_size, event.screen_position, sprite.anchor, frame)
+    return (
+        sprite_width / width,
+        sprite_height / height,
+        left / width,
+        top / height,
     )
-    x, y = place_sprite(
-        (drawn.shape[1], drawn.shape[0]), event.screen_position, sprite.anchor,
-        (width, height),
+
+
+def render_preview_html(
+    proposals: list[EffectProposal], title: str, sprite_names: list[str]
+) -> str:
+    """One self-contained page: the plan, drawn, and editable in place."""
+    payload = [
+        {
+            "index": item.index,
+            "at": round(item.event.at_seconds, 2),
+            "name": item.event.effect_name,
+            "scale": item.event.scale,
+            "text": item.event.text,
+            "reason": item.event.reason,
+            "cell": item.event.screen_position,
+            "keep": item.event.keep,
+            "w": round(item.sprite_width, 5),
+            "h": round(item.sprite_height, 5),
+            "x": round(item.start_x, 5),
+            "y": round(item.start_y, 5),
+            "motion": (
+                {
+                    "x": round(item.motion_xy[0], 4),
+                    "y": round(item.motion_xy[1], 4),
+                    "cell": item.motion_cell,
+                }
+                if item.motion_xy
+                else None
+            ),
+            "frame": base64.b64encode(item.frame_jpeg).decode("ascii"),
+            "sprite": base64.b64encode(item.sprite_png).decode("ascii"),
+        }
+        for item in proposals
+    ]
+    return (
+        _PAGE.replace("__TITLE__", html.escape(title))
+        .replace("__SPRITES__", json.dumps(sprite_names))
+        .replace("__DATA__", json.dumps(payload))
     )
-    x0, y0 = max(0, x), max(0, y)
-    x1, y1 = min(width, x + drawn.shape[1]), min(height, y + drawn.shape[0])
-    if x1 > x0 and y1 > y0:
-        patch = drawn[y0 - y:y1 - y, x0 - x:x1 - x]
-        alpha = (patch[..., 3:4].astype(np.float32) / 255.0) * transform.alpha
-        picture[y0:y1, x0:x1] = (
-            patch[..., :3].astype(np.float32) * alpha
-            + picture[y0:y1, x0:x1].astype(np.float32) * (1 - alpha)
-        ).astype(np.uint8)
-
-    # The cell the plan chose, as a thin magenta cross, so "chosen" and
-    # "measured" can be told apart even when they overlap.
-    ax, ay = cell_anchor_point(event.screen_position, (width, height))
-    cv2.drawMarker(picture, (ax, ay), (230, 0, 230), cv2.MARKER_CROSS,
-                   max(20, height // 12), 2, cv2.LINE_AA)
-    return picture
 
 
-def render_preview_html(proposals: list[EffectProposal], title: str) -> str:
-    """A single self-contained page: every accent, on its frame, with its reason."""
-    cards: list[str] = []
-    for proposal in proposals:
-        event = proposal.event
-        encoded = base64.b64encode(proposal.image_jpeg).decode("ascii")
-        measured = proposal.measured_cell or "nothing moving"
-        verdict = (
-            '<span class="ok">on the action</span>'
-            if proposal.agrees_with_motion
-            else f'<span class="warn">motion is at <b>{measured}</b></span>'
-        )
-        text = f'<div class="says">says “{event.text}”</div>' if event.text else ""
-        cards.append(f"""
-    <section class="card" id="fx{proposal.index}">
-      <img src="data:image/jpeg;base64,{encoded}" alt="frame at {event.at_seconds:.2f}s">
-      <div class="meta">
-        <h2>{proposal.index + 1}. {event.effect_name}</h2>
-        <dl>
-          <dt>at</dt><dd>{event.at_seconds:.2f}s</dd>
-          <dt>placed</dt><dd>{event.screen_position} · {event.scale}</dd>
-          <dt>check</dt><dd>{verdict}</dd>
-          <dt>because</dt><dd>{event.reason}</dd>
-        </dl>
-        {text}
-      </div>
-    </section>""")
-
-    return f"""<!doctype html>
+# Written out in full rather than assembled from fragments: this is one artefact
+# a creator opens on their own machine, and a single readable template is easier
+# to change than a string built in six places.
+_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Effects to approve — {title}</title>
+<title>Approve effects — __TITLE__</title>
 <style>
-  :root {{ color-scheme: light dark; }}
-  body {{ font: 15px/1.55 -apple-system, system-ui, sans-serif; margin: 0;
-         background: #12151a; color: #e8ecf1; }}
-  header {{ padding: 28px 32px 8px; }}
-  h1 {{ font-size: 22px; margin: 0 0 6px; }}
-  .lede {{ color: #9fb0c3; max-width: 60ch; margin: 0 0 4px; }}
-  .legend {{ color: #9fb0c3; font-size: 13px; margin: 10px 0 0; }}
-  .legend b {{ color: #e8ecf1; }}
-  .card {{ display: grid; grid-template-columns: minmax(320px, 2fr) 1fr; gap: 20px;
-          align-items: start; padding: 20px 32px; border-top: 1px solid #232a34; }}
-  @media (max-width: 820px) {{ .card {{ grid-template-columns: 1fr; }} }}
-  img {{ width: 100%; border-radius: 10px; display: block; }}
-  h2 {{ font-size: 17px; margin: 0 0 10px; }}
-  dl {{ display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }}
-  dt {{ color: #8b9bb0; }}
-  dd {{ margin: 0; }}
-  .ok {{ color: #7ee0a8; }}
-  .warn {{ color: #ffc266; }}
-  .says {{ margin-top: 10px; padding: 8px 10px; background: #1b2130;
-           border-radius: 8px; }}
+  :root { color-scheme: dark; --line:#232a34; --muted:#93a3b8; --bg:#12151a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:#e8ecf1;
+         font:15px/1.55 -apple-system, system-ui, sans-serif; }
+  header { padding:24px 28px 14px; border-bottom:1px solid var(--line);
+           position:sticky; top:0; background:var(--bg); z-index:20; }
+  h1 { font-size:21px; margin:0 0 6px; }
+  .lede { color:var(--muted); margin:0; max-width:72ch; }
+  .bar { display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap; }
+  button { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--line);
+           background:#1b2130; color:#e8ecf1; cursor:pointer; }
+  button.primary { background:#2f6df6; border-color:#2f6df6; }
+  button:disabled { opacity:.4; cursor:default; }
+  button:not(:disabled):hover { filter:brightness(1.15); }
+  .count { color:var(--muted); }
+  .scene { display:grid; grid-template-columns:minmax(340px,1.9fr) 1fr; gap:22px;
+           padding:22px 28px; border-bottom:1px solid var(--line); }
+  @media (max-width:900px){ .scene { grid-template-columns:1fr; } }
+  .stage { position:relative; border-radius:10px; overflow:hidden; background:#000;
+           user-select:none; touch-action:none; }
+  .stage.dropped { opacity:.3; }
+  .stage img.frame { width:100%; display:block; }
+  .grid { position:absolute; inset:0; pointer-events:none;
+          background-image:linear-gradient(to right,#ffffff30 1px,transparent 1px),
+                           linear-gradient(to bottom,#ffffff30 1px,transparent 1px);
+          background-size:33.333% 33.333%; }
+  .motion { position:absolute; width:11%; aspect-ratio:1; transform:translate(-50%,-50%);
+            border:3px solid #4fdc84; border-radius:6px; pointer-events:none; }
+  .sprite { position:absolute; cursor:grab; }
+  .sprite img { width:100%; display:block; pointer-events:none; }
+  .sprite.dragging { cursor:grabbing; outline:2px dashed #2f6df6; outline-offset:3px; }
+  .meta h2 { font-size:16px; margin:0 0 10px; }
+  label.keep { display:flex; gap:8px; align-items:center; font-weight:600; margin-bottom:12px; }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin:0 0 12px; }
+  dt { color:var(--muted); }
+  dd { margin:0; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+  select { font:inherit; padding:6px 8px; border-radius:7px; background:#1b2130;
+           color:#e8ecf1; border:1px solid var(--line); }
+  .hint { color:var(--muted); font-size:13px; margin:6px 0 0; }
+  .ok { color:#7ee0a8; } .warn { color:#ffc266; }
+  #out { width:100%; height:170px; margin-top:10px; font:12px/1.4 ui-monospace,monospace;
+         background:#0d1016; color:#9fe6b8; border:1px solid var(--line);
+         border-radius:8px; padding:10px; display:none; }
 </style></head>
 <body>
 <header>
-  <h1>Effects to approve — {title}</h1>
-  <p class="lede">Each accent drawn on the frame it will land on, at the size and
-  position the delivery would use. Nothing is rendered until you say so.</p>
-  <p class="legend">
-    <b style="color:#e06be0">magenta cross</b> = where the plan puts it ·
-    <b style="color:#4fdc84">green box</b> = where the picture is actually moving ·
-    faint grid = the nine positions available.
-  </p>
+  <h1>Approve effects — __TITLE__</h1>
+  <p class="lede"><b>Untick</b> to drop an accent, <b>drag</b> it where it belongs,
+  or <b>swap</b> it from the list. The green target is where the picture is actually
+  moving at that moment. Nothing renders until you send the decisions back.</p>
+  <div class="bar">
+    <button class="primary" onclick="save()">Download decisions</button>
+    <button onclick="copyOut()">Copy as text</button>
+    <button onclick="snapAll()">Snap all to motion</button>
+    <button onclick="location.reload()">Reset</button>
+    <span class="count" id="count"></span>
+  </div>
+  <textarea id="out" readonly></textarea>
 </header>
-{"".join(cards)}
+<main id="scenes"></main>
+<script>
+const SPRITES = __SPRITES__;
+const DATA = __DATA__;
+const state = DATA.map(d => ({...d, x0:d.x, y0:d.y, name0:d.name}));
+
+function el(tag, cls, inner) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (inner !== undefined) n.innerHTML = inner;
+  return n;
+}
+
+function build() {
+  const root = document.getElementById('scenes');
+  state.forEach((s, i) => {
+    const scene = el('section', 'scene');
+    const stage = el('div', 'stage');
+    const frame = el('img', 'frame');
+    frame.src = 'data:image/jpeg;base64,' + s.frame;
+    stage.append(frame, el('div', 'grid'));
+
+    if (s.motion) {
+      const m = el('div', 'motion');
+      m.style.left = (s.motion.x * 100) + '%';
+      m.style.top = (s.motion.y * 100) + '%';
+      stage.append(m);
+    }
+
+    const sprite = el('div', 'sprite');
+    sprite.id = 'sprite' + i;
+    sprite.style.width = (s.w * 100) + '%';
+    sprite.style.left = (s.x * 100) + '%';
+    sprite.style.top = (s.y * 100) + '%';
+    const img = el('img');
+    img.src = 'data:image/png;base64,' + s.sprite;
+    sprite.append(img);
+    stage.append(sprite);
+    makeDraggable(sprite, stage, i);
+
+    const verdict = s.motion
+      ? (s.motion.cell === s.cell
+          ? '<span class="ok">on the action</span>'
+          : '<span class="warn">motion is at <b>' + s.motion.cell + '</b></span>')
+      : '<span class="warn">nothing moving here</span>';
+
+    const meta = el('div', 'meta');
+    const keep = el('label', 'keep');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = s.keep;
+    box.onchange = () => {
+      s.keep = box.checked;
+      stage.classList.toggle('dropped', !box.checked);
+      refresh();
+    };
+    keep.append(box, document.createTextNode('Use this accent'));
+
+    meta.append(
+      el('h2', null, (i + 1) + '. ' + s.name),
+      keep,
+      el('dl', null,
+        '<dt>at</dt><dd>' + s.at.toFixed(2) + 's</dd>' +
+        '<dt>proposed</dt><dd>' + s.cell + ' · ' + s.scale + '</dd>' +
+        '<dt>check</dt><dd>' + verdict + '</dd>' +
+        '<dt>because</dt><dd>' + s.reason + '</dd>' +
+        (s.text ? '<dt>says</dt><dd>&ldquo;' + s.text + '&rdquo;</dd>' : ''))
+    );
+
+    const row = el('div', 'row');
+    const pick = el('select');
+    SPRITES.forEach(n => {
+      const o = el('option');
+      o.value = n; o.textContent = n; o.selected = (n === s.name);
+      pick.append(o);
+    });
+    const note = el('p', 'hint');
+    pick.onchange = () => {
+      s.name = pick.value;
+      // The drawing cannot change without re-rendering the page, so say so
+      // rather than showing the old sprite as if it were the new one.
+      const changed = s.name !== s.name0;
+      sprite.style.opacity = changed ? '0.4' : '1';
+      note.textContent = changed
+        ? 'swapped — the picture still shows ' + s.name0 + ' until this is re-rendered'
+        : '';
+      refresh();
+    };
+    const snap = el('button', null, 'Snap to motion');
+    snap.disabled = !s.motion;
+    snap.onclick = () => snapOne(i);
+    row.append(pick, snap);
+
+    meta.append(row, note,
+      el('p', 'hint', 'Drag the accent to place it exactly — its centre is what gets used.'));
+
+    scene.append(stage, meta);
+    root.append(scene);
+    stage.classList.toggle('dropped', !s.keep);
+  });
+  refresh();
+}
+
+function makeDraggable(node, stage, i) {
+  let startX = 0, startY = 0, baseX = 0, baseY = 0;
+  node.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    node.setPointerCapture(e.pointerId);
+    node.classList.add('dragging');
+    const r = stage.getBoundingClientRect();
+    startX = e.clientX; startY = e.clientY;
+    baseX = state[i].x * r.width; baseY = state[i].y * r.height;
+  });
+  node.addEventListener('pointermove', e => {
+    if (!node.classList.contains('dragging')) return;
+    const r = stage.getBoundingClientRect();
+    const s = state[i];
+    s.x = Math.min(1 - s.w, Math.max(0, (baseX + e.clientX - startX) / r.width));
+    s.y = Math.min(1 - s.h, Math.max(0, (baseY + e.clientY - startY) / r.height));
+    node.style.left = (s.x * 100) + '%';
+    node.style.top = (s.y * 100) + '%';
+    refresh();
+  });
+  const stop = () => node.classList.remove('dragging');
+  node.addEventListener('pointerup', stop);
+  node.addEventListener('pointercancel', stop);
+}
+
+function snapOne(i) {
+  const s = state[i];
+  if (!s.motion) return;
+  s.x = Math.min(1 - s.w, Math.max(0, s.motion.x - s.w / 2));
+  s.y = Math.min(1 - s.h, Math.max(0, s.motion.y - s.h / 2));
+  const n = document.getElementById('sprite' + i);
+  n.style.left = (s.x * 100) + '%';
+  n.style.top = (s.y * 100) + '%';
+  refresh();
+}
+
+function snapAll() { state.forEach((s, i) => snapOne(i)); }
+
+function moved(s) {
+  return Math.abs(s.x - s.x0) > 0.002 || Math.abs(s.y - s.y0) > 0.002;
+}
+
+function decisions() {
+  return {
+    version: 1,
+    events: state.map(s => ({
+      index: s.index,
+      keep: s.keep,
+      effect_name: s.name,
+      // The sprite's CENTRE, which is what a person aims at when dragging.
+      x: +(s.x + s.w / 2).toFixed(4),
+      y: +(s.y + s.h / 2).toFixed(4),
+      moved: moved(s),
+      swapped: s.name !== s.name0
+    }))
+  };
+}
+
+function refresh() {
+  const kept = state.filter(s => s.keep).length;
+  document.getElementById('count').textContent =
+    kept + ' of ' + state.length + ' kept · ' +
+    state.filter(moved).length + ' moved · ' +
+    state.filter(s => s.name !== s.name0).length + ' swapped';
+  const out = document.getElementById('out');
+  if (out.style.display === 'block') out.value = JSON.stringify(decisions(), null, 2);
+}
+
+function save() {
+  const blob = new Blob([JSON.stringify(decisions(), null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'effects-decisions.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function copyOut() {
+  const out = document.getElementById('out');
+  out.style.display = 'block';
+  out.value = JSON.stringify(decisions(), null, 2);
+  out.select();
+  try { document.execCommand('copy'); } catch (e) {}
+}
+
+build();
+</script>
 </body></html>
 """

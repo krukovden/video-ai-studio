@@ -371,6 +371,17 @@ class EffectEvent(BaseModel):
     # Speech-bubble entries only: the words to render inside the nine-patch.
     text: str = ""
     reason: str = ""
+    # Where the creator dragged it, as a fraction of the frame. Nine cells are
+    # enough for a model to aim with and far too coarse for a person who can see
+    # the shot: "middle-right" cannot say "just above his hand". When these are
+    # set they win over `screen_position`, which stays as the fallback and as the
+    # record of what was originally proposed.
+    x: float | None = None
+    y: float | None = None
+    # Set by the creator on the approval page. An accent that was looked at and
+    # turned down is kept rather than deleted, so the next run does not propose
+    # it again and a decision is not lost by re-planning.
+    keep: bool = True
 
 
 class EffectPlan(BaseModel):
