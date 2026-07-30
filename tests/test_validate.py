@@ -19,7 +19,7 @@ from videoai.logic.validate import validate_timeline
 
 
 def _manifest() -> Manifest:
-    return Manifest(clips=[ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+    return Manifest(clips=[ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0,
                                     width=1920, height=1080, fps=30.0, has_audio=True)])
 
 
@@ -159,7 +159,7 @@ def test_padding_clamped_at_source_boundary_is_still_judged_on_core_duration():
     a clamped, nearly-zero-length segment's total duration to exactly
     MIN_SEGMENT_SECONDS, which the old total-duration rule alone would accept.
     core_dur exposes the real speech length regardless of that clamp."""
-    manifest = Manifest(clips=[ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+    manifest = Manifest(clips=[ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0,
                                         width=1920, height=1080, fps=30.0, has_audio=True)])
     analysis = Analysis(provider="mock", segments=[
         SegmentAnalysis(phrase_id="clip-01#001", clip_id="clip-01", start=29.85, end=29.95,
@@ -189,9 +189,9 @@ def test_padding_clamped_at_source_boundary_is_still_judged_on_core_duration():
 
 def _mixed_manifest() -> Manifest:
     return Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/landscape.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/landscape.mp4", duration=30.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-02", path="/tmp/portrait.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-02", path="/nonexistent/portrait.mp4", duration=30.0,
                  width=1080, height=1920, fps=30.0, has_audio=True),
     ])
 
@@ -216,9 +216,9 @@ def test_timeline_mixing_portrait_and_landscape_sources_is_reported():
 
 def test_uniform_timeline_reports_no_geometry_violation():
     manifest = Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-02", path="/nonexistent/b.mp4", duration=30.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
     ])
     timeline = _timeline(
@@ -236,9 +236,9 @@ def test_clips_without_proxies_fall_back_to_originals_and_catch_4k_vs_1080p():
     proxy yet: the old aspect-only rule passed this silently, but the renderer
     would still concatenate mismatched geometry with -c copy."""
     manifest = Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0,
                  width=3840, height=2160, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-02", path="/nonexistent/b.mp4", duration=30.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
     ])
     timeline = _timeline(
@@ -290,9 +290,9 @@ def test_proxies_built_at_different_heights_are_reported_even_with_identical_ori
 
 def test_mixed_frame_rate_is_reported():
     manifest = Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-02", path="/nonexistent/b.mp4", duration=30.0,
                  width=1920, height=1080, fps=60.0, has_audio=True),
     ])
     timeline = _timeline(
@@ -331,9 +331,9 @@ def test_single_source_timeline_reports_no_geometry_violation():
 
 def _insert_manifest() -> Manifest:
     return Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0,
+        ClipInfo(clip_id="clip-10", path="/nonexistent/c.mp4", duration=7.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
     ])
 
@@ -413,9 +413,9 @@ def test_insert_shorter_than_the_minimum_is_still_reported():
 
 def test_insert_from_a_source_of_different_geometry_is_still_reported():
     manifest = Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0,
                  width=1920, height=1080, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0,
+        ClipInfo(clip_id="clip-10", path="/nonexistent/c.mp4", duration=7.0,
                  width=1080, height=1920, fps=30.0, has_audio=True),
     ])
     timeline = _timeline(

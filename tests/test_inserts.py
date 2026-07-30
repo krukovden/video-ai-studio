@@ -7,13 +7,13 @@ from videoai.logic.inserts import detect_inserts, is_insert_ref, resolve_insert_
 def _manifest() -> Manifest:
     return Manifest(clips=[
         # 10 words over 10s: ordinary narration, well above the threshold.
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=10.0, width=1920,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=10.0, width=1920,
                  height=1080, fps=30.0, has_audio=True, recorded_at=100.0),
         # 2 words over 10s: the camera is close and nobody is really talking.
-        ClipInfo(clip_id="clip-09", path="/tmp/b.mp4", duration=10.0, width=1920,
+        ClipInfo(clip_id="clip-09", path="/nonexistent/b.mp4", duration=10.0, width=1920,
                  height=1080, fps=30.0, has_audio=True, recorded_at=200.0),
         # No words at all: the close-up of the bubble popping.
-        ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0, width=1920,
+        ClipInfo(clip_id="clip-10", path="/nonexistent/c.mp4", duration=7.0, width=1920,
                  height=1080, fps=30.0, has_audio=True),
     ])
 
@@ -48,7 +48,7 @@ def test_clip_with_no_words_is_a_candidate_at_any_threshold():
 
 
 def test_clip_missing_from_the_transcript_entirely_counts_as_silent():
-    manifest = Manifest(clips=[ClipInfo(clip_id="clip-20", path="/tmp/d.mp4", duration=5.0,
+    manifest = Manifest(clips=[ClipInfo(clip_id="clip-20", path="/nonexistent/d.mp4", duration=5.0,
                                         width=1920, height=1080, fps=30.0, has_audio=False)])
     inserts = detect_inserts(manifest, Transcript(provider="mock", clips=[]), 0.5)
     assert [insert.clip_id for insert in inserts] == ["clip-20"]
@@ -66,7 +66,7 @@ def test_insert_carries_duration_recorded_at_and_density():
 
 
 def test_zero_length_clip_does_not_divide_by_zero():
-    manifest = Manifest(clips=[ClipInfo(clip_id="clip-30", path="/tmp/e.mp4", duration=0.0,
+    manifest = Manifest(clips=[ClipInfo(clip_id="clip-30", path="/nonexistent/e.mp4", duration=0.0,
                                         width=1920, height=1080, fps=30.0, has_audio=True)])
     inserts = detect_inserts(manifest, Transcript(provider="mock", clips=[]), 0.5)
     assert inserts[0].speech_density == 0.0

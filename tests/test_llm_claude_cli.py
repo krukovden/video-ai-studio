@@ -122,7 +122,7 @@ def test_analyze_stage_resolves_the_llm_with_the_configured_model(tmp_path, monk
         store=ArtifactStore(tmp_path / "work"),
     )
     manifest = Manifest(clips=[ClipInfo(
-        clip_id="clip-01", path="/tmp/a.mp4", duration=10.0, width=320, height=240,
+        clip_id="clip-01", path=str(tmp_path / "a.mp4"), duration=10.0, width=320, height=240,
         fps=30.0, has_audio=True,
     )])
     ctx.store.write("01-manifest", manifest, fingerprint="fp")

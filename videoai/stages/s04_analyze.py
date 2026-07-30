@@ -157,7 +157,12 @@ def _insert_keyframes(
             at = insert.duration * fraction
             target = frames_dir / f"{key}-{round(at * 1000):08d}.jpg"
             if not target.exists() and source.exists():
-                extract_frame(source, at=at, dst=target)
+                try:
+                    extract_frame(source, at=at, dst=target)
+                except RuntimeError:
+                    # ffmpeg refused this frame (e.g. an unsupported pixel format);
+                    # the clip just goes undescribed rather than failing analyze.
+                    continue
             if target.exists():
                 paths.append(target)
         if paths:
@@ -230,7 +235,12 @@ def _keyframes(
         if not target.exists():
             source = Path(clip.proxy_path or clip.path)
             if source.exists():
-                extract_frame(source, at=at, dst=target)
+                try:
+                    extract_frame(source, at=at, dst=target)
+                except RuntimeError:
+                    # ffmpeg refused this frame; the phrase just goes without one
+                    # rather than failing the whole analyze stage over it.
+                    pass
         if target.exists():
             paths.append(target)
     return paths, truncated

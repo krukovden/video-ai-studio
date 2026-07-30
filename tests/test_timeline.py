@@ -17,9 +17,9 @@ from videoai.logic.validate import validate_timeline
 
 def _manifest() -> Manifest:
     return Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0, width=1920,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0, width=1920,
                  height=1080, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0, width=1920,
+        ClipInfo(clip_id="clip-02", path="/nonexistent/b.mp4", duration=30.0, width=1920,
                  height=1080, fps=30.0, has_audio=True),
     ])
 
@@ -254,7 +254,7 @@ def test_build_timeline_never_produces_a_timeline_its_own_validator_rejects():
     # words closer than the padding window on both sides of both segments),
     # build_timeline must not pad a cut edge into the middle of a word.
     manifest = Manifest(clips=[
-        ClipInfo(clip_id="clip-04", path="/tmp/c.mp4", duration=60.0, width=1920,
+        ClipInfo(clip_id="clip-04", path="/nonexistent/c.mp4", duration=60.0, width=1920,
                  height=1080, fps=30.0, has_audio=True),
     ])
     words = [
@@ -297,11 +297,11 @@ def test_build_timeline_never_produces_a_timeline_its_own_validator_rejects():
 
 def _insert_manifest() -> Manifest:
     return Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0, width=1920,
+        ClipInfo(clip_id="clip-01", path="/nonexistent/a.mp4", duration=30.0, width=1920,
                  height=1080, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=30.0, width=1920,
+        ClipInfo(clip_id="clip-02", path="/nonexistent/b.mp4", duration=30.0, width=1920,
                  height=1080, fps=30.0, has_audio=True),
-        ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0, width=1920,
+        ClipInfo(clip_id="clip-10", path="/nonexistent/c.mp4", duration=7.0, width=1920,
                  height=1080, fps=30.0, has_audio=True),
     ])
 

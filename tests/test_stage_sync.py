@@ -23,10 +23,10 @@ def _context(tmp_path: Path) -> StageContext:
 def test_sync_stage_places_every_clip_on_the_timeline(tmp_path: Path):
     ctx = _context(tmp_path)
     ctx.store.write("01-manifest", Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mov", duration=10.0, width=1920, height=1080,
-                 fps=30.0, has_audio=False, camera="main", recorded_at=1000.0),
-        ClipInfo(clip_id="clip-02", path="/tmp/b.mov", duration=10.0, width=1920, height=1080,
-                 fps=30.0, has_audio=False, camera="main", recorded_at=1020.0),
+        ClipInfo(clip_id="clip-01", path=str(tmp_path / "a.mov"), duration=10.0, width=1920,
+                 height=1080, fps=30.0, has_audio=False, camera="main", recorded_at=1000.0),
+        ClipInfo(clip_id="clip-02", path=str(tmp_path / "b.mov"), duration=10.0, width=1920,
+                 height=1080, fps=30.0, has_audio=False, camera="main", recorded_at=1020.0),
     ]), fingerprint="fp")
 
     result = sync(ctx)
@@ -39,11 +39,13 @@ def test_sync_stage_places_every_clip_on_the_timeline(tmp_path: Path):
 def test_sync_stage_tolerates_missing_audio_files(tmp_path: Path):
     ctx = _context(tmp_path)
     ctx.store.write("01-manifest", Manifest(clips=[
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mov", duration=10.0, width=1920, height=1080,
-                 fps=30.0, has_audio=True, audio_path="/tmp/does-not-exist.wav",
+        ClipInfo(clip_id="clip-01", path=str(tmp_path / "a.mov"), duration=10.0, width=1920,
+                 height=1080, fps=30.0, has_audio=True,
+                 audio_path=str(tmp_path / "does-not-exist.wav"),
                  camera="cam-a", recorded_at=1000.0),
-        ClipInfo(clip_id="clip-02", path="/tmp/b.mov", duration=10.0, width=1920, height=1080,
-                 fps=30.0, has_audio=True, audio_path="/tmp/also-missing.wav",
+        ClipInfo(clip_id="clip-02", path=str(tmp_path / "b.mov"), duration=10.0, width=1920,
+                 height=1080, fps=30.0, has_audio=True,
+                 audio_path=str(tmp_path / "also-missing.wav"),
                  camera="cam-b", recorded_at=1000.0),
     ]), fingerprint="fp")
 

@@ -79,7 +79,7 @@ def test_estimate_offset_confidence_stays_low_for_unrelated_audio_across_seeds(t
 
 def _clip(clip_id: str, camera: str, recorded_at: float | None, duration: float = 10.0) -> ClipInfo:
     return ClipInfo(
-        clip_id=clip_id, path=f"/tmp/{clip_id}.mov", duration=duration, width=1920,
+        clip_id=clip_id, path=f"/nonexistent/{clip_id}.mov", duration=duration, width=1920,
         height=1080, fps=30.0, has_audio=True, camera=camera, recorded_at=recorded_at,
     )
 

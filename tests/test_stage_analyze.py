@@ -50,7 +50,7 @@ def _seed_artifacts(ctx: StageContext) -> None:
     ctx.store.write(
         "01-manifest",
         Manifest(clips=[{
-            "clip_id": "clip-01", "path": "/tmp/a.mp4", "duration": 10.0,
+            "clip_id": "clip-01", "path": str(ctx.project_dir / "a.mp4"), "duration": 10.0,
             "width": 320, "height": 240, "fps": 30.0, "has_audio": True,
         }]),
         fingerprint="fp",
@@ -81,7 +81,7 @@ def _seed_many_phrases(ctx: StageContext, count: int) -> None:
     ctx.store.write(
         "01-manifest",
         Manifest(clips=[{
-            "clip_id": "clip-01", "path": "/tmp/a.mp4", "duration": 60.0,
+            "clip_id": "clip-01", "path": str(ctx.project_dir / "a.mp4"), "duration": 60.0,
             "width": 320, "height": 240, "fps": 30.0, "has_audio": True,
         }]),
         fingerprint="fp",
@@ -415,14 +415,14 @@ def _seed_with_a_silent_clip(ctx: StageContext) -> None:
         "01-manifest",
         Manifest(clips=[
             # 3 words over 10s (0.3 words/s) is below the 0.5 default.
-            ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=10.0, width=320,
-                     height=240, fps=30.0, has_audio=True),
+            ClipInfo(clip_id="clip-01", path=str(ctx.project_dir / "a.mp4"), duration=10.0,
+                     width=320, height=240, fps=30.0, has_audio=True),
             # 3 words over 2s (1.5 words/s) is ordinary narration.
-            ClipInfo(clip_id="clip-02", path="/tmp/b.mp4", duration=2.0, width=320,
-                     height=240, fps=30.0, has_audio=True),
+            ClipInfo(clip_id="clip-02", path=str(ctx.project_dir / "b.mp4"), duration=2.0,
+                     width=320, height=240, fps=30.0, has_audio=True),
             # The close-up of the bubble popping: nobody says anything.
-            ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0, width=320,
-                     height=240, fps=30.0, has_audio=True),
+            ClipInfo(clip_id="clip-10", path=str(ctx.project_dir / "c.mp4"), duration=7.0,
+                     width=320, height=240, fps=30.0, has_audio=True),
         ]),
         fingerprint="fp",
     )
@@ -506,8 +506,8 @@ def _seed_with_a_describable_insert(ctx: StageContext, insert_path: Path, durati
     ctx.store.write(
         "01-manifest",
         Manifest(clips=[
-            ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=10.0, width=320,
-                     height=240, fps=30.0, has_audio=True),
+            ClipInfo(clip_id="clip-01", path=str(ctx.project_dir / "a.mp4"), duration=10.0,
+                     width=320, height=240, fps=30.0, has_audio=True),
             ClipInfo(clip_id="clip-10", path=str(insert_path), duration=duration,
                      width=320, height=240, fps=30.0, has_audio=True),
         ]),
@@ -572,6 +572,27 @@ def test_clip_missing_from_description_reply_ends_up_empty_and_stage_succeeds(
     }
     ctx = _context(tmp_path, monkeypatch, payload)
     _seed_with_a_describable_insert(ctx, clip_path, duration=6.0)
+
+    result = analyze(ctx)
+
+    insert = next(i for i in result.inserts if i.clip_id == "clip-10")
+    assert insert.description == ""
+
+
+def test_unextractable_keyframe_leaves_analyze_succeeding_with_empty_description(
+    tmp_path: Path, monkeypatch
+):
+    """A source file that exists but ffmpeg refuses to read (corrupt, truncated,
+    an unsupported codec) must degrade the same way a missing model reply does:
+    the insert goes undescribed, and analyze must not raise over it."""
+    corrupt_path = tmp_path / "corrupt-insert.mp4"
+    corrupt_path.write_bytes(b"not a real video file, just garbage bytes")
+    payload = {
+        "segments": _segments_payload_for_clip_01(),
+        "descriptions": {"clip-10": "unreachable: no keyframe ever gets extracted"},
+    }
+    ctx = _context(tmp_path, monkeypatch, payload)
+    _seed_with_a_describable_insert(ctx, corrupt_path, duration=6.0)
 
     result = analyze(ctx)
 
@@ -644,22 +665,23 @@ def test_insert_keyframes_already_present_are_not_re_extracted(
     assert calls == []  # every frame was already cached on disk
 
 
-def test_build_insert_description_prompt_lists_frame_paths_per_clip():
+def test_build_insert_description_prompt_lists_frame_paths_per_clip(tmp_path: Path):
     inserts = [
         InsertClip(clip_id="clip-09", duration=5.0, speech_density=0.0),
         InsertClip(clip_id="clip-10", duration=7.0, speech_density=0.0),
     ]
+    kf = tmp_path / "kf"
     frames_by_clip = {
-        "clip-09": [Path("/tmp/kf/a1.jpg"), Path("/tmp/kf/a2.jpg"), Path("/tmp/kf/a3.jpg")],
-        "clip-10": [Path("/tmp/kf/b1.jpg"), Path("/tmp/kf/b2.jpg"), Path("/tmp/kf/b3.jpg")],
+        "clip-09": [kf / "a1.jpg", kf / "a2.jpg", kf / "a3.jpg"],
+        "clip-10": [kf / "b1.jpg", kf / "b2.jpg", kf / "b3.jpg"],
     }
 
     prompt = build_insert_description_prompt(inserts, frames_by_clip, brief="A pop-toy review.")
 
     assert "clip-09" in prompt
-    assert "/tmp/kf/a1.jpg" in prompt
+    assert str(kf / "a1.jpg") in prompt
     assert "clip-10" in prompt
-    assert "/tmp/kf/b3.jpg" in prompt
+    assert str(kf / "b3.jpg") in prompt
     assert "A pop-toy review." in prompt
 
 

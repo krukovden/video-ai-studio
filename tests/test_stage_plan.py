@@ -47,7 +47,7 @@ def _context(
         store=ArtifactStore(tmp_path / "work"),
     )
     clips = [
-        ClipInfo(clip_id="clip-01", path="/tmp/a.mp4", duration=30.0, width=1920,
+        ClipInfo(clip_id="clip-01", path=str(tmp_path / "a.mp4"), duration=30.0, width=1920,
                  height=1080, fps=30.0, has_audio=True),
         *(extra_clips or []),
     ]
@@ -186,8 +186,8 @@ def test_model_reply_naming_an_excluded_phrase_raises(tmp_path: Path, monkeypatc
 # through an `insert:` reference, since there is no phrase to select it by ---
 
 
-def _silent_clip() -> ClipInfo:
-    return ClipInfo(clip_id="clip-10", path="/tmp/c.mp4", duration=7.0, width=1920,
+def _silent_clip(tmp_path: Path) -> ClipInfo:
+    return ClipInfo(clip_id="clip-10", path=str(tmp_path / "c.mp4"), duration=7.0, width=1920,
                     height=1080, fps=30.0, has_audio=True)
 
 
@@ -202,7 +202,7 @@ def test_planner_can_place_a_whole_insert_into_the_timeline(tmp_path: Path, monk
                       "phrase_ids": ["clip-01#001", "insert:clip-10"]}],
     }
     ctx = _context(tmp_path, monkeypatch, payload,
-                   extra_clips=[_silent_clip()], inserts=[_insert()])
+                   extra_clips=[_silent_clip(tmp_path)], inserts=[_insert()])
 
     timeline = plan(ctx)
 
@@ -220,7 +220,7 @@ def test_planner_can_trim_an_insert_to_a_range(tmp_path: Path, monkeypatch):
                       "phrase_ids": ["insert:clip-10@2-5"]}],
     }
     ctx = _context(tmp_path, monkeypatch, payload,
-                   extra_clips=[_silent_clip()], inserts=[_insert()])
+                   extra_clips=[_silent_clip(tmp_path)], inserts=[_insert()])
 
     timeline = plan(ctx)
 
@@ -234,7 +234,7 @@ def test_unknown_insert_clip_id_from_the_planner_raises(tmp_path: Path, monkeypa
         "sections": [{"name": "Popping", "goal": "x", "phrase_ids": ["insert:clip-77"]}],
     }
     ctx = _context(tmp_path, monkeypatch, payload,
-                   extra_clips=[_silent_clip()], inserts=[_insert()])
+                   extra_clips=[_silent_clip(tmp_path)], inserts=[_insert()])
 
     with pytest.raises(RuntimeError) as error:
         plan(ctx)
@@ -248,7 +248,7 @@ def test_insert_range_outside_the_clip_from_the_planner_raises(tmp_path: Path, m
         "sections": [{"name": "Popping", "goal": "x", "phrase_ids": ["insert:clip-10@4-12"]}],
     }
     ctx = _context(tmp_path, monkeypatch, payload,
-                   extra_clips=[_silent_clip()], inserts=[_insert()])
+                   extra_clips=[_silent_clip(tmp_path)], inserts=[_insert()])
 
     with pytest.raises(RuntimeError) as error:
         plan(ctx)
@@ -262,7 +262,7 @@ def test_inverted_insert_range_from_the_planner_raises(tmp_path: Path, monkeypat
         "sections": [{"name": "Popping", "goal": "x", "phrase_ids": ["insert:clip-10@5-2"]}],
     }
     ctx = _context(tmp_path, monkeypatch, payload,
-                   extra_clips=[_silent_clip()], inserts=[_insert()])
+                   extra_clips=[_silent_clip(tmp_path)], inserts=[_insert()])
 
     with pytest.raises(RuntimeError) as error:
         plan(ctx)
@@ -305,7 +305,7 @@ def test_insert_listing_reaches_the_prompt(tmp_path: Path, monkeypatch):
         "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#001"]}],
     }
     ctx = _context(tmp_path, monkeypatch, payload,
-                   extra_clips=[_silent_clip()], inserts=[_insert()])
+                   extra_clips=[_silent_clip(tmp_path)], inserts=[_insert()])
     from videoai.providers.llm_mock import MockLLM
 
     seen: list[str] = []
@@ -334,7 +334,7 @@ def test_insert_description_reaches_the_plan_prompt(tmp_path: Path, monkeypatch)
         description="The bubbles are already formed and a hand is reaching in to pop them.",
     )
     ctx = _context(tmp_path, monkeypatch, payload,
-                   extra_clips=[_silent_clip()], inserts=[described_insert])
+                   extra_clips=[_silent_clip(tmp_path)], inserts=[described_insert])
     from videoai.providers.llm_mock import MockLLM
 
     seen: list[str] = []
@@ -434,7 +434,7 @@ def test_visually_rejected_insert_is_hidden_and_refused(tmp_path: Path, monkeypa
                       "phrase_ids": ["clip-01#001", "insert:clip-10@2-5"]}],
     }
     ctx = _context(tmp_path, monkeypatch, payload,
-                   extra_clips=[_silent_clip()], inserts=[_insert()])
+                   extra_clips=[_silent_clip(tmp_path)], inserts=[_insert()])
     _reject(ctx, "insert:clip-10")
     seen = _captured_prompt(monkeypatch)
 
