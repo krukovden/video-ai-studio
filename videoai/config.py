@@ -71,6 +71,20 @@ class PlanSettings(BaseModel):
     reject_unusable_shots: bool = True
 
 
+class EffectsSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    # The cartoon-effects stage: one LLM call that reads the story and picks which
+    # sprites from `assets/effects/` punctuate which moments. Off means no events
+    # are planned and none are composited; the delivery is otherwise identical,
+    # because effects are not a required production feature.
+    enabled: bool = True
+    # A hard ceiling on the accents one video may carry. The prompt asks for four
+    # to eight in three minutes; this is what stops a model that got carried away,
+    # and it refuses rather than silently truncating.
+    max_events: int = 8
+
+
 class PolishSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -130,6 +144,7 @@ class Config(BaseModel):
     render: RenderSettings = RenderSettings()
     sync: SyncSettings = SyncSettings()
     plan: PlanSettings = PlanSettings()
+    effects: EffectsSettings = EffectsSettings()
     polish: PolishSettings = PolishSettings()
 
     @model_validator(mode="after")
@@ -155,5 +170,6 @@ def load_config(path: Path | None = None) -> Config:
         render=RenderSettings(**(raw.get("render") or {})),
         sync=SyncSettings(**(raw.get("sync") or {})),
         plan=PlanSettings(**(raw.get("plan") or {})),
+        effects=EffectsSettings(**(raw.get("effects") or {})),
         polish=PolishSettings(**(raw.get("polish") or {})),
     )
