@@ -57,6 +57,19 @@ class AnalyzeSettings(BaseModel):
     max_video_seconds: float = 900.0
 
 
+class DescribeSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    # Watch every source clip once and keep what it contains. The result is a
+    # cache keyed by file identity, so this is paid for once per clip ever, not
+    # once per run.
+    #
+    # Off by default because it needs a provider that can watch video, and the
+    # pipeline's default provider cannot: switching it on without also pointing
+    # `describe` at such a provider is an error rather than a quiet no-op.
+    enabled: bool = False
+
+
 class RenderSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -154,6 +167,7 @@ class Config(BaseModel):
     )
     transcribe: TranscribeSettings = TranscribeSettings()
     analyze: AnalyzeSettings = AnalyzeSettings()
+    describe: DescribeSettings = DescribeSettings()
     render: RenderSettings = RenderSettings()
     sync: SyncSettings = SyncSettings()
     plan: PlanSettings = PlanSettings()
@@ -220,6 +234,7 @@ def load_config(path: Path | None = None) -> Config:
         providers=providers,
         transcribe=TranscribeSettings(**(raw.get("transcribe") or {})),
         analyze=AnalyzeSettings(**(raw.get("analyze") or {})),
+        describe=DescribeSettings(**(raw.get("describe") or {})),
         render=RenderSettings(**(raw.get("render") or {})),
         sync=SyncSettings(**(raw.get("sync") or {})),
         plan=PlanSettings(**(raw.get("plan") or {})),

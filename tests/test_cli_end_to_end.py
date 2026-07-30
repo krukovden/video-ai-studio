@@ -136,7 +136,7 @@ def test_stages_command_lists_pipeline_order():
     result = runner.invoke(app, ["stages"])
     assert result.exit_code == 0
     for stage_id in (
-        "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
+        "ingest", "quality", "sync", "transcribe", "analyze", "describe", "plan", "visual_check",
         "effects", "render_draft", "export_edit", "polish",
     ):
         assert stage_id in result.output
@@ -333,8 +333,8 @@ def _executed_stages(output: str) -> set[str]:
 
 
 ALL_STAGE_IDS = {
-    "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
-    "effects", "render_draft", "export_edit", "polish",
+    "ingest", "quality", "sync", "transcribe", "analyze", "describe", "plan",
+    "visual_check", "effects", "render_draft", "export_edit", "polish",
 }
 
 
@@ -395,8 +395,8 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
     after_brief_edit = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert after_brief_edit.exit_code == 0, after_brief_edit.output
     assert _executed_stages(after_brief_edit.output) == {
-        "analyze", "plan", "visual_check", "effects", "render_draft", "export_edit",
-        "polish",
+        "analyze", "describe", "plan", "visual_check", "effects", "render_draft",
+        "export_edit", "polish",
     }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])

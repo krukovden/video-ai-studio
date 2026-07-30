@@ -11,6 +11,7 @@ import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import (
     AnalyzeSettings,
     Config,
+    DescribeSettings,
     EffectsSettings,
     PlanSettings,
     PolishSettings,
@@ -74,7 +75,7 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(analyze=AnalyzeSettings(max_keyframes=10)), {"analyze"}),
         (
             Config(analyze=AnalyzeSettings(llm_model="opus")),
-            {"analyze", "plan", "visual_check", "effects"},
+            {"analyze", "plan", "visual_check", "effects", "describe"},
         ),
         (
             Config(analyze=AnalyzeSettings(insert_max_words_per_second=0.2)),
@@ -95,6 +96,9 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         # Effects are chosen by one stage and drawn by another, so switching them
         # off has to re-run both: the delivery has them composited into its picture.
         (Config(effects=EffectsSettings(enabled=False)), {"effects", "polish"}),
+        # Describing the footage is its own cache; switching it off touches
+        # nothing else, because nothing downstream requires the notes.
+        (Config(describe=DescribeSettings(enabled=True)), {"describe"}),
         (Config(effects=EffectsSettings(max_events=3)), {"effects"}),
         (Config(polish=PolishSettings(enabled=False)), {"polish"}),
         (Config(polish=PolishSettings(require_approval=True)), {"polish"}),

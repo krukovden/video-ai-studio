@@ -182,6 +182,54 @@ class InsertClip(BaseModel):
     description: str = ""
 
 
+class ClipEvent(BaseModel):
+    """One moment inside a source clip, on that clip's own clock."""
+
+    at: float
+    kind: str = "action"
+    what: str = ""
+    # Roughly where on screen it happens, as one of the nine grid cells the
+    # effects stage already speaks in. Without it an accent has nothing to aim
+    # at and lands wherever the model guessed.
+    where: str = ""
+
+
+class ClipNote(BaseModel):
+    """What one source clip contains, described once and kept.
+
+    Keyed by `source_key` rather than `clip_id`: ids are positional and shift
+    whenever a clip is added, while the key identifies the file itself. That is
+    what makes this reusable — renumbering costs nothing, and only genuinely new
+    or replaced footage is ever sent to be watched again.
+    """
+
+    clip_id: str
+    source_key: str
+    duration: float
+    source_name: str = ""
+    summary: str = ""
+    events: list[ClipEvent] = Field(default_factory=list)
+    # What describing this one clip cost, so the log can total it honestly.
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class ClipNotes(BaseModel):
+    """Every clip's description, as a cache that only ever grows."""
+
+    provider: str = ""
+    notes: list[ClipNote] = Field(default_factory=list)
+
+    def by_key(self, source_key: str) -> ClipNote:
+        for note in self.notes:
+            if note.source_key == source_key:
+                return note
+        raise KeyError(f"no note for source_key: {source_key}")
+
+    def keys(self) -> set[str]:
+        return {note.source_key for note in self.notes}
+
+
 class Observation(BaseModel):
     """One thing a model actually saw happen, put back on the source clock.
 
