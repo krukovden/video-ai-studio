@@ -3,27 +3,7 @@ import subprocess
 
 import pytest
 
-from videoai.providers.llm_claude_cli import ClaudeCliLLM, _extract_json
-
-
-def test_extract_json_bare():
-    assert _extract_json('{"a": 1}') == {"a": 1}
-
-
-def test_extract_json_fenced():
-    text = '```json\n{"a": 1}\n```'
-    assert _extract_json(text) == {"a": 1}
-
-
-def test_extract_json_prose_around_json():
-    text = 'Sure, here you go:\n{"a": 1}\nHope that helps.'
-    assert _extract_json(text) == {"a": 1}
-
-
-def test_extract_json_two_objects_raises_value_error():
-    text = '{"a": 1} and also {"b": 2}'
-    with pytest.raises(ValueError):
-        _extract_json(text)
+from videoai.providers.llm_claude_cli import ClaudeCliLLM
 
 
 class _FakeResult:

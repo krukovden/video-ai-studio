@@ -9,7 +9,16 @@ from videoai.providers.base import resolve_asr
 
 
 def _transcription_fingerprint_inputs(ctx: StageContext) -> tuple[str, ...]:
-    """Only source/audio identity affects ASR, never a disposable proxy path."""
+    """Only source/audio identity affects ASR, never a disposable proxy path.
+
+    This projection replaces the content hashes of `01-manifest` and `01b-sync`
+    entirely, so it must name every field the stage below reads — a field left out
+    is a field that can change without re-transcribing. The sync map is read for
+    exactly one thing, `primary_camera`, which is why the whole artifact's hash is
+    not needed; and `audio_path` enters as a boolean because whether audio was
+    extracted decides whether a clip is transcribed, while the path itself is a
+    disposable location under `work/`.
+    """
     manifest = ctx.store.read("01-manifest", Manifest)
     sync_map = ctx.store.read("01b-sync", SyncMap)
     inputs = [f"primary-camera:{sync_map.primary_camera}"]
@@ -21,6 +30,7 @@ def _transcription_fingerprint_inputs(ctx: StageContext) -> tuple[str, ...]:
                     clip.source_key,
                     clip.camera,
                     str(clip.has_audio),
+                    f"has-audio-file={bool(clip.audio_path)}",
                     f"{clip.duration:.6f}",
                 )
             )

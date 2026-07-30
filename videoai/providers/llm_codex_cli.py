@@ -5,17 +5,23 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from videoai.providers.llm_claude_cli import _extract_json
+from videoai.providers.json_reply import cli_diagnostic, extract_json
+
+# Codex has no `--system-prompt`, so the preamble is prefixed to the prompt itself.
+# It is a module constant rather than a local string because it is part of what the
+# model is asked, and the stages that call this provider mix it into their
+# fingerprints: editing it changes the analysis and has to invalidate the cached one.
+SYSTEM_PROMPT = (
+    "Act only as a video editing analyst. Do not change files or run commands. "
+    "Return one JSON document and nothing else.\n\n"
+)
 
 
 class CodexCliLLM:
     name = "codex_cli"
+    system_preamble = SYSTEM_PROMPT
 
     def complete_json(self, prompt: str, images: list[Path], timeout: int) -> dict:
-        system = (
-            "Act only as a video editing analyst. Do not change files or run commands. "
-            "Return one JSON document and nothing else.\n\n"
-        )
         with tempfile.TemporaryDirectory(prefix="videoai-codex-") as directory:
             output = Path(directory) / "response.txt"
             args = [
@@ -28,7 +34,7 @@ class CodexCliLLM:
             ]
             for image in images:
                 args.extend(["--image", str(image)])
-            args.append(system + prompt)
+            args.append(SYSTEM_PROMPT + prompt)
             try:
                 result = subprocess.run(
                     args,
@@ -39,8 +45,9 @@ class CodexCliLLM:
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(f"codex CLI timed out after {timeout} seconds") from exc
             if result.returncode != 0:
-                diagnostic = (result.stderr or result.stdout).strip()[:500]
-                raise RuntimeError(f"codex CLI failed: {diagnostic}")
+                raise RuntimeError(
+                    cli_diagnostic("codex", result.returncode, result.stderr, result.stdout)
+                )
             if not output.is_file():
                 raise RuntimeError("codex CLI completed without a final response")
-            return _extract_json(output.read_text(encoding="utf-8"))
+            return extract_json(output.read_text(encoding="utf-8"))

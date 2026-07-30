@@ -68,7 +68,15 @@ def _fingerprint(
     if spec.uses_brief:
         parts.append(brief_fingerprint)
     if spec.provider_key:
-        parts.append(f"{spec.provider_key}={ctx.config.providers.get(spec.provider_key, '')}")
+        provider = ctx.config.providers.get(spec.provider_key, "")
+        parts.append(f"{spec.provider_key}={provider}")
+        if spec.provider_key == "llm":
+            # The provider's own fixed instruction is as much a part of the prompt
+            # as `spec.prompt` is; Codex's preamble is prefixed to every prompt it
+            # sends, so editing it has to invalidate the analysis it produced.
+            from videoai.providers.base import llm_system_preamble
+
+            parts.append(f"system:{hash_parts(llm_system_preamble(provider))}")
     for key in spec.config_keys:
         parts.append(f"{key}={config_value(ctx.config, key)!r}")
     if spec.prompt is not None:

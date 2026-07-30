@@ -162,6 +162,94 @@ def test_editing_the_production_contract_reruns_delivery(tmp_path: Path):
     assert _fingerprint(spec, ctx, "media-fp", "brief-fp") != before
 
 
+def _transcribe_context(tmp_path: Path) -> tuple[StageContext, ClipInfo]:
+    ctx = _context(tmp_path, Config())
+    clip = ClipInfo(
+        clip_id="clip-01",
+        path="original.mov",
+        duration=10.0,
+        width=1920,
+        height=1080,
+        fps=30.0,
+        has_audio=True,
+        camera="main",
+        source_key="same-source",
+        audio_path="audio.wav",
+        proxy_path="proxy-540p.mp4",
+    )
+    ctx.store.write("01-manifest", Manifest(clips=[clip]), fingerprint="manifest")
+    ctx.store.write("01b-sync", SyncMap(primary_camera="main"), fingerprint="sync")
+    return ctx, clip
+
+
+# Every field `transcribe` reads, and what changing it must do to the projection
+# that stands in for the whole of 01-manifest and 01b-sync.
+@pytest.mark.parametrize(
+    "update, reruns",
+    [
+        ({"clip_id": "clip-02"}, True),
+        ({"camera": "cam-b"}, True),
+        ({"source_key": "a-different-file"}, True),
+        ({"has_audio": False}, True),
+        ({"audio_path": ""}, True),
+        ({"duration": 11.0}, True),
+        # Read by nothing in this stage: the proxy is the draft's business.
+        ({"proxy_path": "proxy-720p.mp4"}, False),
+        ({"width": 1280, "height": 720}, False),
+    ],
+)
+def test_the_transcribe_projection_covers_every_field_the_stage_reads(
+    tmp_path: Path, update: dict, reruns: bool
+):
+    """A projection replaces the required artifacts' content hashes, so a field the
+    stage reads but the projection omits leaves transcription cached against input
+    it no longer matches — the bug that kept the wrong camera forever."""
+    ctx, clip = _transcribe_context(tmp_path)
+    before = _fingerprint(REGISTRY["transcribe"], ctx, "media-fp", "brief-fp")
+
+    ctx.store.write(
+        "01-manifest",
+        Manifest(clips=[clip.model_copy(update=update)]),
+        fingerprint="changed",
+    )
+    after = _fingerprint(REGISTRY["transcribe"], ctx, "media-fp", "brief-fp")
+
+    assert (after != before) is reruns, update
+
+
+def test_the_transcribe_projection_includes_the_sync_maps_primary_camera(tmp_path: Path):
+    """`transcribe` transcribes the primary camera's clips and stubs the rest, so a
+    re-detected primary camera has to re-transcribe — and the projection is all the
+    fingerprint sees of `01b-sync`."""
+    ctx, _ = _transcribe_context(tmp_path)
+    before = _fingerprint(REGISTRY["transcribe"], ctx, "media-fp", "brief-fp")
+
+    ctx.store.write("01b-sync", SyncMap(primary_camera="cam-b"), fingerprint="sync")
+
+    assert _fingerprint(REGISTRY["transcribe"], ctx, "media-fp", "brief-fp") != before
+
+
+def test_editing_a_providers_system_preamble_invalidates_the_stages_that_send_it(
+    tmp_path: Path, monkeypatch
+):
+    """Codex prepends a fixed instruction to every prompt. It is part of what the
+    model was asked, so it belongs in the fingerprint next to `spec.prompt`."""
+    from videoai.providers import llm_codex_cli
+
+    ctx = _context(tmp_path, Config(providers={"asr": "mock", "llm": "codex_cli"}))
+    before = {
+        stage_id: _fingerprint(REGISTRY[stage_id], ctx, "media-fp", "brief-fp")
+        for stage_id in ("analyze", "plan", "visual_check")
+    }
+
+    monkeypatch.setattr(
+        llm_codex_cli, "SYSTEM_PROMPT", llm_codex_cli.SYSTEM_PROMPT + " Be terse."
+    )
+
+    for stage_id, value in before.items():
+        assert _fingerprint(REGISTRY[stage_id], ctx, "media-fp", "brief-fp") != value, stage_id
+
+
 def test_transcription_fingerprint_ignores_disposable_proxy_path(tmp_path: Path):
     ctx = _context(tmp_path, Config())
     clip = ClipInfo(
