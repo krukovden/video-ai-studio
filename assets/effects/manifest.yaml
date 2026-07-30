@@ -297,3 +297,472 @@ sprites:
   animation: pop-in
   attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
     CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_target
+  file: badge_target.png
+  tags:
+  - accurate
+  - hit
+  - aim
+  - nailed it
+  - precise
+  expresses: hitting exactly what was aimed at
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_brick
+  file: badge_brick.png
+  tags:
+  - build
+  - blocks
+  - lego
+  - assemble
+  - piece
+  expresses: building or assembling something out of parts
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_gear
+  file: badge_gear.png
+  tags:
+  - mechanism
+  - how it works
+  - machine
+  - moving parts
+  expresses: the mechanism itself — how the thing actually works
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_tools
+  file: badge_tools.png
+  tags:
+  - fix
+  - build
+  - tools
+  - assembly
+  - repair
+  expresses: building, fixing or assembling with tools
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_package
+  file: badge_package.png
+  tags:
+  - unbox
+  - parcel
+  - delivery
+  - box
+  - arrive
+  expresses: a package or box, especially one about to be opened
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_gift
+  file: badge_gift.png
+  tags:
+  - present
+  - gift
+  - surprise
+  - birthday
+  expresses: a present, or the moment before a surprise is revealed
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_paint
+  file: badge_paint.png
+  tags:
+  - colour
+  - paint
+  - art
+  - mixing
+  - palette
+  expresses: colour being chosen, mixed or applied
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_rainbow
+  file: badge_rainbow.png
+  tags:
+  - colourful
+  - many colours
+  - bright
+  - variety
+  expresses: lots of colours at once
+  anchor: center
+  default_seconds: 1.2
+  animation: drift-up
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_bolt
+  file: badge_bolt.png
+  tags:
+  - power
+  - energy
+  - fast
+  - zap
+  - sudden
+  expresses: sudden power or speed
+  anchor: center
+  default_seconds: 0.9
+  animation: shake
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_rocket
+  file: badge_rocket.png
+  tags:
+  - fast
+  - launch
+  - takeoff
+  - speed
+  - go
+  expresses: something taking off or going very fast
+  anchor: center
+  default_seconds: 1.2
+  animation: drift-up
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_timer
+  file: badge_timer.png
+  tags:
+  - time
+  - wait
+  - how long
+  - speed run
+  - countdown
+  expresses: how long something takes, or a wait beginning
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_trophy
+  file: badge_trophy.png
+  tags:
+  - win
+  - best
+  - champion
+  - achievement
+  expresses: the win — the thing finally worked, or came first
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_perfect
+  file: badge_perfect.png
+  tags:
+  - perfect
+  - full marks
+  - exactly
+  - nailed
+  expresses: as good as it could possibly have gone
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_tick
+  file: badge_tick.png
+  tags:
+  - correct
+  - worked
+  - done
+  - 'yes'
+  - success
+  expresses: it worked, or the step is complete
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_cross
+  file: badge_cross.png
+  tags:
+  - failed
+  - 'no'
+  - wrong
+  - broke
+  - nope
+  expresses: it did not work — an honest failure, not a joke
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_ok
+  file: badge_ok.png
+  tags:
+  - nice
+  - good
+  - neat
+  - well done
+  expresses: neatly done, a small approving beat
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_crown
+  file: badge_crown.png
+  tags:
+  - best
+  - favourite
+  - top
+  - winner
+  expresses: the favourite of the whole video
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_thinking
+  file: badge_thinking.png
+  tags:
+  - thinking
+  - unsure
+  - considering
+  - hmm
+  expresses: weighing something up, or not yet convinced
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_surprise
+  file: badge_surprise.png
+  tags:
+  - surprise
+  - oh
+  - unexpected
+  - didn't expect
+  expresses: mild surprise — smaller than a shock
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_awkward
+  file: badge_awkward.png
+  tags:
+  - oops
+  - close call
+  - awkward
+  - nearly
+  expresses: an awkward moment or a near miss, taken in good humour
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_starstruck
+  file: badge_starstruck.png
+  tags:
+  - impressed
+  - amazing
+  - wow
+  - love it
+  expresses: genuinely impressed by what just happened
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_cheer
+  file: badge_cheer.png
+  tags:
+  - celebrate
+  - 'yes'
+  - hooray
+  - relief
+  expresses: a small cheer — relief or triumph
+  anchor: center
+  default_seconds: 1.2
+  animation: drift-up
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_wave
+  file: badge_wave.png
+  tags:
+  - hello
+  - goodbye
+  - intro
+  - outro
+  - greeting
+  expresses: a hello at the start or a goodbye at the end
+  anchor: center
+  default_seconds: 1.2
+  animation: shake
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_cool
+  file: badge_cool.png
+  tags:
+  - cool
+  - confident
+  - smooth
+  - easy
+  expresses: playing it cool, or making something look easy
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_gun
+  file: badge_gun.png
+  tags:
+  - blaster
+  - shoot
+  - toy gun
+  - water pistol
+  - fire
+  expresses: a toy blaster or water pistol being used
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_glasses
+  file: badge_glasses.png
+  tags:
+  - glasses
+  - look
+  - inspect
+  - read
+  - detail
+  expresses: looking closely at detail, or putting glasses on
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_sunglasses
+  file: badge_sunglasses.png
+  tags:
+  - cool
+  - style
+  - confident
+  - shades
+  expresses: style, or a deliberately cool moment
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_smile
+  file: badge_smile.png
+  tags:
+  - happy
+  - smile
+  - pleased
+  - fun
+  - enjoy
+  expresses: plain, uncomplicated enjoyment
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_grin
+  file: badge_grin.png
+  tags:
+  - grin
+  - pleased
+  - cheeky
+  - delighted
+  expresses: a wide, slightly cheeky grin
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_blush
+  file: badge_blush.png
+  tags:
+  - shy
+  - pleased
+  - warm
+  - sweet
+  expresses: quiet pleasure, or a shy moment
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_cry
+  file: badge_cry.png
+  tags:
+  - sad
+  - cry
+  - disappointed
+  - aww
+  expresses: disappointment, or a sad beat played gently
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_sob
+  file: badge_sob.png
+  tags:
+  - sob
+  - very sad
+  - gutted
+  - dramatic
+  expresses: dramatic, over-the-top upset — the funny kind
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_pleading
+  file: badge_pleading.png
+  tags:
+  - please
+  - hopeful
+  - aww
+  - want
+  expresses: hoping for something, or asking nicely
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_heart
+  file: badge_heart.png
+  tags:
+  - love
+  - favourite
+  - adore
+  - heart
+  expresses: plain affection for the thing on screen
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_pray
+  file: badge_pray.png
+  tags:
+  - please
+  - fingers crossed
+  - hope
+  - thanks
+  expresses: hoping it works, or a thank-you
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).

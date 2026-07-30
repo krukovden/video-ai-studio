@@ -84,6 +84,99 @@ BADGES: tuple[BadgeSpec, ...] = (
               "curiosity or genuine uncertainty about what happens next", "shake"),
     BadgeSpec("badge_yuck", "1f92e", ("gross", "yuck", "disgust", "messy"),
               "something satisfyingly gross or messy"),
+
+    # Objects and actions. These exist so the library is not tied to one kind of
+    # video: a Lego build, a drum kit and a 3D print each need something concrete
+    # to point at, and a channel that only owns reaction faces ends up putting a
+    # laughing emoji on a printer finishing a part.
+    BadgeSpec("badge_target", "1f3af", ("accurate", "hit", "aim", "nailed it", "precise"),
+              "hitting exactly what was aimed at"),
+    BadgeSpec("badge_brick", "1f9f1", ("build", "blocks", "lego", "assemble", "piece"),
+              "building or assembling something out of parts"),
+    BadgeSpec("badge_gear", "2699", ("mechanism", "how it works", "machine", "moving parts"),
+              "the mechanism itself — how the thing actually works", "pulse"),
+    BadgeSpec("badge_tools", "1f6e0", ("fix", "build", "tools", "assembly", "repair"),
+              "building, fixing or assembling with tools"),
+    BadgeSpec("badge_package", "1f4e6", ("unbox", "parcel", "delivery", "box", "arrive"),
+              "a package or box, especially one about to be opened"),
+    BadgeSpec("badge_gift", "1f381", ("present", "gift", "surprise", "birthday"),
+              "a present, or the moment before a surprise is revealed"),
+    BadgeSpec("badge_paint", "1f3a8", ("colour", "paint", "art", "mixing", "palette"),
+              "colour being chosen, mixed or applied"),
+    BadgeSpec("badge_rainbow", "1f308", ("colourful", "many colours", "bright", "variety"),
+              "lots of colours at once", "drift-up", 1.2),
+    BadgeSpec("badge_bolt", "26a1", ("power", "energy", "fast", "zap", "sudden"),
+              "sudden power or speed", "shake"),
+    BadgeSpec("badge_rocket", "1f680", ("fast", "launch", "takeoff", "speed", "go"),
+              "something taking off or going very fast", "drift-up", 1.2),
+    BadgeSpec("badge_timer", "23f1", ("time", "wait", "how long", "speed run", "countdown"),
+              "how long something takes, or a wait beginning", "pulse"),
+
+    # A verdict. A review earns these, and without them the library can express
+    # excitement but never judgement.
+    BadgeSpec("badge_trophy", "1f3c6", ("win", "best", "champion", "achievement"),
+              "the win — the thing finally worked, or came first"),
+    BadgeSpec("badge_perfect", "1f4af", ("perfect", "full marks", "exactly", "nailed"),
+              "as good as it could possibly have gone"),
+    # U+2714, the bare tick — NOT U+2705, which Twemoji draws as a filled green
+    # square and which would paste a solid rectangle over the footage. Caught by
+    # the library's own transparency test at 99% opaque.
+    BadgeSpec("badge_tick", "2714", ("correct", "worked", "done", "yes", "success"),
+              "it worked, or the step is complete"),
+    BadgeSpec("badge_cross", "274c", ("failed", "no", "wrong", "broke", "nope"),
+              "it did not work — an honest failure, not a joke"),
+    BadgeSpec("badge_ok", "1f44c", ("nice", "good", "neat", "well done"),
+              "neatly done, a small approving beat", "pop-in"),
+    BadgeSpec("badge_crown", "1f451", ("best", "favourite", "top", "winner"),
+              "the favourite of the whole video"),
+
+    # More of the range a face actually has. Shock and delight were covered;
+    # hesitation, mild surprise and embarrassment were not, and most of a review
+    # lives in those.
+    BadgeSpec("badge_thinking", "1f914", ("thinking", "unsure", "considering", "hmm"),
+              "weighing something up, or not yet convinced", "pulse"),
+    BadgeSpec("badge_surprise", "1f62e", ("surprise", "oh", "unexpected", "didn't expect"),
+              "mild surprise — smaller than a shock"),
+    BadgeSpec("badge_awkward", "1f605", ("oops", "close call", "awkward", "nearly"),
+              "an awkward moment or a near miss, taken in good humour"),
+    BadgeSpec("badge_starstruck", "1f929", ("impressed", "amazing", "wow", "love it"),
+              "genuinely impressed by what just happened"),
+    BadgeSpec("badge_cheer", "1f64c", ("celebrate", "yes", "hooray", "relief"),
+              "a small cheer — relief or triumph", "drift-up", 1.2),
+    BadgeSpec("badge_wave", "1f44b", ("hello", "goodbye", "intro", "outro", "greeting"),
+              "a hello at the start or a goodbye at the end", "shake", 1.2),
+    BadgeSpec("badge_cool", "1f60e", ("cool", "confident", "smooth", "easy"),
+              "playing it cool, or making something look easy"),
+
+    # Asked for by name. These are the faces and objects people reach for most,
+    # and a library without them keeps forcing a near-miss.
+    #
+    # `badge_gun` is worth being explicit about: Twemoji draws U+1F52B as a green
+    # WATER PISTOL, not a firearm — every major vendor redesigned it that way. For
+    # a channel reviewing toy blasters that is exactly the right picture, and it
+    # carries none of the risk a realistic weapon would on a kids' video.
+    BadgeSpec("badge_gun", "1f52b", ("blaster", "shoot", "toy gun", "water pistol", "fire"),
+              "a toy blaster or water pistol being used"),
+    BadgeSpec("badge_glasses", "1f453", ("glasses", "look", "inspect", "read", "detail"),
+              "looking closely at detail, or putting glasses on"),
+    BadgeSpec("badge_sunglasses", "1f576", ("cool", "style", "confident", "shades"),
+              "style, or a deliberately cool moment", "pop-in"),
+    BadgeSpec("badge_smile", "1f604", ("happy", "smile", "pleased", "fun", "enjoy"),
+              "plain, uncomplicated enjoyment"),
+    BadgeSpec("badge_grin", "1f601", ("grin", "pleased", "cheeky", "delighted"),
+              "a wide, slightly cheeky grin"),
+    BadgeSpec("badge_blush", "1f60a", ("shy", "pleased", "warm", "sweet"),
+              "quiet pleasure, or a shy moment"),
+    BadgeSpec("badge_cry", "1f622", ("sad", "cry", "disappointed", "aww"),
+              "disappointment, or a sad beat played gently"),
+    BadgeSpec("badge_sob", "1f62d", ("sob", "very sad", "gutted", "dramatic"),
+              "dramatic, over-the-top upset — the funny kind"),
+    BadgeSpec("badge_pleading", "1f97a", ("please", "hopeful", "aww", "want"),
+              "hoping for something, or asking nicely"),
+    BadgeSpec("badge_heart", "2764", ("love", "favourite", "adore", "heart"),
+              "plain affection for the thing on screen", "pulse"),
+    BadgeSpec("badge_pray", "1f64f", ("please", "fingers crossed", "hope", "thanks"),
+              "hoping it works, or a thank-you", "pulse"),
 )
 
 

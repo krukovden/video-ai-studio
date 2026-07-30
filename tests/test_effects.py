@@ -71,7 +71,9 @@ def test_the_shipped_library_loads_and_every_sprite_file_is_really_there():
     library = load_library()
 
     assert library.directory == default_library_dir()
-    assert set(library.names()) == {
+    # The seeded drawings are always there. The library is extensible by design —
+    # `fetch-badges` adds to it — so this is a floor, not an inventory.
+    assert set(library.names()) >= {
         "comic_starburst", "speed_lines", "sparkle_stars", "sound_rings",
         "confetti_burst", "speech_bubble",
     }
@@ -100,7 +102,13 @@ def test_every_seeded_sprite_is_rgba_with_real_transparency_and_real_ink():
         total = image.width * image.height
         # Both ends of the channel are genuinely used, and neither dominates the
         # whole file: this is a drawing on a transparent ground.
-        assert transparent > total * 0.20, sprite.name
+        #
+        # 12% rather than a rounder number because of what the shapes actually
+        # are: a circle inscribed in its square leaves 21.5% of the corners
+        # empty, and an emoji face slightly overflowing that leaves about 17%.
+        # The failure this guards against looks nothing like those — U+2705 is a
+        # filled green square at 99% opaque, and it was caught here.
+        assert transparent > total * 0.12, sprite.name
         assert opaque > total * 0.02, sprite.name
         assert transparent + opaque < total, sprite.name  # antialiased edges exist
 
@@ -125,7 +133,14 @@ def test_seeding_a_library_elsewhere_reproduces_the_same_bytes(tmp_path: Path):
     and the library's fingerprint means something."""
     seed_library(tmp_path / "effects")
 
+    # Only the seeded drawings: the badges alongside them are fetched rather than
+    # drawn, so there is nothing deterministic about them to reproduce.
+    from videoai.logic.effect_seeds import SEEDS
+
+    seeded = {name for name, _, _ in SEEDS}
     for sprite in load_library().sprites:
+        if sprite.name not in seeded:
+            continue
         assert (tmp_path / "effects" / sprite.file).read_bytes() == (
             default_library_dir() / sprite.file
         ).read_bytes(), sprite.name
