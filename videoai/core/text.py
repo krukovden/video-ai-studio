@@ -93,7 +93,12 @@ def _measure(font, text: str) -> tuple[int, int]:
     return right - left, bottom - top
 
 
-def _line_height(font) -> int:
+def line_height(font) -> int:
+    """How far to advance between two lines set in `font`.
+
+    Public because the speech-bubble renderer sizes a nine-patch around wrapped
+    text and has to know the height that text will occupy before it draws it.
+    """
     return max(1, int(_measure(font, _METRIC_SAMPLE)[1] * _LINE_SPACING))
 
 
@@ -135,12 +140,12 @@ def fit_text(
         lines = wrap_to_width(text, font, width)
         if len(lines) > max_lines:
             return None
-        line_height = _line_height(font)
-        if line_height * len(lines) > height:
+        step = line_height(font)
+        if step * len(lines) > height:
             return None
         if any(font.getlength(line) > width for line in lines):
             return None
-        return lines, line_height
+        return lines, step
 
     best: tuple[int, list[str], int] | None = None
     low, high = _MINIMUM_FONT_SIZE, largest
@@ -157,11 +162,11 @@ def fit_text(
         # word. Take the smallest size and keep the lines there is room for
         # rather than drawing off both edges.
         font = load_font(_MINIMUM_FONT_SIZE)
-        line_height = _line_height(font)
+        step = line_height(font)
         lines = wrap_to_width(text, font, width)
-        return lines[: max(1, height // line_height)], font, line_height
-    size, lines, line_height = best
-    return lines, load_font(size), line_height
+        return lines[: max(1, height // step)], font, step
+    size, lines, step = best
+    return lines, load_font(size), step
 
 
 def render_text_image(
@@ -182,14 +187,14 @@ def render_text_image(
     draw = ImageDraw.Draw(image)
 
     padding = max(8, width // 30)
-    lines, font, line_height = fit_text(
+    lines, font, step = fit_text(
         text.strip(), max(1, width - 2 * padding), max(1, height - padding), max_lines
     )
     stroke = max(2, int(getattr(font, "size", 16) / 12))
-    top = (height - line_height * len(lines)) // 2
+    top = (height - step * len(lines)) // 2
     for index, line in enumerate(lines):
         draw.text(
-            ((width - font.getlength(line)) / 2, top + index * line_height),
+            ((width - font.getlength(line)) / 2, top + index * step),
             line,
             font=font,
             fill=TEXT_COLOUR,

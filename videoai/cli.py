@@ -175,6 +175,29 @@ def stages() -> None:
         typer.echo(f"{spec.id:<14} produces={spec.produces:<16} requires={requires}")
 
 
+@app.command("seed-effects")
+def seed_effects(
+    directory: Path = typer.Option(
+        None, "--dir", help="Where to write the library (default: the repo's assets/effects)"
+    ),
+) -> None:
+    """Redraw the built-in cartoon sprite library and its manifest.
+
+    The library is committed, so this is only needed after editing a drawing in
+    `videoai/logic/effect_seeds.py`. It makes no network calls.
+    """
+    from videoai.logic.effect_seeds import seed_library
+    from videoai.logic.effects import default_library_dir, load_library
+
+    target = directory or default_library_dir()
+    manifest = seed_library(target)
+    library = load_library(target)
+    typer.echo(f"Wrote {manifest}")
+    for sprite in library.sprites:
+        image = library.path_of(sprite)
+        typer.echo(f"  {sprite.name:<18} {image.name:<22} {image.stat().st_size:>7} bytes")
+
+
 @app.command()
 def approve(
     project: Path = typer.Argument(..., help="Project whose current draft was reviewed"),
