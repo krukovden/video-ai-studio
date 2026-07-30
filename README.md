@@ -372,15 +372,9 @@ The production layers are:
 - **A title card** of `polish.intro_seconds`, carrying the title the planner
   wrote into `05a-storyplan`, plus an **outro card** of
   `polish.outro_seconds`.
-- **Major-action titles only.** The first box opening, injection/filling step,
-  and popping step get a short title in the upper safe area. Minor beat changes,
-  inserts, and the closing do not create another title.
-- **Local cartoon accents** rendered into the same finite alpha track: a fast
-  flying-box sticker, a syringe impact burst, spaced pop rings, and—when the
-  injection section contains a toy-only close-up—an animated English
-  `OH NO! NO!` speech bubble pointing at the real face. They are deterministic
-  OpenCV drawings, so no image/video generation API or extra subscription is
-  required.
+- **A section title** wherever a timeline clip's beat differs from the one
+  before it, naming that beat for `polish.title_seconds` behind a
+  semi-transparent plate in the upper safe area.
 - **Word-timed captions** generated locally from `03-transcript.json`. They are
   grouped into compact chunks (`polish.caption_words`, four by default), mapped
   through cuts to delivery time and written to `output/final.srt`, ready for a

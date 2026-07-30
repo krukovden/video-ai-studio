@@ -308,8 +308,6 @@ class FinalResult(BaseModel):
     transition_count: int = 0
     caption_count: int = 0
     burned_in_captions: bool = False
-    cartoon_effect_count: int = 0
-    toy_reaction: bool = False
     outro: bool = False
     music_ducking: bool = False
     fully_decoded: bool = False
