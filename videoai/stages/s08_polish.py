@@ -880,31 +880,16 @@ def _draw_cartoon_effect(canvas, effect: _CartoonEffect, at: float) -> None:
         return
 
     if effect.kind == "toy_reaction":
-        shake = int(math.sin(progress * math.pi * 16) * width * 0.004)
-        eye_a = (int(width * 0.225) + shake, int(height * 0.46))
-        eye_b = (int(width * 0.285) + shake, int(height * 0.57))
-        axes = (max(12, int(width * 0.014)), max(18, int(height * 0.026)))
-        blink = 0.22 if 0.45 < progress < 0.52 else 1.0
-        eye_axes = (axes[0], max(3, int(axes[1] * blink)))
-        for eye in (eye_a, eye_b):
-            cv2.ellipse(canvas, eye, eye_axes, -28, 0, 360, (255, 255, 255, alpha), -1, cv2.LINE_AA)
-            cv2.circle(
-                canvas, (eye[0] - axes[0] // 4, eye[1] + axes[1] // 5),
-                max(4, axes[0] // 3), (25, 25, 35, alpha), -1, cv2.LINE_AA,
-            )
-            cv2.line(
-                canvas,
-                (eye[0] - axes[0], eye[1] - axes[1] - 8),
-                (eye[0] + axes[0], eye[1] - axes[1] - 2),
-                (35, 25, 30, alpha), max(3, height // 220), cv2.LINE_AA,
-            )
-        mouth = (int(width * 0.345) + shake, int(height * 0.65))
-        cv2.ellipse(
-            canvas, mouth, (max(10, int(width * 0.017)), max(18, int(height * 0.035))),
-            -25, 0, 360, (45, 20, 35, alpha), -1, cv2.LINE_AA,
+        # The toy's face is partly covered by translucent bubbles, so fixed
+        # synthetic eyes/mouth cannot land reliably. Animate the speech bubble
+        # instead and point it at the real face.
+        bob = int(math.sin(progress * math.pi * 6) * height * 0.004)
+        bubble = (int(width * 0.68), int(height * 0.27) + bob)
+        pop_scale = min(1.0, max(0.72, progress / 0.16))
+        axes_bubble = (
+            int(width * 0.22 * pop_scale),
+            int(height * 0.105 * pop_scale),
         )
-        bubble = (int(width * 0.68), int(height * 0.27))
-        axes_bubble = (int(width * 0.22), int(height * 0.105))
         cv2.ellipse(canvas, bubble, axes_bubble, 0, 0, 360, (255, 255, 255, alpha), -1, cv2.LINE_AA)
         cv2.ellipse(
             canvas, bubble, axes_bubble, 0, 0, 360,
@@ -914,9 +899,9 @@ def _draw_cartoon_effect(canvas, effect: _CartoonEffect, at: float) -> None:
             canvas,
             np.array(
                 [
-                    (int(width * 0.52), int(height * 0.33)),
+                    (int(width * 0.52), int(height * 0.33) + bob),
                     (int(width * 0.43), int(height * 0.45)),
-                    (int(width * 0.57), int(height * 0.37)),
+                    (int(width * 0.57), int(height * 0.37) + bob),
                 ],
                 dtype="int32",
             ),
@@ -1226,7 +1211,9 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
 
     graphics = work_dir / "graphics.mov"
     _render_graphics_track(
-        graphics, frame, fps, total, captions, title_overlays, cartoon_effects, work_dir,
+        graphics, frame, fps, total,
+        captions if settings.burn_captions else [],
+        title_overlays, cartoon_effects, work_dir,
     )
 
     music_dir = Path(settings.music_dir)
@@ -1282,6 +1269,8 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
             "outro": True,
             "section_titles": len(title_overlays),
             "captions": len(captions),
+            "soft_captions": len(captions),
+            "burned_in_captions": settings.burn_captions,
             "music": track.name,
             "music_ducking": True,
             "transitions": len(changes),
@@ -1314,6 +1303,7 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
         title_count=len(title_overlays),
         transition_count=len(changes),
         caption_count=len(captions),
+        burned_in_captions=settings.burn_captions,
         cartoon_effect_count=len(cartoon_effects),
         toy_reaction=any(effect.kind == "toy_reaction" for effect in cartoon_effects),
         outro=True,
@@ -1327,6 +1317,11 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
             "source segments and picture master are lossless x264",
             "final.mp4 is the only lossy video generation",
             "major-action titles only; cartoon effects rendered locally",
+            (
+                "captions burned into picture"
+                if settings.burn_captions
+                else "captions delivered as viewer-controlled final.srt"
+            ),
         ],
     )
 
@@ -1339,7 +1334,7 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
     # the final is only worth building after, and it is what `polish.enabled:
     # false` copies through.
     requires=("01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "06-draft"),
-    version="2",
+    version="3",
     model=FinalResult,
     config_keys=(
         "polish.enabled",
@@ -1350,6 +1345,7 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
         "polish.outro_text",
         "polish.title_seconds",
         "polish.captions_enabled",
+        "polish.burn_captions",
         "polish.caption_words",
         "polish.music_gain_db",
         "polish.music_duck_db",

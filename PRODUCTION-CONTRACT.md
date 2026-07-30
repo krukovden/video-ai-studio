@@ -48,7 +48,7 @@ finished video must have:
 - one lossy video generation at most;
 - intro and outro;
 - section titles and section transitions;
-- word-timed captions;
+- word-timed captions as a viewer-controlled sidecar by default;
 - background music with speech ducking;
 - a closing story beat;
 - explicit creator approval;

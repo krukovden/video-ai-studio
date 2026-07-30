@@ -87,7 +87,11 @@ class PolishSettings(BaseModel):
     outro_seconds: float = 2.5
     outro_text: str = "Thanks for watching!"
     title_seconds: float = 2.0
+    # Always generate final.srt when captions are enabled. Burning every spoken
+    # word into the picture is optional; YouTube can use the sidecar as a
+    # viewer-controlled caption track.
     captions_enabled: bool = True
+    burn_captions: bool = False
     caption_words: int = 4
     # Where the music bed sits before ducking, and how much further it drops while
     # the child is talking. Both are attenuations: the bed is never the loudest

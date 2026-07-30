@@ -269,6 +269,7 @@ quality:
     assert result.intro and result.outro
     assert result.title_count == 1
     assert result.caption_count == 2
+    assert result.burned_in_captions is False
     assert result.cartoon_effect_count == 1
     assert result.transition_count == 1
     assert result.music_track == track.name

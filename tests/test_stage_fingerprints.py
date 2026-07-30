@@ -96,6 +96,7 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(polish=PolishSettings(outro_text="Subscribe!")), {"polish"}),
         (Config(polish=PolishSettings(title_seconds=3.0)), {"polish"}),
         (Config(polish=PolishSettings(captions_enabled=False)), {"polish"}),
+        (Config(polish=PolishSettings(burn_captions=True)), {"polish"}),
         (Config(polish=PolishSettings(caption_words=6)), {"polish"}),
         (Config(polish=PolishSettings(music_gain_db=-18.0)), {"polish"}),
         (Config(polish=PolishSettings(music_duck_db=-6.0)), {"polish"}),

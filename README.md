@@ -377,14 +377,16 @@ The production layers are:
   inserts, and the closing do not create another title.
 - **Local cartoon accents** rendered into the same finite alpha track: a fast
   flying-box sticker, a syringe impact burst, spaced pop rings, and—when the
-  injection section contains a toy-only close-up—animated eyes, mouth, and an
-  English `OH NO! NO!` speech bubble. They are deterministic OpenCV drawings,
-  so no image/video generation API or extra subscription is required.
+  injection section contains a toy-only close-up—an animated English
+  `OH NO! NO!` speech bubble pointing at the real face. They are deterministic
+  OpenCV drawings, so no image/video generation API or extra subscription is
+  required.
 - **Word-timed captions** generated locally from `03-transcript.json`. They are
   grouped into compact chunks (`polish.caption_words`, four by default), mapped
-  through cuts to delivery time, rasterised locally into the lower safe area,
-  and also written to `output/final.srt`. This does not depend on ffmpeg's
-  optional libass or drawtext support.
+  through cuts to delivery time and written to `output/final.srt`, ready for a
+  viewer-controlled YouTube caption track. Set `polish.burn_captions: true`
+  only when every phrase must be permanently rasterised into the lower safe
+  area. Neither mode depends on ffmpeg's optional libass or drawtext support.
 - **A music bed** from `polish.music_dir`, chosen by your brief's `style`
   when that names a track the library has and otherwise by a stable digest of
   the project's name, so the same project always gets the same music. It is
