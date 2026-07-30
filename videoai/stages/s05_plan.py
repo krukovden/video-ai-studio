@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from videoai.core.models import (
+    ClipNotes,
     Analysis,
     Manifest,
     PlanSection,
@@ -14,6 +15,7 @@ from videoai.core.models import (
 from videoai.core.project import read_brief
 from videoai.core.registry import StageContext, stage
 from videoai.logic.inserts import INSERT_PREFIX, insert_ref_clip_id, is_insert_ref, resolve_insert_ref
+from videoai.logic.action_cuts import avoid_mid_action_cuts
 from videoai.logic.timeline import build_timeline
 from videoai.logic.validate import validate_timeline
 from videoai.providers.base import resolve_llm
@@ -184,7 +186,12 @@ def _rejected_ids(ctx: StageContext) -> set[str]:
     # not any stage's declared output: listing it here feeds its content into this
     # stage's fingerprint — so a fresh rejection re-plans — without making the
     # dependency graph circular.
-    requires=("01-manifest", "01b-sync", "03-transcript", "04-analysis", "05c-rejected"),
+    # "04c-clip-notes" is the description of what each clip contains: listed so a
+    # re-description re-plans, because where the cuts fall depends on it.
+    requires=(
+        "01-manifest", "01b-sync", "03-transcript", "04-analysis", "04c-clip-notes",
+        "05c-rejected",
+    ),
     provider_key="llm",
     model=Timeline,
     uses_brief=True,
@@ -278,6 +285,15 @@ def plan(ctx: StageContext) -> Timeline:
         fps=manifest.clips[0].fps,
         gain_db_by_beat=ctx.config.plan.gain_db_by_beat,
     )
+    # The planner cuts where the words end; the picture does not agree. When the
+    # footage has been described, move any cut that lands inside an action that
+    # has only just begun — the shot ending while a hand is halfway into a glove
+    # is the edit losing interest exactly where the viewer did not.
+    if ctx.store.exists("04c-clip-notes"):
+        timeline = avoid_mid_action_cuts(
+            timeline, ctx.store.read("04c-clip-notes", ClipNotes)
+        )
+
     violations = validate_timeline(timeline, manifest, transcript)
     if violations:
         raise ValueError("timeline validation failed:\n" + "\n".join(violations))

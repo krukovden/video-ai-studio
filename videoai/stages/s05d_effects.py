@@ -33,6 +33,7 @@ from videoai.core.project import read_brief
 from videoai.core.registry import StageContext, stage
 from videoai.core.models import Manifest
 from videoai.core.project import resolve_media_path
+from videoai.logic.decisions import carry_decisions
 from videoai.logic.motion import busiest_cell
 from videoai.logic.observations import observed_moment_lines, observed_moments
 from videoai.logic.effects import (
@@ -447,6 +448,17 @@ def effects(ctx: StageContext) -> EffectPlan:
     # is pulled onto the moment that was seen rather than the time that was
     # guessed from words.
     events = snap_to_observed(events, analysis.observations, timeline)
-    return EffectPlan(
+    plan = EffectPlan(
         provider=provider.name, library=str(library.directory), events=events
     )
+    # A re-plan replaces the model's proposal, never the creator's decisions
+    # about it. Anything they turned down or placed by hand is carried onto the
+    # matching moment, and whatever cannot be matched is named rather than lost.
+    if ctx.store.exists("05d-effects"):
+        plan, orphaned = carry_decisions(plan, ctx.store.read("05d-effects", EffectPlan))
+        if orphaned:
+            print(
+                f"  note: {orphaned} earlier decision(s) had no matching moment in "
+                "the new plan; work/effects-decisions.json still has them."
+            )
+    return plan
