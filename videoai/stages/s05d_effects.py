@@ -21,6 +21,7 @@ from __future__ import annotations
 from videoai.core.models import (
     Analysis,
     EffectEvent,
+    Observation,
     EffectPlan,
     StoryPlan,
     Timeline,
@@ -28,6 +29,7 @@ from videoai.core.models import (
 )
 from videoai.core.project import read_brief
 from videoai.core.registry import StageContext, stage
+from videoai.logic.observations import observed_moment_lines, observed_moments
 from videoai.logic.effects import (
     GRID_CELLS,
     SPRITE_SCALES,
@@ -44,6 +46,11 @@ TIME_TOLERANCE = 0.05
 # An accent needs room to play. One placed in the last fraction of a second would
 # be cut off mid-animation by the outro, so it is pulled back instead.
 END_MARGIN = 0.3
+# How far a model's chosen time may sit from a moment somebody actually watched
+# and still be treated as meaning that moment. Wide enough to cover a model
+# reading a printed timeline and rounding; narrow enough that it can never pull
+# an accent onto a different beat.
+SNAP_SECONDS = 0.6
 
 INSTRUCTIONS = """You are adding cartoon accents to a finished edit of a child's toy review.
 
@@ -170,8 +177,66 @@ def build_effects_prompt(
             if inserts
             else ""
         ),
+        _observed_view(analysis, timeline),
     ]
     return "\n\n".join(part for part in sections if part).strip()
+
+
+def _observed_view(analysis: Analysis, timeline: Timeline) -> str:
+    """Moments somebody actually watched happen, on the edit's clock.
+
+    Only present when the analysis was made by a model that could see the
+    footage. When it is, these are the times to build on: a word timestamp says
+    when "pop" was *said*, which is a beat either side of when the thing
+    happened, and an accent hung on the word lands visibly wrong.
+    """
+    moments = observed_moments(analysis.observations, timeline)
+    if not moments:
+        return ""
+    return (
+        "Moments observed in the footage itself, on the edit's clock. These were "
+        "watched, not inferred from the words, so they are the accurate times:\n"
+        + "\n".join(observed_moment_lines(moments))
+        + "\n\nPrefer one of these times when an accent belongs on a physical "
+        "moment. A time you pick that is within "
+        f"{SNAP_SECONDS:.1f}s of one will be moved onto it."
+    )
+
+
+def snap_to_observed(
+    events: list[EffectEvent],
+    observations: list[Observation],
+    timeline: Timeline,
+) -> list[EffectEvent]:
+    """Move each accent onto the nearest moment somebody actually watched.
+
+    This is the seam the production contract draws, made real. The model is the
+    right judge of WHICH moment deserves an accent and what it should express; it
+    is a poor judge of when that moment is, because until the analysis could see
+    the footage its only clock was a printed timeline and word timings — and a
+    word is said a beat either side of the thing it names.
+
+    So a chosen time within `SNAP_SECONDS` of an observed moment is treated as
+    meaning that moment, and the observed time wins. A choice far from anything
+    observed is left exactly where the model put it: not every accent marks a
+    physical event, and a reaction beat has no onset to snap to. With no
+    observations at all — a text-only analysis — nothing moves and the stage
+    behaves as it did before.
+    """
+    if not observations:
+        return events
+    moments = [at for at, _ in observed_moments(observations, timeline)]
+    if not moments:
+        return events
+
+    snapped: list[EffectEvent] = []
+    for event in events:
+        nearest = min(moments, key=lambda at: abs(at - event.at_seconds))
+        if abs(nearest - event.at_seconds) <= SNAP_SECONDS:
+            snapped.append(event.model_copy(update={"at_seconds": round(nearest, 3)}))
+        else:
+            snapped.append(event)
+    return snapped
 
 
 def _coerce_seconds(value: object, event_index: int) -> float:
@@ -314,6 +379,11 @@ def effects(ctx: StageContext) -> EffectPlan:
     )
     response = provider.complete_json(prompt, [], ctx.config.analyze.llm_timeout_seconds)
     events = parse_events(response, library, timeline.duration, settings.max_events)
+    # The model chose which moments deserve an accent; the clock is the
+    # pipeline's. Where the analysis actually watched the footage, each accent
+    # is pulled onto the moment that was seen rather than the time that was
+    # guessed from words.
+    events = snap_to_observed(events, analysis.observations, timeline)
     return EffectPlan(
         provider=provider.name, library=str(library.directory), events=events
     )
