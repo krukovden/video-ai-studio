@@ -19,9 +19,22 @@ SYSTEM_PROMPT = (
 
 class CodexCliLLM:
     name = "codex_cli"
+    # Stills only: no CLI here can hand a model a video file.
+    reads_video = False
     system_preamble = SYSTEM_PROMPT
 
-    def complete_json(self, prompt: str, images: list[Path], timeout: int) -> dict:
+    def complete_json(
+        self,
+        prompt: str,
+        images: list[Path],
+        timeout: int,
+        videos: list[Path] | None = None,
+    ) -> dict:
+        if videos:
+            raise ValueError(
+                "codex_cli cannot read video: it is given stills only. Use a "
+                "video-capable provider to submit clips."
+            )
         with tempfile.TemporaryDirectory(prefix="videoai-codex-") as directory:
             output = Path(directory) / "response.txt"
             args = [

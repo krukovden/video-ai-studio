@@ -16,8 +16,19 @@ class ASRProvider(Protocol):
 
 class LLMProvider(Protocol):
     name: str
+    # Whether this provider can hand the model actual video rather than stills.
+    # A stage asks before submitting clips: a provider that silently dropped them
+    # would return a text-quality answer while the caller believed it had paid
+    # for video understanding.
+    reads_video: bool
 
-    def complete_json(self, prompt: str, images: list[Path], timeout: int) -> dict: ...
+    def complete_json(
+        self,
+        prompt: str,
+        images: list[Path],
+        timeout: int,
+        videos: list[Path] | None = None,
+    ) -> dict: ...
 
 
 def llm_system_preamble(name: str) -> str:
@@ -34,6 +45,10 @@ def llm_system_preamble(name: str) -> str:
         return SYSTEM_PROMPT
     if name == "codex_cli":
         from videoai.providers.llm_codex_cli import SYSTEM_PROMPT
+
+        return SYSTEM_PROMPT
+    if name == "gemini_cli":
+        from videoai.providers.llm_gemini_cli import SYSTEM_PROMPT
 
         return SYSTEM_PROMPT
     return ""
@@ -80,4 +95,11 @@ def resolve_llm(name: str, model: str | None = None) -> LLMProvider:
         # Codex uses the model selected by the authenticated CLI profile. The
         # existing `analyze.llm_model` setting is Claude-specific.
         return CodexCliLLM()
+    if name == "gemini_cli":
+        from videoai.providers.llm_gemini_cli import GeminiCliLLM
+
+        # `analyze.llm_model` names a Claude alias by default ("sonnet"), which
+        # Gemini would reject, so a model is passed on only when it looks like a
+        # Gemini one. Otherwise the CLI's own default is used.
+        return GeminiCliLLM(model if model and model.startswith("gemini") else None)
     raise ValueError(f"unknown llm provider: {name}")

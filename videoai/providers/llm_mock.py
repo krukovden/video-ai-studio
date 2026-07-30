@@ -34,8 +34,21 @@ def _kind(prompt: str) -> str:
 
 class MockLLM:
     name = "mock"
+    # Stills only: no CLI here can hand a model a video file.
+    reads_video = False
 
-    def complete_json(self, prompt: str, images: list[Path], timeout: int) -> dict:
+    def complete_json(
+        self,
+        prompt: str,
+        images: list[Path],
+        timeout: int,
+        videos: list[Path] | None = None,
+    ) -> dict:
+        if videos:
+            raise ValueError(
+                "mock cannot read video: it is given stills only. Use a "
+                "video-capable provider to submit clips."
+            )
         path = os.getenv("VIDEOAI_MOCK_LLM")
         if not path:
             raise RuntimeError("VIDEOAI_MOCK_LLM must point to a canned response file")

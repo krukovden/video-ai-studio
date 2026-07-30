@@ -20,11 +20,24 @@ SYSTEM_PROMPT = (
 
 class ClaudeCliLLM:
     name = "claude_cli"
+    # Stills only: no CLI here can hand a model a video file.
+    reads_video = False
 
     def __init__(self, model: str = "sonnet") -> None:
         self.model = model
 
-    def complete_json(self, prompt: str, images: list[Path], timeout: int) -> dict:
+    def complete_json(
+        self,
+        prompt: str,
+        images: list[Path],
+        timeout: int,
+        videos: list[Path] | None = None,
+    ) -> dict:
+        if videos:
+            raise ValueError(
+                "claude_cli cannot read video: it is given stills only. Use a "
+                "video-capable provider to submit clips."
+            )
         if images:
             listing = "\n".join(f"- {path}" for path in images)
             prompt = f"{prompt}\n\nReference frames (read them if useful):\n{listing}"
