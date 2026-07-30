@@ -9,6 +9,7 @@ upload, wait, generate — and each is replaced.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -25,7 +26,7 @@ def _clip(tmp_path: Path, name: str = "a.mp4") -> Path:
 
 @pytest.fixture
 def provider(monkeypatch):
-    return GeminiApiLLM(model="gemini-2.5-flash", api_key="test-key")
+    return GeminiApiLLM(model="gemini-3.1-flash-lite", api_key="test-key")
 
 
 def test_it_declares_that_it_reads_video():
@@ -65,7 +66,7 @@ def test_a_video_is_uploaded_and_referenced_by_uri(tmp_path, provider, monkeypat
     video_part = next(part for part in parts if part["type"] == "video")
     assert video_part["uri"] == "files/abc"
     assert video_part["mime_type"] == "video/mp4"
-    assert sent["model"] == "gemini-2.5-flash"
+    assert sent["model"] == "gemini-3.1-flash-lite"
 
 
 def test_stills_are_uploaded_as_images(tmp_path, provider, monkeypatch):
@@ -91,11 +92,11 @@ def test_a_fenced_reply_is_still_read(tmp_path, provider, monkeypatch):
     assert provider.complete_json("p", [], 10) == {"a": 1}
 
 
-def test_media_resolution_is_sent_when_asked_for(tmp_path, provider, monkeypatch):
-    """Low resolution is a third of the tokens; on a long review that is the
-    difference between pennies and a dollar, so it must actually be requested."""
+def test_no_media_resolution_is_sent(tmp_path, provider, monkeypatch):
+    """Measured against a live key: the interactions endpoint rejects
+    media_resolution in every position — generation_config, top level, and on the
+    input part — and sending it fails the whole call."""
     sent: dict = {}
-    provider.media_resolution = "low"
     monkeypatch.setattr(provider, "_upload", lambda path, timeout: "files/v")
     monkeypatch.setattr(provider, "_await_active", lambda uri, timeout: None)
     monkeypatch.setattr(
@@ -103,17 +104,15 @@ def test_media_resolution_is_sent_when_asked_for(tmp_path, provider, monkeypatch
     )
 
     provider.complete_json("p", [], 10, videos=[_clip(tmp_path)])
-    assert sent["generation_config"]["media_resolution"] == "MEDIA_RESOLUTION_LOW"
-
-
-def test_no_media_resolution_key_when_left_at_default(tmp_path, provider, monkeypatch):
-    sent: dict = {}
-    provider.media_resolution = None
-    monkeypatch.setattr(
-        provider, "_generate", lambda body, timeout: (sent.update(body), "{}")[1]
-    )
-    provider.complete_json("p", [], 10)
     assert "generation_config" not in sent
+    assert "media_resolution" not in json.dumps(sent)
+
+
+def test_the_answer_is_read_from_the_model_output_step(provider, monkeypatch):
+    """The interactions API answers in steps: the model's private reasoning is
+    one and its answer another, so only the model_output step may be read."""
+    monkeypatch.setattr(provider, "_generate", lambda body, timeout: _steps_reply())
+    assert provider.complete_json("p", [], 10) == {"ok": True}
 
 
 def test_an_unreadable_upload_is_named(tmp_path, provider, monkeypatch):
@@ -131,6 +130,31 @@ def test_token_estimate_matches_the_documented_rates():
 
 
 def test_the_registry_knows_it():
-    provider = resolve_llm("gemini_api", "gemini-2.5-flash")
+    provider = resolve_llm("gemini_api", "gemini-3.1-flash-lite")
     assert provider.name == "gemini_api"
     assert provider.reads_video is True
+
+
+def _steps_reply() -> str:
+    """A real interactions reply, shaped as the live API returns one."""
+    from videoai.providers.llm_gemini_api import _reply_text
+
+    return _reply_text({
+        "status": "completed",
+        "steps": [
+            {"type": "thought", "signature": "opaque"},
+            {"type": "model_output", "content": [{"type": "text", "text": '{"ok": true}'}]},
+        ],
+        "usage": {"total_input_tokens": 402},
+    })
+
+
+def test_a_thought_step_is_never_read_as_the_answer():
+    from videoai.providers.llm_gemini_api import _reply_text
+
+    text = _reply_text({"steps": [
+        {"type": "thought", "content": [{"type": "text", "text": "let me think"}]},
+        {"type": "model_output", "content": [{"type": "text", "text": '{"a": 1}'}]},
+    ]})
+    assert "think" not in text
+    assert text == '{"a": 1}'

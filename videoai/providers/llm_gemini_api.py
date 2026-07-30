@@ -12,6 +12,13 @@ takes the audio track with it, so the model hears the take as well as seeing it.
 That costs real money — see `video_token_estimate` — which is exactly why it is
 opt-in per stage rather than the default.
 
+That 1 fps matters for how far its timestamps can be trusted. Measured against a
+live key: a sustained event at 12.0s in a 20-second clip came back as 12, while a
+0.3-second flash in a 6-second clip was missed entirely and reported at the wrong
+end of the file. So an observation from this provider is good to about a second,
+and is treated downstream as evidence to be checked rather than a frame-accurate
+cue.
+
 Why the free CLI is not this: the Gemini CLI's individual OAuth tier was
 withdrawn ("IneligibleTierError: this client is no longer supported for Gemini
 Code Assist for individuals"), and even while it worked it had no way to pass a
@@ -43,20 +50,19 @@ BASE = "https://generativelanguage.googleapis.com"
 UPLOAD_URL = f"{BASE}/upload/v1beta/files"
 INTERACTIONS_URL = f"{BASE}/v1beta/interactions"
 
-# Flash is the sane default here: it reads video at a fifth of Pro's input price,
-# and this pipeline asks it to score phrases rather than to reason about them.
-DEFAULT_MODEL = "gemini-2.5-flash"
+# A flash-lite tier is the sane default: it reads video at a fraction of Pro's
+# input price, and this pipeline asks it to score phrases and report what it saw
+# rather than to reason hard. Verified against a live key — note that
+# `gemini-2.5-flash` is refused for new accounts ("no longer available to new
+# users"), so it is not a safe default even though it is still listed.
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
 # Published rates: roughly 300 tokens per second of video at default media
-# resolution, roughly 100 at low. Used only to tell a creator what a run will
-# cost before it runs.
+# resolution, roughly 100 at low, and this endpoint bills at the low rate — a
+# 6-second silent clip measured 378 video tokens, or 63 a second, which is one
+# 66-token frame per second with no audio track to add its own 32. Used only to
+# tell a creator what a run will cost before it runs.
 TOKENS_PER_SECOND = {"default": 300, "low": 100}
-
-MEDIA_RESOLUTION_VALUES = {
-    "low": "MEDIA_RESOLUTION_LOW",
-    "medium": "MEDIA_RESOLUTION_MEDIUM",
-    "high": "MEDIA_RESOLUTION_HIGH",
-}
 
 # An uploaded video is not usable the instant the bytes land: the service
 # transcodes it first, and referencing it too early fails.
@@ -92,17 +98,9 @@ class GeminiApiLLM:
     reads_video = True
     system_preamble = SYSTEM_PROMPT
 
-    def __init__(
-        self,
-        model: str | None = None,
-        api_key: str | None = None,
-        media_resolution: str | None = "low",
-    ) -> None:
+    def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
         self.model = model or DEFAULT_MODEL
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
-        # Low by default: a third of the tokens, and this pipeline judges energy
-        # and motion rather than reading fine detail off the frame.
-        self.media_resolution = media_resolution
 
     # ---- the three HTTP seams, kept small so tests can replace them ---------
 
@@ -205,20 +203,39 @@ class GeminiApiLLM:
             self._await_active(uri, timeout)
             parts.append({"type": _part_type(mime), "uri": uri, "mime_type": mime})
 
+        # No media_resolution: the interactions endpoint rejects it in every
+        # position the documentation suggests (generation_config, top level, and
+        # on the input part), and sending it fails the whole call. Measured
+        # against a live key, video already tokenises at roughly 63 tokens per
+        # second here, which is the low-resolution rate rather than the default
+        # one, so there is nothing being left on the table.
         body: dict = {"model": self.model, "input": parts}
-        resolution = MEDIA_RESOLUTION_VALUES.get((self.media_resolution or "").lower())
-        if resolution:
-            body["generation_config"] = {"media_resolution": resolution}
         return extract_json(self._generate(body, timeout))
 
 
 def _reply_text(document: dict) -> str:
     """The model's own text, out of whichever response shape came back.
 
-    The interactions API and the older generateContent API nest the answer
-    differently, and reading both here means a change of endpoint does not become
-    a change of provider.
+    The interactions API answers with a list of `steps`: the model's private
+    reasoning is one step and its actual answer another, so the text has to be
+    taken from the `model_output` step specifically — concatenating everything
+    would feed the JSON reader the model's thinking as well.
+
+    The older generateContent shapes are read too, so pointing this provider at
+    a different endpoint later is not also a rewrite of its parsing.
     """
+    steps = document.get("steps")
+    if isinstance(steps, list):
+        chunks: list[str] = []
+        for step in steps:
+            if not isinstance(step, dict) or step.get("type") != "model_output":
+                continue
+            for part in step.get("content") or []:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    chunks.append(part["text"])
+        if chunks:
+            return "\n".join(chunks)
+
     for key in ("output_text", "text", "response"):
         value = document.get(key)
         if isinstance(value, str) and value.strip():

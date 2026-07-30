@@ -105,3 +105,61 @@ def test_a_budget_stops_the_reel_rather_than_overspending():
 
 def test_no_phrases_means_no_reel():
     assert plan_reel(PhraseIndex(), padding=0.5, max_seconds=None) == []
+
+
+def test_silent_clips_are_included_so_the_payoff_is_not_cut_out():
+    """The reel exists so a model can watch the moments that matter, and on this
+    kind of footage the best of them — the thing finally giving way — happen in
+    silence. A speech-only reel would remove exactly what it was built to show."""
+    from videoai.core.models import InsertClip
+
+    index = _index(("clip-01#001", "clip-01", 1.0, 2.0))
+    spans = plan_reel(
+        index, padding=0.0, max_seconds=None,
+        inserts=[InsertClip(clip_id="clip-09", duration=4.0)],
+    )
+    assert [span.clip_id for span in spans] == ["clip-01", "clip-09"]
+    # The whole silent clip is offered: it has no words to trim it by.
+    silent = spans[1]
+    assert (silent.start, silent.end) == (0.0, 4.0)
+    assert silent.entries == []
+
+
+def test_a_long_silent_clip_is_capped_rather_than_eating_the_budget():
+    from videoai.core.models import InsertClip
+
+    index = _index(("clip-01#001", "clip-01", 1.0, 2.0))
+    spans = plan_reel(
+        index, padding=0.0, max_seconds=None,
+        inserts=[InsertClip(clip_id="clip-09", duration=600.0)],
+        max_insert_seconds=20.0,
+    )
+    assert spans[1].duration == 20.0
+
+
+def test_speech_still_comes_first_when_the_budget_is_tight():
+    """Words are what the scores are for; a silent shot is a bonus."""
+    from videoai.core.models import InsertClip
+
+    index = _index(("clip-01#001", "clip-01", 0.0, 10.0))
+    spans = plan_reel(
+        index, padding=0.0, max_seconds=12.0,
+        inserts=[InsertClip(clip_id="clip-09", duration=10.0)],
+    )
+    assert [span.clip_id for span in spans] == ["clip-01"]
+
+
+def test_a_clip_already_in_the_reel_is_not_added_again_as_an_insert():
+    """Found by running this live: a clip with sparse narration trips the
+    insert detector, and adding it whole on top of its own spoken spans bills the
+    same footage twice — the reel came back longer than the source."""
+    from videoai.core.models import InsertClip
+
+    index = _index(("clip-01#001", "clip-01", 1.0, 2.0))
+    spans = plan_reel(
+        index, padding=0.0, max_seconds=None,
+        inserts=[InsertClip(clip_id="clip-01", duration=30.0),
+                 InsertClip(clip_id="clip-09", duration=3.0)],
+    )
+    assert [span.clip_id for span in spans] == ["clip-01", "clip-09"]
+    assert reel_seconds(spans) == 4.0  # 1s of speech + the genuinely silent clip

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from videoai.core.models import PhraseIndex
+from videoai.core.models import InsertClip, PhraseIndex
 
 # Two phrases closer together than this are one moment. Cutting them apart pays
 # the encoder twice and throws away the beat between them, which is often the
@@ -57,6 +57,8 @@ def plan_reel(
     index: PhraseIndex,
     padding: float,
     max_seconds: float | None,
+    inserts: list[InsertClip] | None = None,
+    max_insert_seconds: float = 30.0,
 ) -> list[ReelSpan]:
     """The spans to cut, in order, with each phrase's position in the result.
 
@@ -65,8 +67,17 @@ def plan_reel(
     `max_seconds` of footage has been planned. The budget only ever drops whole
     spans: half a moment is worse than no moment, and a truncated span would end
     mid-sentence.
+
+    Silent insert clips are appended after the speech. They carry no words, so
+    there is nothing to trim them by and the whole clip goes in, capped at
+    `max_insert_seconds`. Leaving them out was a real mistake, found by running
+    this against a live model: on this kind of footage the best moments — the
+    thing finally giving way — happen in silence, so a speech-only reel removed
+    exactly what it was built to let a model watch. They come last so that when
+    the budget is tight it is the bonus material that is dropped, not the words
+    the scores are actually for.
     """
-    if not index.phrases:
+    if not index.phrases and not inserts:
         return []
 
     # 1. Widen each phrase into a span, and merge neighbours within one clip.
@@ -88,6 +99,26 @@ def plan_reel(
             "start": start,
             "end": end,
             "phrases": [phrase],
+        })
+
+    # 1b. Silent inserts, after the speech and with no entries of their own.
+    # A clip whose spoken spans are already in the reel is skipped: the insert
+    # detector fires on low speech DENSITY, so a long clip with a few sentences
+    # in it qualifies as both, and adding it whole on top of its own spans bills
+    # the same footage twice. Found by running this against a live model, where
+    # the reel came back longer than the source it was cut from.
+    spoken_clips = {group["clip_id"] for group in grouped}
+    for insert in inserts or []:
+        if insert.clip_id in spoken_clips:
+            continue
+        length = min(max(0.0, insert.duration), max_insert_seconds)
+        if length <= 0:
+            continue
+        grouped.append({
+            "clip_id": insert.clip_id,
+            "start": 0.0,
+            "end": length,
+            "phrases": [],
         })
 
     # 2. Lay them end to end, recording where each phrase lands, and stop at the

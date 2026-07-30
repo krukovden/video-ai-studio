@@ -356,6 +356,15 @@ This is a record of what you SAW, on the reel's clock. Rules:
   way", not "an interesting moment".
 - These times are used to place accents on real moments, so precision matters
   more than coverage. An approximate time is worse than a missing one.
+- Report ONLY what is visibly there. The description above tells you what this
+  footage is supposed to be; it is not evidence of what this particular reel
+  shows. If you cannot see a person, do not describe one. If a span is a close-up
+  of an object with nobody in it, say that. An empty list is a good answer for a
+  reel where nothing notable happens, and far better than a plausible-sounding
+  moment that is not in the picture.
+- The reel is sampled about once a second, so an event shorter than that may not
+  be visible at all. Do not report a moment you had to infer; report the ones you
+  watched.
 """
 
 
@@ -456,7 +465,10 @@ def build_reel(manifest: Manifest, spans: list[ReelSpan], dst: Path) -> Path:
 
 
 def _review_reel(
-    ctx: StageContext, manifest: Manifest, index: PhraseIndex
+    ctx: StageContext,
+    manifest: Manifest,
+    index: PhraseIndex,
+    inserts: list[InsertClip],
 ) -> tuple[Path | None, list[ReelSpan]]:
     """The reel to submit, or None when there is nothing worth submitting."""
     settings = ctx.config.analyze
@@ -464,6 +476,7 @@ def _review_reel(
         index,
         padding=settings.video_padding_seconds,
         max_seconds=settings.max_video_seconds,
+        inserts=inserts,
     )
     if not spans:
         return None, []
@@ -516,10 +529,16 @@ def analyze(ctx: StageContext) -> Analysis:
     # A model that can watch the footage is shown the spoken spans instead of
     # stills; one that cannot keeps getting stills, so changing model never
     # silently changes what the scores were made from.
+    # Detected before the call, not after: the silent close-ups are where this
+    # kind of footage keeps its payoff, so they belong in what the model watches
+    # rather than only in what it is told about afterwards.
+    inserts = detect_inserts(
+        manifest, transcript, ctx.config.analyze.insert_max_words_per_second
+    )
     reel: Path | None = None
     spans: list[ReelSpan] = []
     if ctx.config.analyze.submit_video and getattr(provider, "reads_video", False):
-        reel, spans = _review_reel(ctx, manifest, index)
+        reel, spans = _review_reel(ctx, manifest, index, inserts)
 
     if reel is not None:
         prompt += "\n\n" + reel_prompt_section(spans)
@@ -574,9 +593,6 @@ def analyze(ctx: StageContext) -> Analysis:
     segments = [_score_segment(phrase, scored.get(phrase.phrase_id), takes) for phrase in index.phrases]
     # Insert candidates are measured, not scored: the model is asked about phrases,
     # and these clips have no phrase to ask about.
-    inserts = detect_inserts(
-        manifest, transcript, ctx.config.analyze.insert_max_words_per_second
-    )
     descriptions = _describe_inserts(ctx, manifest, inserts, brief)
     inserts = [
         insert.model_copy(update={"description": descriptions.get(insert.clip_id, "")})
