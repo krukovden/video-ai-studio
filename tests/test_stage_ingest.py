@@ -117,6 +117,30 @@ def test_ingest_handles_clip_without_audio_stream(tmp_path: Path):
     assert Path(clip.proxy_path).exists()
 
 
+def test_audio_path_is_set_exactly_when_the_clip_has_audio(tmp_path: Path, make_clip):
+    """`transcribe`'s fingerprint projection leaves `audio_path` out and relies on
+    `has_audio` standing for it. That is only sound while this invariant holds, so
+    it is asserted here rather than assumed there."""
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("with-audio.mp4", seconds=1.0).rename(clips / "with-audio.mp4")
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clips / "silent.mp4"),
+        ],
+        check=True,
+    )
+
+    manifest = ingest(_context(project))
+
+    assert len(manifest.clips) == 2
+    for clip in manifest.clips:
+        assert bool(clip.audio_path) is clip.has_audio, clip.clip_id
+
+
 def test_ingest_raises_when_no_clips_found(tmp_path: Path):
     project = tmp_path / "project"
     (project / "video").mkdir(parents=True)

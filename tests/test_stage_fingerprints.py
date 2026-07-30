@@ -190,8 +190,11 @@ def _transcribe_context(tmp_path: Path) -> tuple[StageContext, ClipInfo]:
         ({"clip_id": "clip-02"}, True),
         ({"camera": "cam-b"}, True),
         ({"source_key": "a-different-file"}, True),
-        ({"has_audio": False}, True),
-        ({"audio_path": ""}, True),
+        # `audio_path` is read as well, but only for whether it is set, and ingest
+        # sets it if and only if `has_audio` — so `has_audio` stands for it and the
+        # disposable work/ path itself must not be an input.
+        ({"has_audio": False, "audio_path": ""}, True),
+        ({"audio_path": "/somewhere/else/audio.wav"}, False),
         ({"duration": 11.0}, True),
         # Read by nothing in this stage: the proxy is the draft's business.
         ({"proxy_path": "proxy-720p.mp4"}, False),

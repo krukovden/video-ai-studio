@@ -13,11 +13,14 @@ def _transcription_fingerprint_inputs(ctx: StageContext) -> tuple[str, ...]:
 
     This projection replaces the content hashes of `01-manifest` and `01b-sync`
     entirely, so it must name every field the stage below reads — a field left out
-    is a field that can change without re-transcribing. The sync map is read for
-    exactly one thing, `primary_camera`, which is why the whole artifact's hash is
-    not needed; and `audio_path` enters as a boolean because whether audio was
-    extracted decides whether a clip is transcribed, while the path itself is a
-    disposable location under `work/`.
+    is a field that can change without re-transcribing.
+
+    The sync map is read for exactly one thing, `primary_camera`, which is why the
+    whole artifact's hash is not needed. `audio_path` is read too, but only for
+    whether it is set, and ingest sets it if and only if `has_audio` — which is
+    here — so `has_audio` already stands for it. The path itself is a disposable
+    location under `work/` and must not be an input, or moving the work directory
+    would re-transcribe everything.
     """
     manifest = ctx.store.read("01-manifest", Manifest)
     sync_map = ctx.store.read("01b-sync", SyncMap)
@@ -30,7 +33,6 @@ def _transcription_fingerprint_inputs(ctx: StageContext) -> tuple[str, ...]:
                     clip.source_key,
                     clip.camera,
                     str(clip.has_audio),
-                    f"has-audio-file={bool(clip.audio_path)}",
                     f"{clip.duration:.6f}",
                 )
             )

@@ -162,7 +162,10 @@ def validate_production_report(report: dict, project_dir: Path) -> None:
         )
     features = report.get("features") or {}
     if required_output.get("full_decode") and not features.get("full_decode"):
-        failures.append("the delivered file did not decode end to end")
+        failures.append(
+            "the delivered file did not decode end to end: "
+            + (report.get("decode_error") or "no diagnostic was captured")
+        )
     for feature, required in (contract.get("required_features") or {}).items():
         if not required:
             continue

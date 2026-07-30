@@ -986,7 +986,11 @@ def polish(ctx: StageContext) -> FinalResult:
     # Everything above is a probe, a listing and some arithmetic. Everything below
     # re-encodes gigabytes, so the contract is checked against what is knowable
     # now: an unsatisfiable delivery has to fail in seconds.
-    timeline_seconds = sum(clip.dur for clip in timeline.clips) + settings.intro_seconds
+    timeline_seconds = (
+        sum(clip.dur for clip in timeline.clips)
+        + max(0.0, settings.intro_seconds)
+        + max(0.0, settings.outro_seconds)
+    )
     preflight(
         contract,
         frame=frame,
