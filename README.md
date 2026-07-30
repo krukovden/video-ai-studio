@@ -37,6 +37,41 @@ Codex runs ephemerally and read-only, receives the same prompts and reference
 frames, and is asked only for the JSON artifact. This is also useful for
 comparing Claude and Codex on the same project without adding a metered API.
 
+### Letting the analyst watch the footage
+
+Every provider above is handed a transcript and a still per phrase. That is
+enough to judge what was *said* and structurally blind to how it was
+*delivered* — comic timing, a reaction building, a moment holding for exactly as
+long as it should. For a quiet subject those are most of what makes the edit
+good.
+
+`gemini_api` is the one provider that is given the footage itself. Point a single
+stage at it and leave the cheap ones alone:
+
+```yaml
+llm_by_stage:
+  analyze: gemini_api
+```
+
+It needs a key — `GEMINI_API_KEY` in `.env`, from
+[AI Studio](https://aistudio.google.com/apikey). The Gemini *CLI*'s free
+individual tier no longer works (`IneligibleTierError`), and even while it did it
+had no way to hand a model a video file; several API models carry a free tier of
+their own.
+
+What gets submitted is a **reel of the spoken spans**, not the source: most of a
+review is silence, fumbling and the seams between takes. On a 29-minute shoot
+that is roughly 10 minutes of footage instead of 29. Token cost is duration
+times `media_resolution` and *nothing else* — re-encoding the clips smaller
+saves upload time, not money — so the levers that matter are how many seconds
+you send (`analyze.max_video_seconds`) and the resolution tier (low by default,
+about 100 input tokens per second). `04-analysis.json` records
+`video_seconds`, so what was paid for is visible rather than inferred from a
+bill.
+
+Any stage can be pointed at any provider this way, so replacing Gemini later is
+a line of YAML rather than a code change.
+
 ## Project layout
 
 A project is a folder. The pipeline adapts to how you already have it organized
