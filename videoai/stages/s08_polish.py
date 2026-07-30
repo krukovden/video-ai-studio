@@ -553,31 +553,47 @@ def _render_card(
         raise RuntimeError(f"could not render card image: {path}")
 
 
+def _is_lossless_x264_encode(args: list[str]) -> bool:
+    """True only for `-c:v libx264 -crf 0`: a mathematically lossless generation.
+
+    Anything else — a different crf, no crf at all, or VideoToolbox's constant-
+    quality mode — throws pixels away. This is checked against the actual
+    argument list handed to ffmpeg rather than assumed, so a future change that
+    quietly makes an intermediate lossy is counted, not hidden.
+    """
+    if "-c:v" not in args or args[args.index("-c:v") + 1] != "libx264":
+        return False
+    if "-crf" not in args:
+        return False
+    return args[args.index("-crf") + 1] == "0"
+
+
 def _card_segment(
     image: Path,
     duration: float,
     frame: tuple[int, int],
     fps: float,
     dst: Path,
+    lossless_sink: list[bool] | None = None,
 ) -> None:
     width, height = frame
     fade = min(0.4, duration / 4)
-    _run_ffmpeg_to(
-        [
-            "-loop", "1", "-framerate", f"{fps}", "-t", f"{duration:.3f}",
-            "-i", str(image),
-            "-f", "lavfi", "-t", f"{duration:.3f}", "-i", SILENCE_SOURCE,
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-vf",
-            f"scale={width}:{height},format=yuv420p,"
-            f"fade=t=in:st=0:d={fade:.3f},"
-            f"fade=t=out:st={max(0.0, duration - fade):.3f}:d={fade:.3f}",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "0",
-            "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
-            "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
-        ],
-        dst,
-    )
+    args = [
+        "-loop", "1", "-framerate", f"{fps}", "-t", f"{duration:.3f}",
+        "-i", str(image),
+        "-f", "lavfi", "-t", f"{duration:.3f}", "-i", SILENCE_SOURCE,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-vf",
+        f"scale={width}:{height},format=yuv420p,"
+        f"fade=t=in:st=0:d={fade:.3f},"
+        f"fade=t=out:st={max(0.0, duration - fade):.3f}:d={fade:.3f}",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "0",
+        "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
+        "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
+    ]
+    if lossless_sink is not None:
+        lossless_sink.append(_is_lossless_x264_encode(args))
+    _run_ffmpeg_to(args, dst)
 
 
 def _cut_delivery_segment(
@@ -591,6 +607,7 @@ def _cut_delivery_segment(
     fade_in: bool,
     fade_out: bool,
     dst: Path,
+    lossless_sink: list[bool] | None = None,
 ) -> int:
     """Cut one segment; return how many fade filters were actually emitted.
 
@@ -629,6 +646,8 @@ def _cut_delivery_segment(
         "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
         "-avoid_negative_ts", "make_zero",
     ]
+    if lossless_sink is not None:
+        lossless_sink.append(_is_lossless_x264_encode(common))
     if has_audio:
         _run_ffmpeg_to(
             [
@@ -1208,7 +1227,6 @@ POLISH_REQUIRES = (
         "polish.music_dir",
         "polish.output_height",
         "polish.output_crf",
-        "polish.lossless_intermediates",
         "polish.hardware_encode",
         # Read, not inherited: the final does its own cutting now, and the fade at
         # each cut has to be the one the draft was reviewed with.
@@ -1305,6 +1323,13 @@ def polish(ctx: StageContext) -> FinalResult:
     )
     track = _select_music(music_dir, tracks, settings, ctx.project_dir)
 
+    # Every x264 video encode the delivery path performs, in order, and whether
+    # each one actually was lossless. `quality.lossy_video_generations` in the
+    # report below is the count of the ones that were not — measured, not
+    # asserted, so a future change that makes an intermediate lossy is caught by
+    # the contract instead of silently under-reported.
+    lossless_encodes: list[bool] = []
+
     segments: list[Path] = []
     changes = set(section_changes(timeline))
     emitted_transitions = 0
@@ -1317,6 +1342,7 @@ def polish(ctx: StageContext) -> FinalResult:
             fade_in=index == 0 or index in changes,
             fade_out=index == len(timeline.clips) - 1 or index + 1 in changes,
             dst=target,
+            lossless_sink=lossless_encodes,
         )
         segments.append(target)
     segment_durations = [probe(path).duration for path in segments]
@@ -1348,8 +1374,14 @@ def polish(ctx: StageContext) -> FinalResult:
         raise RuntimeError("production contract requires a non-empty outro")
     _render_card(intro_image, story.title.strip(), "Toy review", frame)
     _render_card(outro_image, settings.outro_text.strip(), "See you next time!", frame)
-    _card_segment(intro_image, intro_duration, frame, fps, intro_path)
-    _card_segment(outro_image, outro_duration, frame, fps, outro_path)
+    _card_segment(
+        intro_image, intro_duration, frame, fps, intro_path,
+        lossless_sink=lossless_encodes,
+    )
+    _card_segment(
+        outro_image, outro_duration, frame, fps, outro_path,
+        lossless_sink=lossless_encodes,
+    )
 
     picture = work_dir / "picture-master.mp4"
     _concat_copy([intro_path, *segments, outro_path], work_dir, picture)
@@ -1362,50 +1394,56 @@ def polish(ctx: StageContext) -> FinalResult:
             settings.caption_words,
         )
     )
+    # From here through validation, a raise of any kind must leave output/ exactly
+    # as it was before this stage ran rather than an orphan final.srt (or a stale
+    # final.mp4 / production-report.json from the previous run) beside whatever
+    # step actually failed.
     srt_path = ctx.output_dir / "final.srt"
-    if settings.captions_enabled:
-        if not captions:
-            raise RuntimeError(
-                "production contract requires captions, but none were generated"
-            )
-        write_srt_captions(srt_path, captions)
-    else:
-        # No caption track was asked for, so there must not be one on disk — a
-        # stale file from an earlier run would be uploaded as this video's captions.
-        srt_path.unlink(missing_ok=True)
+    try:
+        if settings.captions_enabled:
+            if not captions:
+                raise RuntimeError(
+                    "production contract requires captions, but none were generated"
+                )
+            write_srt_captions(srt_path, captions)
+        else:
+            # No caption track was asked for, so there must not be one on disk — a
+            # stale file from an earlier run would be uploaded as this video's
+            # captions.
+            srt_path.unlink(missing_ok=True)
 
-    title_overlays = build_section_titles(
-        timeline, starts, segment_durations, intro_offset, settings.title_seconds,
-    )
-    if not title_overlays:
-        raise RuntimeError("production contract requires section titles")
+        title_overlays = build_section_titles(
+            timeline, starts, segment_durations, intro_offset, settings.title_seconds,
+        )
+        if not title_overlays:
+            raise RuntimeError("production contract requires section titles")
 
-    effect_overlays = build_effect_overlays(
-        effect_plan.events, library, timeline, starts, intro_offset, frame, work_dir,
-    )
+        effect_overlays = build_effect_overlays(
+            effect_plan.events, library, timeline, starts, intro_offset, frame,
+            work_dir,
+        )
 
-    graphics = work_dir / "graphics.mov"
-    _render_graphics_track(
-        graphics, frame, fps, total,
-        captions if settings.burn_captions else [],
-        title_overlays, work_dir, effect_overlays,
-    )
+        graphics = work_dir / "graphics.mov"
+        _render_graphics_track(
+            graphics, frame, fps, total,
+            captions if settings.burn_captions else [],
+            title_overlays, work_dir, effect_overlays,
+        )
 
-    bed = work_dir / "music-bed.wav"
-    ducked = work_dir / "music-bed-ducked.wav"
-    speech_track = work_dir / "speech.wav"
-    mixed = work_dir / "mixed-audio.wav"
-    _extract_speech_track(picture, speech_track)
-    _render_music_bed(track, total, settings.music_gain_db, bed)
-    duck = duck_bed_under_speech(
-        speech_track, bed, total, settings.music_duck_db,
-        speech_windows(captions), ducked,
-    )
-    _mix_delivery_audio(speech_track, ducked, total, mixed)
+        bed = work_dir / "music-bed.wav"
+        ducked = work_dir / "music-bed-ducked.wav"
+        speech_track = work_dir / "speech.wav"
+        mixed = work_dir / "mixed-audio.wav"
+        _extract_speech_track(picture, speech_track)
+        _render_music_bed(track, total, settings.music_gain_db, bed)
+        duck = duck_bed_under_speech(
+            speech_track, bed, total, settings.music_duck_db,
+            speech_windows(captions), ducked,
+        )
+        _mix_delivery_audio(speech_track, ducked, total, mixed)
 
-    hardware = settings.hardware_encode and videotoolbox_available()
-    _run_ffmpeg_to(
-        [
+        hardware = settings.hardware_encode and videotoolbox_available()
+        final_args = [
             "-i", str(picture), "-i", str(graphics), "-i", str(mixed),
             "-filter_complex", "[0:v][1:v]overlay=eof_action=pass:shortest=1[v]",
             "-map", "[v]", "-map", "2:a:0", "-t", f"{total:.3f}",
@@ -1414,77 +1452,83 @@ def polish(ctx: StageContext) -> FinalResult:
             "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
             "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
             "-movflags", "+faststart",
-        ],
-        output,
-    )
-    decoded, decode_error = full_decode(output)
-    measured = probe(output)
-    attribution = attribution_line(track)
-    if attribution:
-        write_attribution(ctx.output_dir, attribution)
+        ]
+        lossless_encodes.append(_is_lossless_x264_encode(final_args))
+        _run_ffmpeg_to(final_args, output)
+        decoded, decode_error = full_decode(output)
+        measured = probe(output)
+        attribution = attribution_line(track)
+        if attribution:
+            write_attribution(ctx.output_dir, attribution)
 
-    # What the accents were, on the delivery's own clock. Recorded outside
-    # `features` on purpose: the contract's required features are the structure of
-    # a finished video, and an effect is seasoning — a delivery with none is as
-    # valid as a delivery with eight.
-    effect_lines = [
-        f"{overlay.name} at {overlay.start:.2f}s for {overlay.duration:.2f}s "
-        f"({overlay.cell}, {overlay.animation})"
-        for overlay in effect_overlays
-    ]
-    report_path = ctx.output_dir / "production-report.json"
-    report = {
-        "contract_version": contract.get("version"),
-        "status": "passed",
-        "output": str(output),
-        "duration": measured.duration,
-        "width": measured.width,
-        "height": measured.height,
-        "features": {
-            "intro": True,
-            "outro": True,
-            "section_titles": len(title_overlays),
-            "captions": len(captions) if settings.captions_enabled else 0,
-            "soft_captions": len(captions) if settings.captions_enabled else 0,
-            "burned_in_captions": settings.burn_captions,
-            "music": track.name,
-            # Measured, in dB, over the speech windows of this very mix.
-            "music_ducking": round(duck.attenuation_db, 2),
-            # Fade filters actually emitted into the segment cuts, not planned
-            # section boundaries.
-            "transitions": emitted_transitions,
-            "section_boundaries": len(changes),
-            "closing_beat": has_closing_beat(timeline),
-            "full_decode": decoded,
-        },
-        "effects": {
-            "applied": len(effect_overlays),
-            "library": str(library.directory),
-            "events": [
-                {
-                    "name": event.effect_name,
-                    "at_seconds": event.at_seconds,
-                    "position": event.screen_position,
-                    "scale": event.scale,
-                    "text": event.text,
-                    "reason": event.reason,
-                }
-                for event in effect_plan.events
-            ],
-        },
-        "quality": {
-            "source": "proxies" if leaked else "originals",
-            "segment_inputs": used,
-            "proxy_inputs": leaked,
-            "lossy_video_generations": 1,
-        },
-    }
-    if not decoded:
-        report["status"] = "failed"
-        report["decode_error"] = decode_error
-    try:
+        # What the accents were, on the delivery's own clock. Recorded outside
+        # `features` on purpose: the contract's required features are the
+        # structure of a finished video, and an effect is seasoning — a delivery
+        # with none is as valid as a delivery with eight.
+        effect_lines = [
+            f"{overlay.name} at {overlay.start:.2f}s for {overlay.duration:.2f}s "
+            f"({overlay.cell}, {overlay.animation})"
+            for overlay in effect_overlays
+        ]
+        report_path = ctx.output_dir / "production-report.json"
+        # Measured, not asserted: only the encodes that were not lossless count,
+        # so a future intermediate that quietly turned lossy would raise this
+        # above the contract's `maximum_lossy_video_generations` instead of
+        # shipping under a hardcoded `1`.
+        lossy_video_generations = sum(
+            1 for lossless in lossless_encodes if not lossless
+        )
+        report = {
+            "contract_version": contract.get("version"),
+            "status": "passed",
+            "output": str(output),
+            "duration": measured.duration,
+            "width": measured.width,
+            "height": measured.height,
+            "features": {
+                "intro": True,
+                "outro": True,
+                "section_titles": len(title_overlays),
+                "captions": len(captions) if settings.captions_enabled else 0,
+                "soft_captions": len(captions) if settings.captions_enabled else 0,
+                "burned_in_captions": settings.burn_captions,
+                "music": track.name,
+                # Measured, in dB, over the speech windows of this very mix.
+                "music_ducking": round(duck.attenuation_db, 2),
+                # Fade filters actually emitted into the segment cuts, not
+                # planned section boundaries.
+                "transitions": emitted_transitions,
+                "section_boundaries": len(changes),
+                "closing_beat": has_closing_beat(timeline),
+                "full_decode": decoded,
+            },
+            "effects": {
+                "applied": len(effect_overlays),
+                "library": str(library.directory),
+                "events": [
+                    {
+                        "name": event.effect_name,
+                        "at_seconds": event.at_seconds,
+                        "position": event.screen_position,
+                        "scale": event.scale,
+                        "text": event.text,
+                        "reason": event.reason,
+                    }
+                    for event in effect_plan.events
+                ],
+            },
+            "quality": {
+                "source": "proxies" if leaked else "originals",
+                "segment_inputs": used,
+                "proxy_inputs": leaked,
+                "lossy_video_generations": lossy_video_generations,
+            },
+        }
+        if not decoded:
+            report["status"] = "failed"
+            report["decode_error"] = decode_error
         validate_production_report(report, ctx.project_dir)
-    except RuntimeError:
+    except BaseException:
         _discard_delivery_outputs(ctx.output_dir, output)
         raise
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

@@ -124,11 +124,6 @@ class PolishSettings(BaseModel):
     output_height: int = 1080
     # Visually near-lossless, against the draft's 26.
     output_crf: int = 18
-    # The selected source ranges are encoded once before the final composition
-    # graph. Keep that intermediate mathematically lossless so the delivery
-    # encode is the only lossy generation. This costs temporary disk space and
-    # CPU time, but work/polish is disposable.
-    lossless_intermediates: bool = True
     # VideoToolbox when the build has it, libx264 when it does not.
     hardware_encode: bool = True
 

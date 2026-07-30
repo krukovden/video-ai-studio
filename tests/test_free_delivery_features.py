@@ -218,7 +218,6 @@ quality:
                 transition_frames=3,
                 music_dir=str(music_dir),
                 output_height=240,
-                lossless_intermediates=True,
                 hardware_encode=False,
             )
         ),

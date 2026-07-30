@@ -173,6 +173,46 @@ def manifest_path(directory: Path | None = None) -> Path:
     return (directory or default_library_dir()) / MANIFEST_FILENAME
 
 
+def _validate_sprite_image(path: Path, sprite_name: str) -> None:
+    """Catch a broken or flattened sprite file while the library loads.
+
+    Two ways a replacement PNG can go wrong without a story stage or the
+    compositor ever noticing: it fails to decode (a truncated or corrupt file),
+    or it decodes fine but has no real transparency (a flattened export saved as
+    RGBA with every pixel opaque). The first would otherwise raise deep inside a
+    render as an unrelated-looking "could not read text image"; the second would
+    not raise at all — it would composite as an opaque rectangle over the video.
+    Checking here, before any segment is cut, costs milliseconds instead of a
+    wasted render.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(path) as source:
+            source.load()
+            mode = source.mode
+            alpha = source.getchannel("A") if mode in ("RGBA", "LA") else None
+    except OSError as exc:
+        raise RuntimeError(
+            f"sprite {sprite_name!r} ({path}) could not be decoded as an image: "
+            f"{exc}. Re-export with a transparent background."
+        ) from exc
+    if alpha is None:
+        raise RuntimeError(
+            f"sprite {sprite_name!r} ({path}) has no alpha channel (mode "
+            f"{mode!r}); a flattened export composites as an opaque rectangle "
+            "instead of a transparent overlay. Re-export with a transparent "
+            "background."
+        )
+    lowest, _highest = alpha.getextrema()
+    if lowest == 255:
+        raise RuntimeError(
+            f"sprite {sprite_name!r} ({path}) has a fully opaque alpha channel; "
+            "a flattened export composites as an opaque rectangle instead of a "
+            "transparent overlay. Re-export with a transparent background."
+        )
+
+
 def load_library(directory: Path | None = None) -> EffectLibrary:
     """Read the manifest. A missing library is empty, not an error: the effects
     stage then has nothing to offer and produces no events, which is a valid
@@ -198,6 +238,7 @@ def load_library(directory: Path | None = None) -> EffectLibrary:
                 f"{path}: sprite {sprite.name!r} names {sprite.file}, which is not in "
                 f"{directory}"
             )
+        _validate_sprite_image(file, sprite.name)
     return library
 
 

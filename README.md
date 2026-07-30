@@ -395,10 +395,13 @@ footage needs no special handling: ffmpeg autorotates on decode whenever the
 output goes through a filter chain, so a portrait clip stored as landscape
 frames plus a display matrix arrives upright and is delivered upright.
 
-With `polish.lossless_intermediates: true` (the default), selected source
-ranges are cut to lossless x264 intermediates before composition. The final
-delivery encode is therefore the only lossy video generation. This uses more
-temporary disk space and CPU, but `work/polish/` is disposable.
+Selected source ranges are always cut to lossless x264 intermediates (`-crf
+0`) before composition, so the final delivery encode is the only lossy video
+generation. This uses more temporary disk space and CPU, but `work/polish/`
+is disposable. `production-report.json`'s `quality.lossy_video_generations`
+is not a constant: it counts the intermediate and final encodes actually
+performed, so a change that made a source cut lossy too would fail the
+contract rather than misreport `1`.
 
 The audio target is unchanged — AAC, 44100 Hz, mono, exactly what the draft
 settled on — because the concat step depends on every segment agreeing on it.

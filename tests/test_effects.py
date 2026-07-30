@@ -131,6 +131,50 @@ def test_seeding_a_library_elsewhere_reproduces_the_same_bytes(tmp_path: Path):
         ).read_bytes(), sprite.name
 
 
+def test_all_the_shipped_sprites_pass_alpha_validation_on_load():
+    """`load_library` decodes and checks every sprite file's alpha channel; the
+    shipped drawings must not trip the check that catches a bad replacement."""
+    assert load_library().sprites  # loading at all is the assertion
+
+
+def test_a_flattened_replacement_sprite_is_refused_by_file_name(tmp_path: Path):
+    """A 3-channel PNG has no alpha channel at all. cv2 would silently expand it
+    to a fully-opaque rectangle instead of a transparent overlay; catching it here
+    means the mistake is a message, not an opaque box over the delivered video."""
+    from PIL import Image
+
+    seed_library(tmp_path / "effects")
+    flattened = tmp_path / "effects" / "comic_starburst.png"
+    Image.new("RGB", (256, 256), (200, 40, 40)).save(flattened)
+
+    with pytest.raises(RuntimeError, match=r"comic_starburst.*no alpha channel"):
+        load_library(tmp_path / "effects")
+
+
+def test_a_fully_opaque_replacement_sprite_is_refused_by_file_name(tmp_path: Path):
+    """RGBA with every pixel opaque is what a flattened export looks like once
+    someone remembers to add a (useless) alpha band. Still not transparent."""
+    from PIL import Image
+
+    seed_library(tmp_path / "effects")
+    opaque = tmp_path / "effects" / "comic_starburst.png"
+    Image.new("RGBA", (256, 256), (200, 40, 40, 255)).save(opaque)
+
+    with pytest.raises(RuntimeError, match=r"comic_starburst.*fully opaque"):
+        load_library(tmp_path / "effects")
+
+
+def test_a_corrupt_replacement_sprite_fails_at_load_naming_the_file(tmp_path: Path):
+    """Before this fix, a corrupt PNG only failed deep inside the renderer with a
+    misleading 'could not read text image'. It must fail here instead, by name."""
+    seed_library(tmp_path / "effects")
+    corrupt = tmp_path / "effects" / "comic_starburst.png"
+    corrupt.write_bytes(b"not actually a png")
+
+    with pytest.raises(RuntimeError, match=r"comic_starburst.*could not be decoded"):
+        load_library(tmp_path / "effects")
+
+
 # --------------------------------------------------------------------------- #
 # Placement: parsing a reply into events
 # --------------------------------------------------------------------------- #

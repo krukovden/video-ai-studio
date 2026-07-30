@@ -114,7 +114,6 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         # upstream: the draft is a review copy and is not affected by them.
         (Config(polish=PolishSettings(output_height=2160)), {"polish"}),
         (Config(polish=PolishSettings(output_crf=14)), {"polish"}),
-        (Config(polish=PolishSettings(lossless_intermediates=False)), {"polish"}),
         (Config(polish=PolishSettings(hardware_encode=False)), {"polish"}),
     ],
 )
@@ -287,3 +286,63 @@ def test_transcription_fingerprint_ignores_disposable_proxy_path(tmp_path: Path)
     after = _fingerprint(REGISTRY["transcribe"], ctx, "media-fp", "brief-fp")
 
     assert after == before
+
+
+# --- the effects library's own fingerprint -----------------------------------
+
+
+def test_editing_the_effects_manifest_invalidates_effects_and_polish(
+    tmp_path: Path, monkeypatch
+):
+    """The library's vocabulary is read by two stages: `effects` picks from it,
+    and `polish`'s own fingerprint hashes the manifest too (as part of the whole
+    library), so a still-cached delivery is not trusted against a definition of
+    the sprites that changed under it."""
+    import videoai.logic.effects as effects_module
+    from videoai.logic.effect_seeds import seed_library
+
+    library_dir = tmp_path / "library"
+    seed_library(library_dir)
+    monkeypatch.setattr(effects_module, "default_library_dir", lambda: library_dir)
+
+    ctx = _context(tmp_path, Config())
+    before = {
+        stage_id: _fingerprint(REGISTRY[stage_id], ctx, "media-fp", "brief-fp")
+        for stage_id in ("effects", "polish")
+    }
+
+    manifest = library_dir / "manifest.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8"
+    )
+
+    for stage_id, value in before.items():
+        assert (
+            _fingerprint(REGISTRY[stage_id], ctx, "media-fp", "brief-fp") != value
+        ), stage_id
+
+
+def test_redrawing_a_sprite_png_invalidates_only_polish(tmp_path: Path, monkeypatch):
+    """`effects` never sees a pixel — only `manifest.yaml` — so swapping in a
+    better drawing of the same sprite must not re-plan which effects were
+    chosen. `polish` draws the pixels onto the picture, so it must re-render."""
+    import videoai.logic.effects as effects_module
+    from videoai.logic.effect_seeds import seed_library
+
+    library_dir = tmp_path / "library"
+    seed_library(library_dir)
+    monkeypatch.setattr(effects_module, "default_library_dir", lambda: library_dir)
+
+    ctx = _context(tmp_path, Config())
+    before_effects = _fingerprint(REGISTRY["effects"], ctx, "media-fp", "brief-fp")
+    before_polish = _fingerprint(REGISTRY["polish"], ctx, "media-fp", "brief-fp")
+
+    sprite = library_dir / "comic_starburst.png"
+    sprite.write_bytes(sprite.read_bytes() + b"\x00")
+
+    assert (
+        _fingerprint(REGISTRY["effects"], ctx, "media-fp", "brief-fp") == before_effects
+    )
+    assert (
+        _fingerprint(REGISTRY["polish"], ctx, "media-fp", "brief-fp") != before_polish
+    )

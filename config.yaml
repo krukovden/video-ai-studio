@@ -71,5 +71,4 @@ polish:
   # re-renders output/final.mp4 and nothing else.
   output_height: 1080     # finished height, source aspect kept; 2160 for true 4K
   output_crf: 18          # visually near-lossless, against the draft's 26
-  lossless_intermediates: true  # one lossy generation: only the final delivery encode
   hardware_encode: true   # VideoToolbox when the build has it, else libx264

@@ -368,6 +368,37 @@ def test_output_height_2160_delivers_true_4k(delivery):
     assert result.height == 2160
 
 
+def test_lossy_video_generations_is_measured_not_a_constant(project):
+    """The report's `quality.lossy_video_generations` used to be a literal `1`.
+    It has to come from actually checking each delivery-path encode's own
+    arguments: today that means every intermediate is `-crf 0` and only the
+    final encode is not, so the measured count still lands on 1."""
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+
+    result = polish(ctx)
+
+    report = json.loads(Path(result.production_report).read_text())
+    assert report["quality"]["lossy_video_generations"] == 1
+
+
+def test_a_future_lossy_intermediate_would_fail_the_contract(project, monkeypatch):
+    """Proof the count above is really measured: if a later change made every
+    delivery-path encode lossy (not just the final one), the contract's
+    `maximum_lossy_video_generations: 1` must catch it instead of the report
+    still claiming 1."""
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+    monkeypatch.setattr(
+        "videoai.stages.s08_polish._is_lossless_x264_encode", lambda args: False
+    )
+
+    with pytest.raises(RuntimeError, match="lossy video generations"):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "final.mp4").exists()
+    assert not (ctx.output_dir / "final.srt").exists()
+    assert not (ctx.output_dir / "production-report.json").exists()
+
+
 def test_a_missing_original_is_refused_by_name_instead_of_falling_back_to_the_proxy(delivery):
     """Silently delivering the proxy is the defect. A source that has moved has to
     stop the stage and say which file it is."""
@@ -799,6 +830,31 @@ def test_a_contract_failure_removes_a_stale_report_and_srt(project, tmp_path: Pa
     assert not (ctx.output_dir / "production-report.json").exists()
     assert not (ctx.output_dir / "final.srt").exists()
     assert not (ctx.output_dir / "final.mp4").exists()
+
+
+def test_a_failure_after_the_srt_write_leaves_no_delivery_output(project, monkeypatch):
+    """final.srt is written before every later step that can still raise
+    (section titles, effect overlays, the graphics track, duck measurement, the
+    final encode, validation). A crash among those must not leave a freshly
+    written final.srt beside a stale final.mp4/production-report.json from an
+    earlier, successful run."""
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+    (ctx.output_dir / "production-report.json").write_text(
+        '{"status": "passed"}\n', encoding="utf-8"
+    )
+    (ctx.output_dir / "final.mp4").write_bytes(b"stale")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom: simulated failure after the srt write")
+
+    monkeypatch.setattr("videoai.stages.s08_polish.build_section_titles", _boom)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "final.srt").exists()
+    assert not (ctx.output_dir / "final.mp4").exists()
+    assert not (ctx.output_dir / "production-report.json").exists()
 
 
 # --- degradation is never called final --------------------------------------
