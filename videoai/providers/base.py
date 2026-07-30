@@ -51,6 +51,10 @@ def llm_system_preamble(name: str) -> str:
         from videoai.providers.llm_gemini_cli import SYSTEM_PROMPT
 
         return SYSTEM_PROMPT
+    if name == "gemini_api":
+        from videoai.providers.llm_gemini_api import SYSTEM_PROMPT
+
+        return SYSTEM_PROMPT
     return ""
 
 
@@ -102,4 +106,10 @@ def resolve_llm(name: str, model: str | None = None) -> LLMProvider:
         # Gemini would reject, so a model is passed on only when it looks like a
         # Gemini one. Otherwise the CLI's own default is used.
         return GeminiCliLLM(model if model and model.startswith("gemini") else None)
+    if name == "gemini_api":
+        from videoai.providers.llm_gemini_api import GeminiApiLLM
+
+        # The only provider that can be handed the footage itself; see its module
+        # docstring for why that costs money and the CLI cannot do it.
+        return GeminiApiLLM(model if model and model.startswith("gemini") else None)
     raise ValueError(f"unknown llm provider: {name}")
