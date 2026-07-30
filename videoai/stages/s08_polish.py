@@ -29,6 +29,7 @@ from __future__ import annotations
 import shutil
 import time
 import json
+import math
 import re
 import subprocess
 from dataclasses import dataclass
@@ -79,15 +80,27 @@ from videoai.stages.s06_render_draft import (
 
 MUSIC_FADE_SECONDS = 2.0
 
-# `sidechaincompress` attenuates the bed by `overshoot * (1 - 1/ratio)` dB, where
-# the overshoot is how far the key signal sits above the threshold. The threshold
-# below is far under speech but above this footage's room tone, and speech in the
-# rendered drafts sits roughly this far above it — so that is the overshoot the
-# configured duck is solved for.
-SIDECHAIN_THRESHOLD = 0.015
+# `sidechaincompress` attenuates the bed by how far the key signal sits above the
+# threshold, so how much duck a given setting produces depends on how loudly the
+# video happens to have been recorded. A fixed threshold therefore encodes an
+# assumption about the creator's microphone: the constant this stage used to carry
+# assumed speech around -20 dBFS, and on the real footage (-27 dBFS) it delivered
+# 2.3 dB of duck while the report simply claimed ducking was applied.
+#
+# So nothing here is assumed. The threshold is placed under the MEASURED speech
+# level so that speech really is `SPEECH_OVERSHOOT_DB` above it, and `level_sc` —
+# the gain ffmpeg applies to the key before detection — is then bisected until the
+# bed measurably drops by the amount `polish.music_duck_db` asked for. Each step is
+# one short audio pass, and the step count is fixed, so the search terminates and
+# the same input always produces the same mix.
 SPEECH_OVERSHOOT_DB = 16.0
 SIDECHAIN_ATTACK_MS = 20
 SIDECHAIN_RELEASE_MS = 300
+# ffmpeg's own limits for `threshold` and `level_sc`.
+MIN_SIDECHAIN_THRESHOLD = 0.000977
+SIDECHAIN_KEY_GAIN_LIMITS = (0.015625, 64.0)
+DUCK_SEARCH_STEPS = 6
+DUCK_TOLERANCE_DB = 0.75
 
 SILENCE_SOURCE = (
     f"anullsrc=channel_layout={DRAFT_AUDIO_CHANNEL_LAYOUT}:sample_rate={DRAFT_AUDIO_SAMPLE_RATE}"
@@ -108,6 +121,15 @@ class _Caption:
     start: float
     end: float
     text: str
+
+
+@dataclass(frozen=True)
+class _Duck:
+    """A measured duck, and the settings that produced the file it was measured on."""
+
+    attenuation_db: float
+    threshold: float
+    key_gain: float
 
 
 def lower_third_y(frame_height: int, overlay_height: int) -> int:
@@ -287,16 +309,11 @@ def _windowed_rms_db(path: Path, windows: list[tuple[float, float]]) -> float:
     return -120.0 if value in ("-inf", "nan") else float(value)
 
 
-def measure_duck_attenuation_db(
-    bed: Path, ducked_bed: Path, windows: list[tuple[float, float]]
-) -> float:
-    """How much quieter the ducked bed actually is while somebody is talking.
-
-    The two files are the same music at the same gain; the only difference is the
-    sidechain compressor. Measuring both over the same speech windows therefore
-    measures the duck itself, not the music.
-    """
-    return _windowed_rms_db(bed, windows) - _windowed_rms_db(ducked_bed, windows)
+def sidechain_threshold(speech_rms_db: float) -> float:
+    """The key threshold that puts a speech level of `speech_rms_db` above itself by
+    `SPEECH_OVERSHOOT_DB`, inside the range ffmpeg accepts."""
+    wanted = 10 ** ((speech_rms_db - SPEECH_OVERSHOOT_DB) / 20)
+    return max(MIN_SIDECHAIN_THRESHOLD, min(1.0, wanted))
 
 
 def write_srt_captions(path: Path, captions: list[_Caption]) -> None:
@@ -743,14 +760,26 @@ def _render_music_bed(
     )
 
 
+def _extract_speech_track(picture: Path, dst: Path) -> None:
+    """The picture master's own audio, on its own.
+
+    The duck is keyed on it and the search below measures it repeatedly, and the
+    picture master is a multi-gigabyte lossless file — decoding its video once per
+    measurement would cost minutes for an answer about its audio.
+    """
+    _run_ffmpeg_to(["-i", str(picture), "-vn", "-c:a", "pcm_s16le"], dst)
+
+
 def _duck_bed(
-    picture: Path,
+    speech: Path,
     bed: Path,
     duration: float,
     duck_db: float,
+    threshold: float,
+    key_gain: float,
     dst: Path,
 ) -> None:
-    """The music bed alone, pushed down under the picture's own speech.
+    """The music bed alone, pushed down under the delivered speech.
 
     Written out as its own file rather than ducked inside the mix graph so the
     attenuation can be measured against the unducked bed afterwards. The mix that
@@ -759,26 +788,77 @@ def _duck_bed(
     """
     _run_ffmpeg_to(
         [
-            "-i", str(bed), "-i", str(picture),
+            "-i", str(bed), "-i", str(speech),
             "-filter_complex",
-            f"[0:a][1:a]sidechaincompress=threshold={SIDECHAIN_THRESHOLD}:"
+            f"[0:a][1:a]sidechaincompress=threshold={threshold:.6f}:"
             f"ratio={duck_ratio(duck_db):.3f}:attack={SIDECHAIN_ATTACK_MS}:"
-            f"release={SIDECHAIN_RELEASE_MS}:detection=rms[ducked]",
+            f"release={SIDECHAIN_RELEASE_MS}:detection=rms:"
+            f"level_sc={key_gain:.4f}[ducked]",
             "-map", "[ducked]", "-t", f"{duration:.3f}", "-c:a", "pcm_s16le",
         ],
         dst,
     )
 
 
+def duck_bed_under_speech(
+    speech: Path,
+    bed: Path,
+    duration: float,
+    duck_db: float,
+    windows: list[tuple[float, float]],
+    dst: Path,
+) -> _Duck:
+    """Duck `bed` under `speech` until it measurably drops by `duck_db`.
+
+    Returns the duck that `dst` actually holds, so the figure the production report
+    carries is a measurement of the file that goes into the delivered mix. The two
+    files compared are the same music at the same gain and differ only by the
+    sidechain compressor, so measuring both over the same speech windows measures
+    the duck itself rather than the music.
+
+    `level_sc` is bisected geometrically because it is a gain, and the search is a
+    fixed number of steps: a settled answer matters less than a repeatable one, and
+    a mix that differed between two runs of the same project would be worse than a
+    mix that is half a decibel off.
+    """
+    requested = abs(duck_db)
+    threshold = sidechain_threshold(_windowed_rms_db(speech, windows))
+    unducked = _windowed_rms_db(bed, windows)
+
+    def render(key_gain: float) -> _Duck:
+        _duck_bed(speech, bed, duration, duck_db, threshold, key_gain, dst)
+        return _Duck(unducked - _windowed_rms_db(dst, windows), threshold, key_gain)
+
+    low, high = SIDECHAIN_KEY_GAIN_LIMITS
+    if requested <= 0:
+        return render(low)  # the quietest key there is: as close to no duck as possible
+    best = None
+    for _ in range(DUCK_SEARCH_STEPS):
+        attempt = render(math.sqrt(low * high))
+        if best is None or abs(attempt.attenuation_db - requested) < abs(
+            best.attenuation_db - requested
+        ):
+            best = attempt
+        if abs(attempt.attenuation_db - requested) <= DUCK_TOLERANCE_DB:
+            return attempt
+        if attempt.attenuation_db < requested:
+            low = attempt.key_gain
+        else:
+            high = attempt.key_gain
+    # The last step is not necessarily the closest one, and `dst` must hold the mix
+    # whose measurement is reported, so the winner is rendered again.
+    return render(best.key_gain)
+
+
 def _mix_delivery_audio(
-    picture: Path,
+    speech: Path,
     ducked_bed: Path,
     duration: float,
     dst: Path,
 ) -> None:
     _run_ffmpeg_to(
         [
-            "-i", str(picture), "-i", str(ducked_bed),
+            "-i", str(speech), "-i", str(ducked_bed),
             "-filter_complex",
             "[0:a][1:a]amix=inputs=2:normalize=0:duration=first[a]",
             "-map", "[a]", "-t", f"{duration:.3f}", "-c:a", "pcm_s16le",
@@ -1087,11 +1167,15 @@ def polish(ctx: StageContext) -> FinalResult:
 
     bed = work_dir / "music-bed.wav"
     ducked = work_dir / "music-bed-ducked.wav"
+    speech_track = work_dir / "speech.wav"
     mixed = work_dir / "mixed-audio.wav"
+    _extract_speech_track(picture, speech_track)
     _render_music_bed(track, total, settings.music_gain_db, bed)
-    _duck_bed(picture, bed, total, settings.music_duck_db, ducked)
-    _mix_delivery_audio(picture, ducked, total, mixed)
-    duck_db = measure_duck_attenuation_db(bed, ducked, speech_windows(captions))
+    duck = duck_bed_under_speech(
+        speech_track, bed, total, settings.music_duck_db,
+        speech_windows(captions), ducked,
+    )
+    _mix_delivery_audio(speech_track, ducked, total, mixed)
 
     hardware = settings.hardware_encode and videotoolbox_available()
     _run_ffmpeg_to(
@@ -1130,7 +1214,7 @@ def polish(ctx: StageContext) -> FinalResult:
             "burned_in_captions": settings.burn_captions,
             "music": track.name,
             # Measured, in dB, over the speech windows of this very mix.
-            "music_ducking": round(duck_db, 2),
+            "music_ducking": round(duck.attenuation_db, 2),
             # Fade filters actually emitted into the segment cuts, not planned
             # section boundaries.
             "transitions": emitted_transitions,
@@ -1171,14 +1255,16 @@ def polish(ctx: StageContext) -> FinalResult:
         music_track=track.name,
         music_attribution=attribution,
         music_ducking=True,
-        music_ducking_db=round(duck_db, 2),
+        music_ducking_db=round(duck.attenuation_db, 2),
         fully_decoded=decoded,
         production_report=str(report_path),
         notes=[
             "delivery used finite multi-pass rendering",
             "source segments and picture master are lossless x264",
             "final.mp4 is the only lossy video generation",
-            f"music bed measured {duck_db:.1f} dB down under speech",
+            f"music bed measured {duck.attenuation_db:.1f} dB down under speech "
+            f"(requested {abs(settings.music_duck_db):.1f} dB; sidechain threshold "
+            f"{duck.threshold:.5f}, key gain {duck.key_gain:.2f})",
             (
                 "captions burned into picture"
                 if settings.burn_captions

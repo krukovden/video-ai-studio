@@ -721,6 +721,54 @@ def test_the_duck_is_measured_from_the_delivered_mix_and_recorded_in_db(project)
     assert any("dB down under speech" in note for note in result.notes)
 
 
+def test_the_duck_lands_on_the_requested_attenuation_rather_than_a_fixed_setting(
+    project,
+):
+    """A fixed sidechain threshold encodes an assumption about the recording level.
+    Two different requests against the same material must produce two different
+    measured ducks, or `polish.music_duck_db` is decoration."""
+    ctx, _ = project(["Hook", CLOSING_BEAT], music_duck_db=-6.0)
+    gentle = polish(ctx).music_ducking_db
+
+    ctx, _ = project(["Hook", CLOSING_BEAT], music_duck_db=-18.0)
+    deep = polish(ctx).music_ducking_db
+
+    assert gentle == pytest.approx(6.0, abs=1.5), gentle
+    assert deep > gentle + 4.0, f"{deep} dB is not deeper than {gentle} dB"
+
+
+def test_the_reported_duck_is_measured_from_the_bed_that_reaches_the_mix(project):
+    """The search renders several candidate beds. The figure in the report has to
+    belong to the one left on disk, not to whichever attempt happened to be last."""
+    from videoai.stages.s08_polish import (
+        _windowed_rms_db,
+        build_captions,
+        clamp_caption_ends,
+        cumulative_starts,
+        speech_windows,
+    )
+
+    ctx, _ = project(["Hook", CLOSING_BEAT], music_duck_db=-9.0)
+
+    result = polish(ctx)
+
+    delivery = ctx.work_dir / "delivery"
+    timeline = ctx.store.read("05-timeline", Timeline)
+    transcript = ctx.store.read("03-transcript", Transcript)
+    durations = [probe(path).duration for path in sorted(delivery.glob("segment-*.mp4"))]
+    captions = clamp_caption_ends(build_captions(
+        timeline, transcript, cumulative_starts(durations), [], 0.0,
+        probe(delivery / "intro.mp4").duration, 4,
+    ))
+    windows = speech_windows(captions)
+    on_disk = (
+        _windowed_rms_db(delivery / "music-bed.wav", windows)
+        - _windowed_rms_db(delivery / "music-bed-ducked.wav", windows)
+    )
+
+    assert result.music_ducking_db == pytest.approx(on_disk, abs=0.05)
+
+
 def test_a_duck_below_the_contracts_floor_fails_and_leaves_no_delivery(
     project, tmp_path: Path
 ):
