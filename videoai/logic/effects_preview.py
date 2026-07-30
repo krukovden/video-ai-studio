@@ -82,10 +82,25 @@ def proposal_geometry(
     )
 
 
+SERVED_HANDOFF = (
+    "<b>Press Save when you are happy.</b> Your edits are kept in this browser "
+    "as you go, and Save writes them straight into the plan — nothing else to do."
+)
+
+FILE_HANDOFF = (
+    "<b>Your edits stay in this browser.</b> They are saved here automatically and "
+    "survive a refresh, but nothing reaches the video until you press "
+    "<b>Copy as text</b> and paste it back. To save directly instead, run "
+    "<code>videoai approve-effects &lt;project&gt;</code>."
+)
+
+
 def render_preview_html(
     proposals: list[EffectProposal],
     title: str,
     sprite_choices: list[dict],
+    save_url: str = "",
+    token: str = "",
 ) -> str:
     """One self-contained page: the plan, drawn, and editable in place.
 
@@ -129,7 +144,10 @@ def render_preview_html(
         for item in proposals
     ]
     return (
-        _PAGE.replace("__TITLE__", html.escape(title))
+        _PAGE.replace("__SAVE_URL__", save_url)
+        .replace("__TOKEN__", token)
+        .replace("__HANDOFF__", SERVED_HANDOFF if save_url else FILE_HANDOFF)
+        .replace("__TITLE__", html.escape(title))
         .replace("__SPRITES__", json.dumps(sprite_choices))
         .replace("__DATA__", json.dumps(payload))
     )
@@ -198,12 +216,10 @@ _PAGE = """<!doctype html>
   <p class="lede"><b>Untick</b> to drop an accent, <b>drag</b> it where it belongs,
   or <b>swap</b> it from the list. The green target is where the picture is actually
   moving at that moment.</p>
-  <p class="warn-box" id="handoff"><b>Your edits stay in this browser.</b> They are
-  saved here automatically and survive a refresh — but nothing reaches the video
-  until you press <b>Copy as text</b> and paste it back, or <b>Download decisions</b>
-  and run <code>videoai apply-effects</code>.</p>
+  <p class="warn-box" id="handoff">__HANDOFF__</p>
   <div class="bar">
-    <button class="primary" onclick="save()">Download decisions</button>
+    <button class="primary" id="savebtn" onclick="save()">Save</button>
+    <button onclick="download()">Download instead</button>
     <button onclick="copyOut()">Copy as text</button>
     <button onclick="snapAll()">Snap all to motion</button>
     <button onclick="if(confirm('Throw away your changes?')){localStorage.removeItem(SAVE_KEY);location.reload();}">Reset</button>
@@ -431,7 +447,48 @@ function refresh() {
   if (out.style.display === 'block') out.value = JSON.stringify(decisions(), null, 2);
 }
 
-function save() {
+// Set when the page is served by `videoai approve-effects`; empty when the file
+// was opened straight off the disk, in which case there is nobody to post to.
+const SAVE_URL = '__SAVE_URL__';
+const TOKEN = '__TOKEN__';
+
+async function save() {
+  if (!SAVE_URL) {
+    // Opened as a file. Fall back to the download so the button still does
+    // something honest rather than failing silently.
+    download();
+    return;
+  }
+  const button = document.getElementById('savebtn');
+  const wasLabel = button.textContent;
+  button.textContent = 'Saving...';
+  button.disabled = true;
+  try {
+    const response = await fetch(SAVE_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Approval-Token': TOKEN},
+      body: JSON.stringify(decisions())
+    });
+    const answer = await response.json();
+    if (!answer.ok) throw new Error(answer.error || 'refused');
+    const box = document.getElementById('handoff');
+    box.className = 'warn-box restored';
+    box.innerHTML = '<b>Saved.</b> ' + answer.summary +
+      ' — this is now what the video will be rendered with.';
+    button.textContent = 'Saved ✓';
+  } catch (error) {
+    const box = document.getElementById('handoff');
+    box.className = 'warn-box';
+    box.innerHTML = '<b>Could not save:</b> ' + error.message +
+      '. The approval command may have stopped — use <b>Copy as text</b> instead.';
+    button.textContent = wasLabel;
+  } finally {
+    button.disabled = false;
+    setTimeout(() => { button.textContent = 'Save'; }, 2500);
+  }
+}
+
+function download() {
   const blob = new Blob([JSON.stringify(decisions(), null, 2)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);

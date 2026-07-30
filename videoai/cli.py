@@ -1,6 +1,7 @@
 """VideoAI command line interface."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -334,18 +335,13 @@ if __name__ == "__main__":
     app()
 
 
-@app.command("preview-effects")
-def preview_effects(
-    project: Path = typer.Argument(..., help="Project whose planned effects to draw"),
-    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
-) -> None:
-    """Draw every planned accent on the frame it lands on, for approval.
+def _build_preview(
+    project: Path, config_path: Path, save_url: str = "", token: str = ""
+) -> str | None:
+    """The approval page as HTML, or None when there is nothing to approve.
 
-    An effect plan read as text cannot be judged: a name and a timestamp say
-    nothing about whether the accent covers a face, points at what is happening,
-    or sits in an empty corner. This writes a page showing each one at the size
-    and position the delivery would use, next to where the picture is actually
-    moving — and lets the creator untick, drag or swap it there.
+    Shared by the command that writes it to a file and the one that serves it, so
+    what a creator edits is the same page either way.
     """
     import base64
 
@@ -374,7 +370,7 @@ def preview_effects(
     story = store.read("05a-storyplan", StoryPlan) if store.exists("05a-storyplan") else StoryPlan()
     if not plan.events:
         typer.echo("No effects were planned, so there is nothing to approve.")
-        return
+        return None
 
     library = load_library(Path(plan.library) if plan.library else None)
     frame = (timeline.width, timeline.height)
@@ -396,7 +392,7 @@ def preview_effects(
             continue
         picture = cv2.resize(picture, frame, interpolation=cv2.INTER_AREA)
 
-        # JPEG, not PNG: these are photographs, and seven full-resolution PNGs
+        # JPEG, not PNG: these are photographs, and eight full-resolution PNGs
         # made a 40MB page nobody wants to open.
         preview_width = 1280
         if picture.shape[1] > preview_width:
@@ -432,25 +428,39 @@ def preview_effects(
             )
         )
 
-    output_dir = project / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_dir / "effects-preview.html"
-    target.write_text(
-        render_preview_html(
-            proposals, story.title or project.name,
-            _sprite_choices(library, frame),
-        ),
-        encoding="utf-8",
-    )
     agree = sum(
         1 for item in proposals
         if item.motion_cell and item.motion_cell == item.event.screen_position
     )
-    typer.echo(f"Drew {len(proposals)} accent(s): {target}")
     typer.echo(
-        f"{agree} of {len(proposals)} sit where the picture is actually moving. "
-        "Open it, adjust, then Download decisions and run 'videoai apply-effects'."
+        f"{len(proposals)} accent(s); {agree} sit where the picture is actually moving."
     )
+    return render_preview_html(
+        proposals, story.title or project.name,
+        _sprite_choices(library, frame), save_url=save_url, token=token,
+    )
+
+
+@app.command("preview-effects")
+def preview_effects(
+    project: Path = typer.Argument(..., help="Project whose planned effects to draw"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+) -> None:
+    """Write the approval page to a file, for opening by hand.
+
+    `approve-effects` is usually what you want: it serves the same page and saves
+    what you decide. This is the version for looking at it later, or on another
+    machine.
+    """
+    page = _build_preview(project, config_path)
+    if page is None:
+        return
+    output_dir = project / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / "effects-preview.html"
+    target.write_text(page, encoding="utf-8")
+    typer.echo(f"Wrote {target}")
+    typer.echo("Edits there stay in the browser — use 'videoai approve-effects' to save them.")
 
 
 @app.command("apply-effects")
@@ -468,45 +478,57 @@ def apply_effects(
     """
     import json as _json
 
-    from videoai.core.models import EffectPlan
+    from videoai.logic.approval import apply_decisions
 
     store = ArtifactStore(project / "work")
     if not store.exists("05d-effects"):
         raise typer.BadParameter("this project has no effect plan to apply decisions to")
-    plan = store.read("05d-effects", EffectPlan)
-    document = _json.loads(decisions.read_text(encoding="utf-8"))
-
-    by_index = {int(item["index"]): item for item in document.get("events", [])}
-    known = {sprite for sprite in {event.effect_name for event in plan.events}}
-    updated, dropped, moved, swapped = [], 0, 0, 0
-    for index, event in enumerate(plan.events):
-        choice = by_index.get(index)
-        if choice is None:
-            updated.append(event)
-            continue
-        changes = {"keep": bool(choice.get("keep", True))}
-        if not changes["keep"]:
-            dropped += 1
-        name = str(choice.get("effect_name") or event.effect_name)
-        if name != event.effect_name:
-            changes["effect_name"] = name
-            swapped += 1
-        if choice.get("moved") and choice.get("x") is not None:
-            changes["x"] = float(choice["x"])
-            changes["y"] = float(choice["y"])
-            moved += 1
-        updated.append(event.model_copy(update=changes))
-
-    store.write(
-        "05d-effects",
-        plan.model_copy(update={"events": updated}),
-        fingerprint="creator-approved",
-    )
-    kept = sum(1 for event in updated if event.keep)
-    typer.echo(
-        f"Applied: {kept} kept, {dropped} dropped, {moved} moved, {swapped} swapped."
-    )
+    result = apply_decisions(store, _json.loads(decisions.read_text(encoding="utf-8")))
+    typer.echo("Applied: " + result.summary() + ".")
     typer.echo("Re-run the delivery to render them: videoai produce " + str(project))
+
+
+@app.command("approve-effects")
+def approve_effects(
+    project: Path = typer.Argument(..., help="Project whose accents to approve"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+) -> None:
+    """Open the approval page and save what you decide, with no file shuffling.
+
+    The page cannot write to disk, so this serves it from a small server that
+    lives only while the approval is open: press Save and the decisions are in
+    the plan before the button stops looking pressed. Stop it with Ctrl-C when
+    you are done.
+    """
+    import webbrowser
+
+    from videoai.logic.approval_server import ApprovalSession, serve
+
+    page = _build_preview(project, config_path)
+    if page is None:
+        return
+
+    session = ApprovalSession(project_dir=project, page_html="")
+    session.page_html = _build_preview(
+        project, config_path, save_url="/save", token=session.token
+    )
+    session.on_save = lambda result: typer.echo("  Saved: " + result.summary())
+
+    server, url = serve(session)
+    typer.echo(f"Approval page: {url}")
+    typer.echo("Edit it, press Save, then stop this with Ctrl-C.")
+    webbrowser.open(url)
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        typer.echo("")
+    finally:
+        server.shutdown()
+    if session.saves:
+        typer.echo("Decisions applied. Render them: videoai produce " + str(project))
+    else:
+        typer.echo("Nothing was saved, so the plan is unchanged.")
 
 
 def _sprite_choices(library, frame: tuple[int, int]) -> list[dict]:
