@@ -73,11 +73,18 @@ def _fingerprint(
         parts.append(f"{key}={config_value(ctx.config, key)!r}")
     if spec.prompt is not None:
         parts.append(f"prompt:{hash_parts(spec.prompt)}")
+    if spec.fingerprint_extras is not None:
+        parts.extend(f"extra:{value}" for value in spec.fingerprint_extras(ctx))
     # Chain on upstream CONTENT, not on upstream fingerprints. `analyze` and
     # `plan` are LLM calls: re-running one with `--stage` produces different
     # content under an identical fingerprint, so a fingerprint chain would leave
     # everything downstream silently stale. Hashing the artifact on disk also
     # means a hand-edited artifact invalidates its dependents.
+    #
+    # A stage may narrow that to a projection of the content it really reads (see
+    # `fingerprint_inputs`), which is only consulted once every required artifact
+    # exists — a projection reads those artifacts to compute itself. Until then the
+    # whole-artifact hashes below stand in, and they are '' for what is missing.
     if (
         spec.fingerprint_inputs is not None
         and all(ctx.store.exists(name) for name in spec.requires)

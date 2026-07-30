@@ -89,7 +89,6 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(plan=PlanSettings(reject_adult_in_frame=False)), {"visual_check"}),
         (Config(plan=PlanSettings(reject_unusable_shots=False)), {"visual_check"}),
         (Config(polish=PolishSettings(enabled=False)), {"polish"}),
-        (Config(polish=PolishSettings(strict_contract=True)), {"polish"}),
         (Config(polish=PolishSettings(require_approval=True)), {"polish"}),
         (Config(polish=PolishSettings(intro_seconds=4.0)), {"polish"}),
         (Config(polish=PolishSettings(outro_seconds=4.0)), {"polish"}),
@@ -143,6 +142,24 @@ def test_every_declared_config_key_exists(tmp_path: Path):
 def test_unknown_config_key_is_rejected():
     with pytest.raises(KeyError, match="unknown config key"):
         config_value(Config(), "render.nope")
+
+
+def test_editing_the_production_contract_reruns_delivery(tmp_path: Path):
+    """The contract defines what a valid `final.mp4` is, so a cached one that was
+    validated against different rules is stale."""
+    ctx = _context(tmp_path, Config())
+    spec = REGISTRY["polish"]
+    contract = tmp_path / "production-contract.yaml"
+    contract.write_text(
+        "version: 1\nrequired_output: {width: 1920, height: 1080}\n", encoding="utf-8"
+    )
+    before = _fingerprint(spec, ctx, "media-fp", "brief-fp")
+
+    contract.write_text(
+        "version: 1\nrequired_output: {width: 3840, height: 2160}\n", encoding="utf-8"
+    )
+
+    assert _fingerprint(spec, ctx, "media-fp", "brief-fp") != before
 
 
 def test_transcription_fingerprint_ignores_disposable_proxy_path(tmp_path: Path):

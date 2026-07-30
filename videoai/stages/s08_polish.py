@@ -1,11 +1,11 @@
-"""s08 polish: turn the reviewed cut into something a viewer would watch.
+"""s08 polish: turn the reviewed cut into the delivered video.
 
 The draft is deliberately bare — it exists to check edit decisions, and it stays
 exactly as it was: cut from the 540p proxies, fast, disposable. This stage builds
 a second file beside it with the things a finished video has and an edit review
 does not: a title card, a lower third when the story moves to a new section, a
-music bed ducked under the child's voice, and a soft dissolve where one section
-becomes the next.
+music bed ducked under the child's voice, and a fade where one section becomes
+the next.
 
 It does not build any of that on top of the draft. The draft is a sixteenth of
 the source's pixels, and a deliverable made from it would be a 540p video with
@@ -13,17 +13,23 @@ titles on it. The timeline's in and out points are exact and the manifest still
 names the original files, so this stage cuts its own segments straight from those
 originals at delivery resolution — nothing here is ever upscaled.
 
-Assembly is a single ffmpeg invocation: the cross-dissolves, the title card, the
-overlays and the music mix all happen in one filter graph, so the picture is
-encoded once more rather than once per element. What cannot happen inside that
-graph is the cutting itself — see `_cut_segment`.
+Assembly is a sequence of finite, independently inspectable passes rather than
+one large filter graph: segments, then the picture master, then a fixed-length
+alpha graphics track, then the ducked music mix, then one composite encode. An
+earlier single-graph version opened an unbounded image loop per overlay and could
+deadlock after encoding the whole picture; every input here has an explicit
+duration or frame count, so each pass must terminate. The picture is encoded
+losslessly on the way in and lossily exactly once on the way out.
+
+Nothing this stage produces is called `final.mp4` until `production-contract.yaml`
+has been measured against the file that was actually written.
 """
 from __future__ import annotations
 
 import shutil
 import time
 import json
-import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,16 +38,12 @@ import yaml
 
 from videoai.core.ffmpeg import (
     ProbeResult,
-    filter_available,
     h264_encode_args,
-    hardware_decode_args,
     probe,
-    run_ffmpeg,
     videotoolbox_available,
     _run_ffmpeg_to,
 )
 from videoai.core.models import (
-    Approval,
     DraftResult,
     FinalResult,
     Manifest,
@@ -52,16 +54,19 @@ from videoai.core.models import (
     Word,
 )
 from videoai.core.registry import StageContext, stage
-from videoai.core.text import (
-    drawtext_available,
-    drawtext_filter,
-    render_text_image,
-    resolve_font,
-    wrap_text,
-)
+from videoai.core.text import render_text_image
 from videoai.core.store import hash_file, hash_parts
 from videoai.logic.music import attribution_line, list_tracks, select_track
-from videoai.logic.contract import has_closing_beat, validate_production_report
+from videoai.logic.contract import (
+    contract_hash,
+    estimated_delivery_bytes,
+    fallback_output_name,
+    free_bytes,
+    has_closing_beat,
+    load_contract,
+    preflight,
+    validate_production_report,
+)
 from videoai.stages.s06_render_draft import (
     DRAFT_AUDIO_BITRATE,
     DRAFT_AUDIO_CHANNEL_LAYOUT,
@@ -72,11 +77,6 @@ from videoai.stages.s06_render_draft import (
     _audio_filter_chain,
 )
 
-INTRO_BACKGROUND = "0x111a2b"
-INTRO_ACCENT = "0xe8c46a"
-INTRO_FADE_SECONDS = 0.4
-INTRO_TEXT_FADE_SECONDS = 0.6
-TITLE_FADE_SECONDS = 0.35
 MUSIC_FADE_SECONDS = 2.0
 
 # `sidechaincompress` attenuates the bed by `overshoot * (1 - 1/ratio)` dB, where
@@ -89,10 +89,6 @@ SPEECH_OVERSHOOT_DB = 16.0
 SIDECHAIN_ATTACK_MS = 20
 SIDECHAIN_RELEASE_MS = 300
 
-# A cut may only become a dissolve when both sides have material to dissolve
-# through; a run shorter than this is left as a hard cut.
-MIN_RUN_FACTOR = 3.0
-
 SILENCE_SOURCE = (
     f"anullsrc=channel_layout={DRAFT_AUDIO_CHANNEL_LAYOUT}:sample_rate={DRAFT_AUDIO_SAMPLE_RATE}"
 )
@@ -100,18 +96,11 @@ SILENCE_SOURCE = (
 
 @dataclass(frozen=True)
 class _TextOverlay:
-    """One RGBA strip faded in over the picture between `start` and `start+dur`."""
+    """One RGBA strip shown over the picture between `start` and `start+duration`."""
 
     text: str
     start: float
     duration: float
-    width: int
-    height: int
-    y_expression: str
-    plate_alpha: float
-    fade_in: float
-    fade_out: float
-    max_lines: int = 2
 
 
 @dataclass(frozen=True)
@@ -152,8 +141,6 @@ def build_section_titles(
     durations: list[float],
     intro_offset: float,
     title_seconds: float,
-    width: int,
-    height: int,
 ) -> list[_TextOverlay]:
     """A lower third naming the beat wherever the story moves to a new section.
 
@@ -165,28 +152,10 @@ def build_section_titles(
             text=timeline.clips[index].beat.strip(),
             start=intro_offset + starts[index],
             duration=min(title_seconds, max(0.2, durations[index])),
-            width=width,
-            height=section_title_height(height),
-            y_expression="",
-            plate_alpha=0.62,
-            fade_in=0,
-            fade_out=0,
         )
         for index in section_changes(timeline)
         if timeline.clips[index].beat.strip()
     ]
-
-
-def _ass_time(seconds: float) -> str:
-    centiseconds = max(0, round(seconds * 100))
-    hours, rest = divmod(centiseconds, 360000)
-    minutes, rest = divmod(rest, 6000)
-    whole, fraction = divmod(rest, 100)
-    return f"{hours}:{minutes:02d}:{whole:02d}.{fraction:02d}"
-
-
-def _ass_text(text: str) -> str:
-    return text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
 
 
 def _caption_groups(words: list[Word], maximum: int) -> list[list[Word]]:
@@ -245,34 +214,89 @@ def build_captions(
     return captions
 
 
-def write_ass_captions(path: Path, captions: list[_Caption], width: int, height: int) -> None:
-    """Write readable, YouTube-safe burned-in captions without another dependency."""
-    font_size = max(28, round(height * 0.052))
-    margin_v = max(36, round(height * 0.08))
-    lines = [
-        "[Script Info]",
-        "ScriptType: v4.00+",
-        f"PlayResX: {width}",
-        f"PlayResY: {height}",
-        "ScaledBorderAndShadow: yes",
-        "",
-        "[V4+ Styles]",
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
-        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
-        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
-        "MarginR, MarginV, Encoding",
-        f"Style: Default,Arial Rounded MT Bold,{font_size},&H00FFFFFF,&H0000FFFF,"
-        f"&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,60,60,{margin_v},1",
-        "",
-        "[Events]",
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    ]
-    lines.extend(
-        f"Dialogue: 0,{_ass_time(caption.start)},{_ass_time(caption.end)},"
-        f"Default,,0,0,0,,{_ass_text(caption.text)}"
-        for caption in captions
+def clamp_caption_ends(captions: list[_Caption]) -> list[_Caption]:
+    """Stop each cue at the moment the next one starts.
+
+    The mapped cues come from word timings padded outwards at both edges, so a
+    cue's end can land after the next cue's start. YouTube, VLC and QuickTime all
+    react to overlapping SRT cues differently — stacking them, dropping one, or
+    flickering between the two — so the overlap is removed here rather than left
+    to the player. A cue is never shortened below 200 ms, and a cue that would be
+    is dropped instead of being shown for a single frame.
+    """
+    clamped: list[_Caption] = []
+    for index, caption in enumerate(captions):
+        end = caption.end
+        if index + 1 < len(captions):
+            end = min(end, captions[index + 1].start)
+        if end - caption.start < 0.2:
+            continue
+        clamped.append(_Caption(start=caption.start, end=end, text=caption.text))
+    return clamped
+
+
+def speech_windows(
+    captions: list[_Caption], pad: float = 0.1, merge_gap: float = 0.4, limit: int = 40
+) -> list[tuple[float, float]]:
+    """Where speech is on the delivery clock, as few windows as possible.
+
+    Derived from the mapped caption cues because those are already the spoken
+    words in delivery time. Neighbouring windows are merged so the measurement
+    filter stays a short expression rather than one term per word group.
+    """
+    spans = sorted(
+        (max(0.0, caption.start - pad), caption.end + pad) for caption in captions
     )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    merged: list[list[float]] = []
+    for start, end in spans:
+        if merged and start - merged[-1][1] <= merge_gap:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged[:limit]]
+
+
+def _windowed_rms_db(path: Path, windows: list[tuple[float, float]]) -> float:
+    """The overall RMS level of `path`, counting only `windows`.
+
+    `-inf` comes back as a very low number rather than a float infinity so callers
+    can subtract two of these without special cases.
+    """
+    chain = ""
+    if windows:
+        # Commas inside `between(t,a,b)` are filter-graph separators unless they
+        # are escaped, and this expression is passed to ffmpeg directly (no shell).
+        terms = "+".join(
+            f"between(t\\,{start:.3f}\\,{end:.3f})" for start, end in windows
+        )
+        chain = f"aselect=expr={terms},asetpts=N/SR/TB,"
+    result = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
+            "-af", f"{chain}astats=metadata=0", "-f", "null", "-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"could not measure {path}: {result.stderr.strip()[-500:]}")
+    levels = re.findall(r"RMS level dB:\s*(-?[\d.]+|-inf|nan)", result.stderr)
+    if not levels:
+        raise RuntimeError(f"astats reported no RMS level for {path}")
+    value = levels[-1]
+    return -120.0 if value in ("-inf", "nan") else float(value)
+
+
+def measure_duck_attenuation_db(
+    bed: Path, ducked_bed: Path, windows: list[tuple[float, float]]
+) -> float:
+    """How much quieter the ducked bed actually is while somebody is talking.
+
+    The two files are the same music at the same gain; the only difference is the
+    sidechain compressor. Measuring both over the same speech windows therefore
+    measures the duck itself, not the music.
+    """
+    return _windowed_rms_db(bed, windows) - _windowed_rms_db(ducked_bed, windows)
 
 
 def write_srt_captions(path: Path, captions: list[_Caption]) -> None:
@@ -413,139 +437,18 @@ def delivery_frame(source: ProbeResult, output_height: int) -> tuple[int, int]:
     return width, height
 
 
-def _cut_segment(
-    source: Path, clip: TimelineClip, frame: tuple[int, int], fps: float, fade: float,
-    has_audio: bool, crf: int, hardware: bool, dst: Path,
-) -> None:
-    """One timeline clip, cut from the original at the delivery frame.
+def _load_rgba(path: Path):
+    """An RGBA image as a numpy array in R, G, B, A order.
 
-    Rotation needs no filter of its own. ffmpeg autorotates on decode whenever the
-    output goes through a filter chain, so a turned source arrives here already
-    upright and `force_original_aspect_ratio` measures the picture a viewer would
-    see (measured: a 640x480 clip carrying a 90-degree display matrix lands as
-    180x240 through `scale=-2:240`, and as a sideways 320x240 only under
-    `-noautorotate`).
-
-    Every segment is normalised to the same frame, rate, pixel format and audio
-    layout, which is what lets the runs below be concatenated with `-c copy` — and
-    what keeps the final's audio identical to the draft's.
+    OpenCV reads and writes BGR(A), and the graphics track's raw pipe to ffmpeg is
+    declared `rgba`, so the channel order has to be resolved in exactly one place.
     """
-    width, height = frame
-    video_filter = (
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
-        f"fps={fps},format=yuv420p,setsar=1"
-    )
-    video_args = h264_encode_args(crf, hardware)
-    audio_args = [
-        "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
-        "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
-    ]
-    # Input-side `-ss` so the decoder seeks rather than decoding from zero, which
-    # on a three-minute 4K HEVC clip is the difference between seconds and minutes.
-    seek = [*hardware_decode_args(), "-ss", f"{clip.offset:.3f}", "-i", str(source)]
-    if has_audio:
-        run_ffmpeg([
-            *seek, "-t", f"{clip.dur:.3f}",
-            "-filter:v", video_filter,
-            *video_args, *audio_args,
-            "-af", _audio_filter_chain(fade, clip.dur, clip.gain_db),
-            "-avoid_negative_ts", "make_zero",
-            str(dst),
-        ])
-    else:
-        # A silent original still has to arrive with an audio track: the concat
-        # below copies streams, and a video-only run would break its layout.
-        run_ffmpeg([
-            *seek,
-            "-f", "lavfi", "-i", SILENT_AUDIO_SOURCE,
-            "-t", f"{clip.dur:.3f}",
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-filter:v", video_filter,
-            *video_args, *audio_args,
-            "-avoid_negative_ts", "make_zero",
-            str(dst),
-        ])
+    import cv2
 
-
-def _build_runs(
-    segments: list[Path], splits: list[int], work_dir: Path
-) -> list[Path]:
-    """One file per stretch of segments between section dissolves.
-
-    `splits` are segment indices where a run ends and the next begins. Segments
-    are homogeneous by construction, so a run is a stream copy rather than a
-    re-encode — the delivery picture is encoded exactly twice on its way out (once
-    into the segments, once out of the assembly graph), never three times.
-    """
-    bounds = list(zip([0, *splits], [*splits, len(segments)]))
-    paths: list[Path] = []
-    for index, (first, last) in enumerate(bounds):
-        members = segments[first:last]
-        if len(members) == 1:
-            paths.append(members[0])
-            continue
-        list_file = work_dir / f"run-{index:02d}.txt"
-        list_file.write_text(
-            "\n".join(f"file '{path.name}'" for path in members) + "\n", encoding="utf-8"
-        )
-        target = work_dir / f"run-{index:02d}.mp4"
-        run_ffmpeg([
-            "-f", "concat", "-safe", "0", "-i", str(list_file),
-            "-c", "copy", str(target),
-        ])
-        paths.append(target)
-    return paths
-
-
-def _overlay_inputs(
-    overlay: _TextOverlay, index: int, work_dir: Path, fps: float, use_drawtext: bool
-) -> tuple[list[str], str]:
-    """Input arguments and a filter chain producing one faded RGBA overlay stream.
-
-    Both text routes end in the same kind of stream, so everything after this —
-    the alpha fades, the delay, the overlay itself — is shared.
-    """
-    span = overlay.duration
-    if use_drawtext:
-        font_size = max(12, int(overlay.height * 0.34))
-        text_file = work_dir / f"text-{index:02d}.txt"
-        text_file.parent.mkdir(parents=True, exist_ok=True)
-        text_file.write_text(
-            wrap_text(
-                overlay.text, int(overlay.width * 0.92), font_size, overlay.max_lines
-            ) + "\n",
-            encoding="utf-8",
-        )
-        args = [
-            "-f", "lavfi", "-t", f"{span:.3f}",
-            "-i", f"color=c=black@0:s={overlay.width}x{overlay.height}:r={fps}",
-        ]
-        source = "format=rgba," + drawtext_filter(
-            text_file, font_size, overlay.plate_alpha, "(h-text_h)/2"
-        )
-    else:
-        image = work_dir / f"text-{index:02d}.png"
-        render_text_image(
-            image, overlay.text, overlay.width, overlay.height,
-            plate_alpha=overlay.plate_alpha, max_lines=overlay.max_lines,
-        )
-        args = [
-            "-loop", "1", "-framerate", f"{fps}", "-t", f"{span:.3f}",
-            "-i", str(image),
-        ]
-        source = "format=rgba"
-
-    chain = source
-    if overlay.fade_in > 0:
-        chain += f",fade=t=in:st=0:d={overlay.fade_in:.3f}:alpha=1"
-    if overlay.fade_out > 0:
-        chain += f",fade=t=out:st={span - overlay.fade_out:.3f}:d={overlay.fade_out:.3f}:alpha=1"
-    if overlay.start > 0:
-        # Transparent padding rather than `enable=`: it gives the strip its own
-        # timestamps, so `overlay` never waits on a stream that has not started.
-        chain += f",tpad=start_duration={overlay.start:.3f}:start_mode=add:color=0x00000000"
-    return args, chain
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise RuntimeError(f"could not read text image: {path}")
+    return cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
 
 
 def _render_card(
@@ -646,7 +549,14 @@ def _cut_delivery_segment(
     fade_in: bool,
     fade_out: bool,
     dst: Path,
-) -> None:
+) -> int:
+    """Cut one segment; return how many fade filters were actually emitted.
+
+    The count is what the production report records as a transition. A boundary
+    the planner marked is not a transition until a filter for it exists: with
+    `transition_frames: 0`, or on a segment too short to fade through, the cut
+    stays hard and nothing should claim otherwise.
+    """
     width, height = frame
     filters = [
         f"scale={width}:{height}:force_original_aspect_ratio=decrease",
@@ -656,14 +566,19 @@ def _cut_delivery_segment(
         "setsar=1",
     ]
     duration = clip.dur
+    # A segment cannot fade for longer than a third of itself at each edge, or the
+    # picture would never be at full strength between the two fades.
     local_transition = min(transition, duration / 3)
+    emitted = 0
     if fade_in and local_transition > 0:
         filters.append(f"fade=t=in:st=0:d={local_transition:.3f}")
+        emitted += 1
     if fade_out and local_transition > 0:
         filters.append(
             f"fade=t=out:st={max(0.0, duration - local_transition):.3f}:"
             f"d={local_transition:.3f}"
         )
+        emitted += 1
     seek = ["-ss", f"{clip.offset:.3f}", "-i", str(source)]
     common = [
         "-t", f"{duration:.3f}", "-filter:v", ",".join(filters),
@@ -690,6 +605,7 @@ def _cut_delivery_segment(
             ],
             dst,
         )
+    return emitted
 
 
 def _concat_copy(parts: list[Path], work_dir: Path, dst: Path) -> None:
@@ -702,6 +618,37 @@ def _concat_copy(parts: list[Path], work_dir: Path, dst: Path) -> None:
         ["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy"],
         dst,
     )
+
+
+def _blend(canvas, overlay, y: int) -> None:
+    """Composite one horizontally centred RGBA strip onto an RGBA canvas.
+
+    Alpha compositing rather than assignment: a strip is only partly opaque (a
+    semi-transparent plate with hard glyphs on it), and two strips can overlap in
+    time, so writing the pixels straight in would punch a rectangular hole in
+    whatever was already there and hand ffmpeg the plate's alpha as if it were the
+    text's.
+    """
+    import numpy as np
+
+    height, width = canvas.shape[:2]
+    x = max(0, (width - overlay.shape[1]) // 2)
+    bottom = min(height, y + overlay.shape[0])
+    right = min(width, x + overlay.shape[1])
+    if bottom <= y or right <= x:
+        return
+    source = overlay[: bottom - y, : right - x].astype(np.float32)
+    target = canvas[y:bottom, x:right].astype(np.float32)
+    source_alpha = source[:, :, 3:4] / 255.0
+    target_alpha = target[:, :, 3:4] / 255.0
+    out_alpha = source_alpha + target_alpha * (1.0 - source_alpha)
+    safe_alpha = np.where(out_alpha > 0, out_alpha, 1.0)
+    colour = (
+        source[:, :, :3] * source_alpha
+        + target[:, :, :3] * target_alpha * (1.0 - source_alpha)
+    ) / safe_alpha
+    canvas[y:bottom, x:right, :3] = np.clip(colour, 0, 255).astype(np.uint8)
+    canvas[y:bottom, x:right, 3:4] = np.clip(out_alpha * 255.0, 0, 255).astype(np.uint8)
 
 
 def _render_graphics_track(
@@ -733,7 +680,7 @@ def _render_graphics_track(
             image_path, title.text, int(width * 0.74), title_height,
             plate_alpha=0.62, max_lines=2,
         )
-        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+        image = _load_rgba(image_path)
         # A section title is a lower third: below the presenter, inside the
         # bottom title-safe area.
         assets.append((title.start, title.start + title.duration, title_y, image))
@@ -745,7 +692,7 @@ def _render_graphics_track(
             image_path, caption.text, int(width * 0.78), caption_height,
             plate_alpha=0.72, max_lines=2,
         )
-        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+        image = _load_rgba(image_path)
         assets.append((caption.start, caption.end, caption_y, image))
 
     command = [
@@ -764,10 +711,7 @@ def _render_graphics_track(
             for start, end, y, image in assets:
                 if not (start <= at < end):
                     continue
-                x = (width - image.shape[1]) // 2
-                bottom = min(height, y + image.shape[0])
-                right = min(width, x + image.shape[1])
-                canvas[y:bottom, x:right] = image[:bottom - y, :right - x]
+                _blend(canvas, image, y)
             process.stdin.write(canvas.tobytes())
         process.stdin.close()
         stderr = process.stderr.read().decode("utf-8", errors="replace")
@@ -805,39 +749,66 @@ def _render_music_bed(
     )
 
 
-def _mix_delivery_audio(
+def _duck_bed(
     picture: Path,
     bed: Path,
     duration: float,
     duck_db: float,
     dst: Path,
 ) -> None:
+    """The music bed alone, pushed down under the picture's own speech.
+
+    Written out as its own file rather than ducked inside the mix graph so the
+    attenuation can be measured against the unducked bed afterwards. The mix that
+    goes into the final uses exactly this file, so the measurement is of the
+    delivered audio and not of a re-created approximation of it.
+    """
     _run_ffmpeg_to(
         [
-            "-i", str(picture), "-i", str(bed),
+            "-i", str(bed), "-i", str(picture),
             "-filter_complex",
-            f"[0:a]asplit=2[speech][key];"
-            f"[1:a][key]sidechaincompress=threshold={SIDECHAIN_THRESHOLD}:"
+            f"[0:a][1:a]sidechaincompress=threshold={SIDECHAIN_THRESHOLD}:"
             f"ratio={duck_ratio(duck_db):.3f}:attack={SIDECHAIN_ATTACK_MS}:"
-            f"release={SIDECHAIN_RELEASE_MS}:detection=rms[ducked];"
-            f"[speech][ducked]amix=inputs=2:normalize=0:duration=first[a]",
+            f"release={SIDECHAIN_RELEASE_MS}:detection=rms[ducked]",
+            "-map", "[ducked]", "-t", f"{duration:.3f}", "-c:a", "pcm_s16le",
+        ],
+        dst,
+    )
+
+
+def _mix_delivery_audio(
+    picture: Path,
+    ducked_bed: Path,
+    duration: float,
+    dst: Path,
+) -> None:
+    _run_ffmpeg_to(
+        [
+            "-i", str(picture), "-i", str(ducked_bed),
+            "-filter_complex",
+            "[0:a][1:a]amix=inputs=2:normalize=0:duration=first[a]",
             "-map", "[a]", "-t", f"{duration:.3f}", "-c:a", "pcm_s16le",
         ],
         dst,
     )
 
 
-def _full_decode(path: Path) -> None:
+def full_decode(path: Path) -> tuple[bool, str]:
+    """Decode every frame and sample of `path`, discarding the output.
+
+    Returns the outcome rather than raising: the production report records what
+    was measured, and the contract is what decides whether that is acceptable.
+    """
     result = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(path), "-f", "null", "-"],
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"final failed full decode: {result.stderr.strip()[-1000:]}")
+    stderr = result.stderr.strip()
+    return result.returncode == 0 and not stderr, stderr[-1000:]
 
 
-def _approval_is_current(ctx: StageContext, draft: DraftResult) -> None:
+def approval_is_current(ctx: StageContext, draft: DraftResult) -> None:
     from videoai.core.models import Approval
 
     if not ctx.store.exists("06-approval"):
@@ -865,25 +836,129 @@ def _approval_is_current(ctx: StageContext, draft: DraftResult) -> None:
         )
 
 
-def _polish_multiphase(ctx: StageContext) -> FinalResult:
+
+
+def _polish_fingerprint_extras(ctx: StageContext) -> tuple[str, ...]:
+    """The delivery rules this stage is judged against.
+
+    Editing `production-contract.yaml` changes what a valid `final.mp4` is, so it
+    has to invalidate the cached one exactly as a config change does.
+    """
+    return (f"contract:{contract_hash(ctx.project_dir)}",)
+
+
+def _resolve_music_dir(ctx: StageContext, configured: str) -> Path:
+    music_dir = Path(configured)
+    if not music_dir.is_absolute():
+        candidate = ctx.project_dir / music_dir
+        music_dir = candidate if candidate.is_dir() else music_dir
+    return music_dir
+
+
+def _select_music(
+    music_dir: Path, tracks: list[Path], settings, project_dir: Path
+) -> Path:
+    if settings.music_track:
+        track = music_dir / settings.music_track
+        if not track.is_file():
+            raise RuntimeError(
+                f"polish.music_track {settings.music_track!r} is not in {music_dir}; "
+                f"available: {', '.join(path.name for path in tracks) or 'nothing'}"
+            )
+        return track
+    track = select_track(tracks, _project_style(project_dir), project_dir.name)
+    if track is None:
+        raise RuntimeError(
+            f"the production contract requires background music and {music_dir} "
+            "holds no playable track; add one or point polish.music_dir at a "
+            "library that has one"
+        )
+    return track
+
+
+def _discard_delivery_outputs(output_dir: Path, output: Path) -> None:
+    """Leave nothing behind that would describe a delivery that does not exist.
+
+    A rejected render must not leave `final.srt` beside no video, nor the previous
+    run's `production-report.json` claiming this one passed.
+    """
+    output.unlink(missing_ok=True)
+    (output_dir / "final.srt").unlink(missing_ok=True)
+    (output_dir / "production-report.json").unlink(missing_ok=True)
+
+
+POLISH_REQUIRES = ("01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "06-draft")
+
+
+@stage(
+    id="polish",
+    produces="08-final",
+    # "01-manifest" names the original files this stage cuts from. "06-draft" is
+    # required for its ordering rather than its pixels: the draft is the review
+    # the final is only worth building after, and it is what `polish.enabled:
+    # false` degrades to a preview of.
+    requires=POLISH_REQUIRES,
+    version="5",
+    model=FinalResult,
+    config_keys=(
+        "polish.enabled",
+        "polish.require_approval",
+        "polish.intro_seconds",
+        "polish.outro_seconds",
+        "polish.outro_text",
+        "polish.title_seconds",
+        "polish.captions_enabled",
+        "polish.burn_captions",
+        "polish.caption_words",
+        "polish.music_gain_db",
+        "polish.music_duck_db",
+        "polish.transition_frames",
+        "polish.music_track",
+        "polish.music_dir",
+        "polish.output_height",
+        "polish.output_crf",
+        "polish.lossless_intermediates",
+        "polish.hardware_encode",
+        # Read, not inherited: the final does its own cutting now, and the fade at
+        # each cut has to be the one the draft was reviewed with.
+        "render.audio_fade_seconds",
+    ),
+    fingerprint_extras=_polish_fingerprint_extras,
+)
+def polish(ctx: StageContext) -> FinalResult:
     started = time.monotonic()
     settings = ctx.config.polish
     draft = ctx.store.read("06-draft", DraftResult)
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
+    contract = load_contract(ctx.project_dir)
     output = ctx.output_dir / "final.mp4"
 
     if not settings.enabled:
+        # Turning polish off is a legitimate request for a cheap preview, and the
+        # draft is exactly that. What it is not is a delivery: it is cut from the
+        # 540p proxies and has none of the required features. So it goes out under
+        # the contract's fallback name, and `final.mp4` — plus anything that would
+        # describe one — is removed rather than left pointing at the last render.
+        fallback = ctx.output_dir / fallback_output_name(contract)
         source = _draft_path(ctx, draft)
-        shutil.copyfile(source, output)
-        copied = probe(output)
+        shutil.copyfile(source, fallback)
+        _discard_delivery_outputs(ctx.output_dir, output)
+        copied = probe(fallback)
         return FinalResult(
-            path=str(output), duration=copied.duration,
+            path=str(fallback), duration=copied.duration,
             width=copied.width, height=copied.height,
             render_seconds=time.monotonic() - started,
-            notes=["polish.enabled is false: final.mp4 is a copy of the draft"],
+            notes=[
+                "polish.enabled is false: this is a copy of the review draft, not a "
+                "delivery",
+                f"written as {fallback.name} because it satisfies none of the "
+                "production contract's required features",
+                "missing: intro, outro, section titles, captions, music, ducking, "
+                "section transitions, delivery resolution",
+            ],
         )
     if settings.require_approval:
-        _approval_is_current(ctx, draft)
+        approval_is_current(ctx, draft)
 
     manifest = ctx.store.read("01-manifest", Manifest)
     timeline = ctx.store.read("05-timeline", Timeline)
@@ -911,11 +986,31 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
     fps = timeline.fps or manifest.by_id(timeline.clips[0].src).fps
     transition = max(0.0, settings.transition_frames / fps)
 
+    music_dir = _resolve_music_dir(ctx, settings.music_dir)
+    tracks = list_tracks(music_dir)
+
+    # Everything above is a probe, a listing and some arithmetic. Everything below
+    # re-encodes gigabytes, so the contract is checked against what is knowable
+    # now: an unsatisfiable delivery has to fail in seconds.
+    timeline_seconds = sum(clip.dur for clip in timeline.clips) + settings.intro_seconds
+    preflight(
+        contract,
+        frame=frame,
+        output_height=settings.output_height,
+        music_dir=music_dir,
+        track_count=len(tracks) if not settings.music_track else 1,
+        closing_beat=has_closing_beat(timeline),
+        estimated_bytes=estimated_delivery_bytes(frame, fps, timeline_seconds),
+        available_bytes=free_bytes(ctx.work_dir),
+    )
+    track = _select_music(music_dir, tracks, settings, ctx.project_dir)
+
     segments: list[Path] = []
     changes = set(section_changes(timeline))
+    emitted_transitions = 0
     for index, (clip, source) in enumerate(zip(timeline.clips, sources)):
         target = work_dir / f"segment-{index:03d}.mp4"
-        _cut_delivery_segment(
+        emitted_transitions += _cut_delivery_segment(
             source, clip, frame, fps, ctx.config.render.audio_fade_seconds,
             manifest.by_id(clip.src).has_audio,
             transition,
@@ -926,6 +1021,20 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
         segments.append(target)
     segment_durations = [probe(path).duration for path in segments]
     starts = cumulative_starts(segment_durations)
+
+    # The paths the segments were really cut from, checked against the disposable
+    # proxies the manifest also names. Recording "originals" without looking is
+    # exactly how a 540p delivery passed a contract that required 1080p.
+    # Ingest always writes the proxy to its own name under work/media, so a
+    # delivery input that matches a proxy path really was cut from a proxy —
+    # including the case where a manifest claims one file is both.
+    proxies = {
+        str(Path(clip.proxy_path).resolve())
+        for clip in manifest.clips
+        if clip.proxy_path
+    }
+    used = [str(path.resolve()) for path in sources]
+    leaked = sorted({path for path in used if path in proxies})
 
     intro_duration = max(0.0, settings.intro_seconds)
     outro_duration = max(0.0, settings.outro_seconds)
@@ -944,22 +1053,29 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
 
     picture = work_dir / "picture-master.mp4"
     _concat_copy([intro_path, *segments, outro_path], work_dir, picture)
-    measured_picture = probe(picture)
-    total = measured_picture.duration
+    total = probe(picture).duration
 
     intro_offset = probe(intro_path).duration
-    captions = build_captions(
-        timeline, transcript, starts, [], 0.0, intro_offset,
-        settings.caption_words,
+    captions = clamp_caption_ends(
+        build_captions(
+            timeline, transcript, starts, [], 0.0, intro_offset,
+            settings.caption_words,
+        )
     )
-    if settings.captions_enabled and not captions:
-        raise RuntimeError("production contract requires captions, but none were generated")
     srt_path = ctx.output_dir / "final.srt"
-    write_srt_captions(srt_path, captions)
+    if settings.captions_enabled:
+        if not captions:
+            raise RuntimeError(
+                "production contract requires captions, but none were generated"
+            )
+        write_srt_captions(srt_path, captions)
+    else:
+        # No caption track was asked for, so there must not be one on disk — a
+        # stale file from an earlier run would be uploaded as this video's captions.
+        srt_path.unlink(missing_ok=True)
 
     title_overlays = build_section_titles(
-        timeline, starts, segment_durations, intro_offset,
-        settings.title_seconds, width, height,
+        timeline, starts, segment_durations, intro_offset, settings.title_seconds,
     )
     if not title_overlays:
         raise RuntimeError("production contract requires section titles")
@@ -971,25 +1087,13 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
         title_overlays, work_dir,
     )
 
-    music_dir = Path(settings.music_dir)
-    if not music_dir.is_absolute():
-        project_candidate = ctx.project_dir / music_dir
-        music_dir = project_candidate if project_candidate.is_dir() else music_dir
-    tracks = list_tracks(music_dir)
-    if settings.music_track:
-        track = music_dir / settings.music_track
-        if not track.is_file():
-            raise RuntimeError(f"required music track is missing: {track}")
-    else:
-        track = select_track(
-            tracks, _project_style(ctx.project_dir), ctx.project_dir.name
-        ) if tracks else None
-    if track is None:
-        raise RuntimeError(f"production contract requires music; none found in {music_dir}")
     bed = work_dir / "music-bed.wav"
+    ducked = work_dir / "music-bed-ducked.wav"
     mixed = work_dir / "mixed-audio.wav"
     _render_music_bed(track, total, settings.music_gain_db, bed)
-    _mix_delivery_audio(picture, bed, total, settings.music_duck_db, mixed)
+    _duck_bed(picture, bed, total, settings.music_duck_db, ducked)
+    _mix_delivery_audio(picture, ducked, total, mixed)
+    duck_db = measure_duck_attenuation_db(bed, ducked, speech_windows(captions))
 
     hardware = settings.hardware_encode and videotoolbox_available()
     _run_ffmpeg_to(
@@ -1005,7 +1109,7 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
         ],
         output,
     )
-    _full_decode(output)
+    decoded, decode_error = full_decode(output)
     measured = probe(output)
     attribution = attribution_line(track)
     if attribution:
@@ -1013,7 +1117,7 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
 
     report_path = ctx.output_dir / "production-report.json"
     report = {
-        "contract_version": 1,
+        "contract_version": contract.get("version"),
         "status": "passed",
         "output": str(output),
         "duration": measured.duration,
@@ -1023,25 +1127,33 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
             "intro": True,
             "outro": True,
             "section_titles": len(title_overlays),
-            "captions": len(captions),
-            "soft_captions": len(captions),
+            "captions": len(captions) if settings.captions_enabled else 0,
+            "soft_captions": len(captions) if settings.captions_enabled else 0,
             "burned_in_captions": settings.burn_captions,
             "music": track.name,
-            "music_ducking": True,
-            "transitions": len(changes),
+            # Measured, in dB, over the speech windows of this very mix.
+            "music_ducking": round(duck_db, 2),
+            # Fade filters actually emitted into the segment cuts, not planned
+            # section boundaries.
+            "transitions": emitted_transitions,
+            "section_boundaries": len(changes),
             "closing_beat": has_closing_beat(timeline),
-            "full_decode": True,
+            "full_decode": decoded,
         },
         "quality": {
-            "source": "originals",
-            "lossless_intermediates": True,
+            "source": "proxies" if leaked else "originals",
+            "segment_inputs": used,
+            "proxy_inputs": leaked,
             "lossy_video_generations": 1,
         },
     }
+    if not decoded:
+        report["status"] = "failed"
+        report["decode_error"] = decode_error
     try:
         validate_production_report(report, ctx.project_dir)
     except RuntimeError:
-        output.unlink(missing_ok=True)
+        _discard_delivery_outputs(ctx.output_dir, output)
         raise
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     elapsed = time.monotonic() - started
@@ -1054,477 +1166,27 @@ def _polish_multiphase(ctx: StageContext) -> FinalResult:
         intro=True,
         intro_title=story.title.strip(),
         title_count=len(title_overlays),
-        transition_count=len(changes),
-        caption_count=len(captions),
+        transition_count=emitted_transitions,
+        caption_count=len(captions) if settings.captions_enabled else 0,
         burned_in_captions=settings.burn_captions,
         outro=True,
         music_track=track.name,
         music_attribution=attribution,
         music_ducking=True,
-        fully_decoded=True,
+        music_ducking_db=round(duck_db, 2),
+        fully_decoded=decoded,
         production_report=str(report_path),
         notes=[
             "delivery used finite multi-pass rendering",
             "source segments and picture master are lossless x264",
             "final.mp4 is the only lossy video generation",
+            f"music bed measured {duck_db:.1f} dB down under speech",
             (
                 "captions burned into picture"
                 if settings.burn_captions
                 else "captions delivered as viewer-controlled final.srt"
+                if settings.captions_enabled
+                else "no caption track was requested"
             ),
         ],
-    )
-
-
-@stage(
-    id="polish",
-    produces="08-final",
-    # "01-manifest" names the original files this stage cuts from. "06-draft" is
-    # required for its ordering rather than its pixels: the draft is the review
-    # the final is only worth building after, and it is what `polish.enabled:
-    # false` copies through.
-    requires=("01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "06-draft"),
-    model=FinalResult,
-    config_keys=(
-        "polish.enabled",
-        "polish.strict_contract",
-        "polish.require_approval",
-        "polish.intro_seconds",
-        "polish.outro_seconds",
-        "polish.outro_text",
-        "polish.title_seconds",
-        "polish.captions_enabled",
-        "polish.burn_captions",
-        "polish.caption_words",
-        "polish.music_gain_db",
-        "polish.music_duck_db",
-        "polish.transition_frames",
-        "polish.music_track",
-        "polish.music_dir",
-        "polish.output_height",
-        "polish.output_crf",
-        "polish.lossless_intermediates",
-        "polish.hardware_encode",
-        # Read, not inherited: the final does its own cutting now, and the fade at
-        # each cut has to be the one the draft was reviewed with.
-        "render.audio_fade_seconds",
-    ),
-)
-def polish(ctx: StageContext) -> FinalResult:
-    if ctx.config.polish.strict_contract:
-        return _polish_multiphase(ctx)
-
-    # Legacy monolithic implementation retained temporarily below as a readable
-    # reference while the finite multi-pass renderer is validated against the
-    # existing test suite. It is intentionally unreachable.
-    started = time.monotonic()
-    settings = ctx.config.polish
-    draft = ctx.store.read("06-draft", DraftResult)
-    ctx.output_dir.mkdir(parents=True, exist_ok=True)
-    output = ctx.output_dir / "final.mp4"
-
-    if not settings.enabled:
-        # The draft is copied rather than re-encoded: "polish off" must cost the
-        # picture nothing, and a re-encode is not nothing. This is the one path
-        # that ships proxy resolution, and it says so.
-        source = _draft_path(ctx, draft)
-        shutil.copyfile(source, output)
-        copied = probe(output)
-        return FinalResult(
-            path=str(output),
-            duration=copied.duration,
-            width=copied.width,
-            height=copied.height,
-            render_seconds=time.monotonic() - started,
-            notes=["polish.enabled is false: final.mp4 is a copy of the draft"],
-        )
-
-    manifest = ctx.store.read("01-manifest", Manifest)
-    timeline = ctx.store.read("05-timeline", Timeline)
-    transcript = (
-        ctx.store.read("03-transcript", Transcript)
-        if ctx.store.exists("03-transcript")
-        else Transcript(provider="", clips=[])
-    )
-    if not timeline.clips:
-        raise RuntimeError("cannot polish an empty timeline")
-    if settings.require_approval:
-        if not ctx.store.exists("06-approval"):
-            raise RuntimeError(
-                "delivery requires review: watch output/draft.mp4, then run "
-                f"'videoai approve {ctx.project_dir}'"
-            )
-        approval = ctx.store.read("06-approval", Approval)
-        current_timeline_hash = ctx.store.content_hash("05-timeline")
-        if approval.timeline_hash != current_timeline_hash:
-            raise RuntimeError(
-                "the timeline changed after approval; review the new output/draft.mp4 "
-                f"and run 'videoai approve {ctx.project_dir}' again"
-            )
-    story = (
-        ctx.store.read("05a-storyplan", StoryPlan)
-        if ctx.store.exists("05a-storyplan")
-        else StoryPlan()
-    )
-
-    fps = timeline.fps if timeline.fps > 0 else manifest.by_id(timeline.clips[0].src).fps
-    work_dir = ctx.work_dir / "polish"
-    work_dir.mkdir(parents=True, exist_ok=True)
-    notes: list[str] = []
-
-    # --- the cut, at delivery quality, from the originals -----------------------
-    sources = [
-        _source_path(ctx.project_dir, manifest.by_id(clip.src).path, clip.src)
-        for clip in timeline.clips
-    ]
-    frame = delivery_frame(probe(sources[0]), settings.output_height)
-    width, height = frame
-    hardware = settings.hardware_encode and videotoolbox_available()
-    if settings.hardware_encode and not hardware:
-        notes.append(
-            "polish.hardware_encode is on but this ffmpeg build has no VideoToolbox "
-            "encoder; the final was encoded with libx264"
-        )
-    # Lossless x264 intermediates make the final composition the only lossy
-    # encode. VideoToolbox has no equivalent CRF 0 mode, so segment cutting is
-    # intentionally software-only in this mode; the final encode may still use
-    # the media engine.
-    segment_crf = 0 if settings.lossless_intermediates else max(0, settings.output_crf - 4)
-    segment_hardware = hardware and not settings.lossless_intermediates
-    fade = ctx.config.render.audio_fade_seconds
-
-    segments: list[Path] = []
-    for index, (clip, clip_source) in enumerate(zip(timeline.clips, sources)):
-        target = work_dir / f"seg-{index:03d}.mp4"
-        _cut_segment(
-            clip_source, clip, frame, fps, fade,
-            manifest.by_id(clip.src).has_audio, segment_crf, segment_hardware, target,
-        )
-        segments.append(target)
-    segment_durations = [probe(path).duration for path in segments]
-
-    use_drawtext = drawtext_available()
-    if not use_drawtext:
-        notes.append(
-            "this ffmpeg build has no drawtext filter (no libfreetype); titles were "
-            "rasterised and overlaid as images"
-        )
-    elif resolve_font() is None:
-        notes.append("no preferred macOS font found; drawtext used its default face")
-
-    # --- where the dissolves go -------------------------------------------------
-    transition = max(0.0, settings.transition_frames) / fps
-    starts = cumulative_starts(segment_durations)
-    body_total = sum(segment_durations)
-    changes = section_changes(timeline)
-
-    # A dissolve lands on a segment boundary, so it is recorded as the index of
-    # the segment that opens the next run and as the time that index sits at.
-    split_indices: list[int] = []
-    splits: list[float] = []
-    if transition > 0:
-        minimum = max(transition * MIN_RUN_FACTOR, 2.0 / fps)
-        previous = 0.0
-        for index in changes:
-            at = starts[index]
-            if at - previous >= minimum and body_total - at >= minimum:
-                split_indices.append(index)
-                splits.append(at)
-                previous = at
-    run_sources = _build_runs(segments, split_indices, work_dir)
-    run_lengths = [probe(path).duration for path in run_sources]
-    body_duration = sum(run_lengths) - len(splits) * transition
-
-    # --- the intro card ---------------------------------------------------------
-    intro_duration = max(0.0, settings.intro_seconds)
-    intro_fade = 0.0
-    if intro_duration > 0:
-        intro_fade = min(transition if transition > 0 else 1.0 / fps,
-                         intro_duration / 2, run_lengths[0])
-    intro_offset = intro_duration - intro_fade if intro_duration > 0 else 0.0
-    total = intro_offset + body_duration
-
-    # --- captions ---------------------------------------------------------------
-    captions: list[_Caption] = []
-    caption_file: Path | None = None
-    if settings.captions_enabled:
-        if filter_available("subtitles"):
-            captions = build_captions(
-                timeline, transcript, starts, split_indices, transition,
-                intro_offset, settings.caption_words,
-            )
-            if captions:
-                caption_file = work_dir / "captions.ass"
-                write_ass_captions(caption_file, captions, width, height)
-        else:
-            notes.append(
-                "captions requested but this ffmpeg build has no subtitles/libass filter"
-            )
-
-    intro_title = (story.title or "").strip()
-
-    # --- the lower thirds -------------------------------------------------------
-    strip_height = max(48, int(height * 0.16))
-    intro_overlays: list[_TextOverlay] = []
-    if intro_duration > 0 and intro_title:
-        intro_overlays.append(_TextOverlay(
-            text=intro_title,
-            start=0.0,
-            duration=intro_duration,
-            width=int(width * 0.86) // 2 * 2,
-            height=int(height * 0.36) // 2 * 2,
-            y_expression="(H-h)/2-(H*0.04)",
-            plate_alpha=0.0,
-            fade_in=min(INTRO_TEXT_FADE_SECONDS, intro_duration / 3),
-            fade_out=0.0,
-            max_lines=3,
-        ))
-
-    title_overlays: list[_TextOverlay] = []
-    title_duration = max(0.0, settings.title_seconds)
-    if title_duration > 0:
-        for index in changes:
-            beat = timeline.clips[index].beat.strip()
-            if not beat:
-                continue
-            # Measured on the assembled body, which is shorter than the cut by one
-            # transition per dissolve. A cut that became a dissolve reads at the
-            # middle of it; one that stayed a hard cut reads where it always was.
-            run = sum(1 for split in split_indices if split <= index)
-            body_at = starts[index] - run * transition
-            if index in split_indices:
-                body_at += transition / 2
-            start = body_at + intro_offset
-            if start < 0 or start + title_duration > total:
-                continue
-            title_overlays.append(_TextOverlay(
-                text=beat,
-                start=start,
-                duration=title_duration,
-                width=width,
-                height=strip_height,
-                y_expression=f"H-h-{max(8, int(height * 0.06))}",
-                plate_alpha=0.55,
-                fade_in=min(TITLE_FADE_SECONDS, title_duration / 3),
-                fade_out=min(TITLE_FADE_SECONDS, title_duration / 3),
-            ))
-
-    # --- the music bed ----------------------------------------------------------
-    music_dir = Path(settings.music_dir)
-    if not music_dir.is_absolute():
-        candidate = ctx.project_dir / music_dir
-        music_dir = candidate if candidate.is_dir() else music_dir
-    tracks = list_tracks(music_dir)
-    track: Path | None = None
-    if settings.music_track:
-        track = music_dir / settings.music_track
-        if not track.is_file():
-            raise RuntimeError(
-                f"polish.music_track {settings.music_track!r} is not in {music_dir}; "
-                f"available: {', '.join(path.name for path in tracks) or 'nothing'}"
-            )
-    elif tracks:
-        track = select_track(tracks, _project_style(ctx.project_dir), ctx.project_dir.name)
-    else:
-        notes.append(f"no music: {music_dir} holds no playable tracks")
-
-    attribution = attribution_line(track) if track is not None else ""
-    if attribution:
-        write_attribution(ctx.output_dir, attribution)
-
-    # --- the single ffmpeg invocation ------------------------------------------
-    args: list[str] = []
-    chains: list[str] = []
-    next_input = 0
-    overlay_order = 0
-
-    intro_video_label = ""
-    intro_audio_label = ""
-    if intro_duration > 0:
-        video_index, audio_index = next_input, next_input + 1
-        next_input += 2
-        args += [
-            "-f", "lavfi", "-t", f"{intro_duration:.3f}",
-            "-i", f"color=c={INTRO_BACKGROUND}:s={width}x{height}:r={fps}",
-            "-f", "lavfi", "-t", f"{intro_duration:.3f}", "-i", SILENCE_SOURCE,
-        ]
-        bar_width = max(24, int(width * 0.16))
-        bar_height = max(2, int(height / 180))
-        # `iw`/`ih`, not `w`/`h`: inside drawbox those name the box being drawn.
-        chains.append(
-            f"[{video_index}:v]drawbox=x=(iw-{bar_width})/2:y=ih*0.66:"
-            f"w={bar_width}:h={bar_height}:color={INTRO_ACCENT}@0.9:t=fill[card0]"
-        )
-        intro_video_label = "[card0]"
-        # The card's text is composited onto the card, not onto the finished
-        # picture: the dissolve into the first segment then carries the title away
-        # with the background it sits on.
-        for overlay in intro_overlays:
-            overlay_args, chain = _overlay_inputs(
-                overlay, overlay_order, work_dir, fps, use_drawtext
-            )
-            args += overlay_args
-            chains.append(f"[{next_input}:v]{chain}[ct{overlay_order}]")
-            chains.append(
-                f"{intro_video_label}[ct{overlay_order}]overlay=x=(W-w)/2:"
-                f"y={overlay.y_expression}:eof_action=pass[card{overlay_order + 1}]"
-            )
-            intro_video_label = f"[card{overlay_order + 1}]"
-            next_input += 1
-            overlay_order += 1
-        chains.append(
-            f"{intro_video_label}fps={fps},format=yuv420p,setsar=1[introv]"
-        )
-        intro_video_label = "[introv]"
-        intro_audio_label = f"[{audio_index}:a]"
-
-    run_video_labels: list[str] = []
-    run_audio_labels: list[str] = []
-    for position, run_source in enumerate(run_sources):
-        args += ["-i", str(run_source)]
-        chains.append(f"[{next_input}:v]fps={fps},format=yuv420p,setsar=1[rv{position}]")
-        chains.append(
-            f"[{next_input}:a]aformat=sample_rates={DRAFT_AUDIO_SAMPLE_RATE}:"
-            f"channel_layouts={DRAFT_AUDIO_CHANNEL_LAYOUT}[ra{position}]"
-        )
-        run_video_labels.append(f"[rv{position}]")
-        run_audio_labels.append(f"[ra{position}]")
-        next_input += 1
-
-    overlay_streams: list[tuple[_TextOverlay, str]] = []
-    for overlay in title_overlays:
-        overlay_args, chain = _overlay_inputs(
-            overlay, overlay_order, work_dir, fps, use_drawtext
-        )
-        args += overlay_args
-        label = f"[ov{overlay_order}]"
-        chains.append(f"[{next_input}:v]{chain}{label}")
-        overlay_streams.append((overlay, label))
-        next_input += 1
-        overlay_order += 1
-
-    music_index: int | None = None
-    if track is not None:
-        args += ["-stream_loop", "-1", "-i", str(track)]
-        music_index = next_input
-        next_input += 1
-
-    # Video: dissolve the runs together, dissolve the card in, then the overlays.
-    body_video = run_video_labels[0]
-    accumulated = run_lengths[0]
-    for position in range(1, len(run_video_labels)):
-        offset = accumulated - transition
-        chains.append(
-            f"{body_video}{run_video_labels[position]}xfade=transition=fade:"
-            f"duration={transition:.3f}:offset={offset:.3f}[bv{position}]"
-        )
-        body_video = f"[bv{position}]"
-        accumulated += run_lengths[position] - transition
-
-    video_label = body_video
-    if intro_video_label:
-        chains.append(
-            f"{intro_video_label}{video_label}xfade=transition=fade:"
-            f"duration={intro_fade:.3f}:offset={intro_offset:.3f}[vintro]"
-        )
-        video_label = "[vintro]"
-
-    for order, (overlay, label) in enumerate(overlay_streams):
-        chains.append(
-            f"{video_label}{label}overlay=x=(W-w)/2:y={overlay.y_expression}:"
-            f"eof_action=pass[vt{order}]"
-        )
-        video_label = f"[vt{order}]"
-
-    if intro_duration > 0:
-        chains.append(f"{video_label}fade=t=in:st=0:d={INTRO_FADE_SECONDS}[vout]")
-        video_label = "[vout]"
-
-    if caption_file is not None:
-        escaped_caption_path = (
-            str(caption_file).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        )
-        chains.append(
-            f"{video_label}subtitles=filename='{escaped_caption_path}'[vcaptions]"
-        )
-        video_label = "[vcaptions]"
-
-    # Audio: join the runs, prepend the card's silence, then duck the bed under it.
-    body_audio = run_audio_labels[0]
-    for position in range(1, len(run_audio_labels)):
-        chains.append(
-            f"{body_audio}{run_audio_labels[position]}acrossfade="
-            f"d={transition:.3f}:c1=tri:c2=tri[ba{position}]"
-        )
-        body_audio = f"[ba{position}]"
-
-    audio_label = body_audio
-    if intro_audio_label:
-        chains.append(
-            f"{intro_audio_label}{audio_label}acrossfade="
-            f"d={intro_fade:.3f}:c1=tri:c2=tri[aintro]"
-        )
-        audio_label = "[aintro]"
-
-    if music_index is not None:
-        fade = min(MUSIC_FADE_SECONDS, total / 4)
-        chains.append(f"{audio_label}asplit=2[speechmix][speechkey]")
-        chains.append(
-            f"[{music_index}:a]atrim=0:{total:.3f},asetpts=N/SR/TB,"
-            f"aformat=sample_rates={DRAFT_AUDIO_SAMPLE_RATE}:"
-            f"channel_layouts={DRAFT_AUDIO_CHANNEL_LAYOUT},"
-            f"volume={settings.music_gain_db}dB,"
-            f"afade=t=in:st=0:d={fade:.3f},"
-            f"afade=t=out:st={max(0.0, total - fade):.3f}:d={fade:.3f}[bed]"
-        )
-        chains.append(
-            f"[bed][speechkey]sidechaincompress=threshold={SIDECHAIN_THRESHOLD}:"
-            f"ratio={duck_ratio(settings.music_duck_db):.3f}:"
-            f"attack={SIDECHAIN_ATTACK_MS}:release={SIDECHAIN_RELEASE_MS}:"
-            "detection=rms[ducked]"
-        )
-        chains.append(
-            "[speechmix][ducked]amix=inputs=2:normalize=0:duration=first[aout]"
-        )
-        audio_label = "[aout]"
-
-    run_ffmpeg([
-        *args,
-        "-filter_complex", ";".join(chains),
-        "-map", video_label, "-map", audio_label,
-        *h264_encode_args(settings.output_crf, hardware),
-        "-pix_fmt", "yuv420p",
-        "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
-        "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
-        "-movflags", "+faststart",
-        str(output),
-    ])
-
-    measured = probe(output)
-    elapsed = time.monotonic() - started
-    encoder = "h264_videotoolbox" if hardware else "libx264"
-    notes.append(
-        f"cut {len(segments)} segments from the original sources at {width}x{height} "
-        f"(crf {settings.output_crf}, {encoder}) in {elapsed:.1f}s"
-    )
-    if settings.lossless_intermediates:
-        notes.append(
-            "delivery segments used lossless x264 intermediates; final.mp4 is the "
-            "only lossy video generation"
-        )
-
-    return FinalResult(
-        path=str(output),
-        duration=measured.duration,
-        width=measured.width,
-        height=measured.height,
-        render_seconds=elapsed,
-        intro=intro_duration > 0,
-        intro_title=intro_title,
-        title_count=len(title_overlays),
-        transition_count=len(splits),
-        caption_count=len(captions),
-        music_track=track.name if track is not None else None,
-        music_attribution=attribution,
-        notes=notes,
     )

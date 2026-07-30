@@ -289,8 +289,10 @@ class Approval(BaseModel):
 class FinalResult(BaseModel):
     """The watchable cut plus an exact record of the applied production layers.
 
-    Legacy preview mode may degrade individual elements. Strict production mode
-    validates the required fields and removes an invalid `final.mp4`.
+    `production-contract.yaml` is validated against these measurements before the
+    file is allowed to keep the name `final.mp4`; a render that fails it, or a
+    deliberately degraded one, is named by the contract's fallback instead and
+    says here what it is missing.
     """
 
     path: str
@@ -310,6 +312,9 @@ class FinalResult(BaseModel):
     burned_in_captions: bool = False
     outro: bool = False
     music_ducking: bool = False
+    # How far the music bed measurably dropped under speech, in dB. Measured from
+    # the delivered mix rather than assumed from the requested setting.
+    music_ducking_db: float = 0.0
     fully_decoded: bool = False
     production_report: str = ""
     music_track: str | None = None

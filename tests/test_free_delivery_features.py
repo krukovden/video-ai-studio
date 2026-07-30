@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -28,7 +29,7 @@ from videoai.stages.s08_polish import (
     lower_third_y,
     polish,
     section_title_height,
-    write_ass_captions,
+    write_srt_captions,
 )
 
 
@@ -71,10 +72,10 @@ def test_captions_map_source_words_to_the_assembled_timeline(tmp_path: Path):
     assert captions[0].start == pytest.approx(2.46)
     assert captions[1].start == pytest.approx(4.91)
 
-    output = tmp_path / "captions.ass"
-    write_ass_captions(output, captions, 1920, 1080)
+    output = tmp_path / "captions.srt"
+    write_srt_captions(output, captions)
     text = output.read_text(encoding="utf-8")
-    assert "PlayResX: 1920" in text
+    assert "00:00:02,460 --> " in text
     assert "Hello there" in text
 
 
@@ -122,7 +123,7 @@ def test_every_section_change_gets_a_generic_lower_third_named_by_its_beat():
     starts = [index * 4.0 for index in range(len(beats))]
 
     titles = build_section_titles(
-        timeline, starts, [4.0] * len(beats), 2.5, 2.0, 1920, 1080,
+        timeline, starts, [4.0] * len(beats), 2.5, 2.0,
     )
 
     assert [title.text for title in titles] == ["The Middle Bit", "Something Else", "Closing"]
@@ -141,7 +142,7 @@ def test_a_section_title_with_a_blank_beat_is_skipped():
         ],
     )
 
-    assert build_section_titles(timeline, [0.0, 4.0], [4.0, 4.0], 0.0, 2.0, 1920, 1080) == []
+    assert build_section_titles(timeline, [0.0, 4.0], [4.0, 4.0], 0.0, 2.0) == []
 
 
 def test_section_titles_stay_in_the_bottom_safe_area():
@@ -163,31 +164,29 @@ def test_the_burned_caption_lane_cannot_collide_with_the_section_title_lane():
         assert caption_y >= 0, height
 
 
-def test_strict_delivery_applies_every_required_local_feature(
-    tmp_path: Path, make_clip
-):
+def test_delivery_applies_every_required_local_feature(tmp_path: Path, make_clip):
     (tmp_path / "production-contract.yaml").write_text(
         """
 version: 1
-required_output: {width: 426, height: 240, video_codec: h264, audio: true, full_decode: true}
+required_output: {width: 426, height: 240, full_decode: true}
 required_features:
   intro: true
   outro: true
   section_titles: true
   captions: true
   music: true
-  music_ducking: true
+  music_ducking: {minimum_db: 3.0}
   transitions: true
   closing_beat: true
 quality:
   source: originals
-  lossless_intermediates: true
   maximum_lossy_video_generations: 1
 """.strip()
         + "\n",
         encoding="utf-8",
     )
     source = make_clip("source.mp4", seconds=7.0, size="640x360")
+    proxy = Path(shutil.copyfile(source, tmp_path / "source-proxy.mp4"))
     music_dir = tmp_path / "music"
     music_dir.mkdir()
     track = music_dir / "bed.mp3"
@@ -210,7 +209,6 @@ quality:
         output_dir=output,
         config=Config(
             polish=PolishSettings(
-                strict_contract=True,
                 require_approval=False,
                 intro_seconds=0.5,
                 outro_seconds=0.5,
@@ -233,7 +231,7 @@ quality:
                 ClipInfo(
                     clip_id="clip-01",
                     path=str(source),
-                    proxy_path=str(source),
+                    proxy_path=str(proxy),
                     duration=7,
                     width=640,
                     height=360,
@@ -288,9 +286,13 @@ quality:
     assert result.title_count == 1
     assert result.caption_count == 2
     assert result.burned_in_captions is False
-    assert result.transition_count == 1
+    # Four fades: into the first segment, out of it at the section change, into
+    # the second, and out of the last one.
+    assert result.transition_count == 4
     assert result.music_track == track.name
     assert result.music_ducking is True
+    assert result.music_ducking_db >= 3.0
     assert result.fully_decoded is True
     assert Path(result.production_report).is_file()
     assert (output / "final.srt").is_file()
+    assert not (output / "preview-fallback.mp4").exists()

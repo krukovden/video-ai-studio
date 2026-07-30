@@ -8,13 +8,43 @@ import typer
 
 import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import load_config
-from videoai.core.models import Approval, FinalResult
+from videoai.core.models import Approval, DraftResult, FinalResult
 from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir
 from videoai.core.registry import StageContext
 from videoai.core.runner import StageFailure, ordered_stages, run_pipeline, stale_downstream
 from videoai.core.store import ArtifactStore, hash_file, hash_parts
+from videoai.stages.s08_polish import approval_is_current
 
 app = typer.Typer(add_completion=False, help="Automated video pipeline.")
+
+
+def _report_stage_failure(
+    failure: StageFailure,
+    project: Path,
+    config_path: Path,
+    debug: bool,
+    note: str = "",
+) -> None:
+    """Name the stage, hand over the exact re-run command, and offer a traceback.
+
+    Every command that runs the pipeline reports a failure the same way: a stage
+    id, a cause, the one command that resumes from there, and how to get the
+    traceback. A creator should never have to know which command they used to
+    learn what to do next.
+    """
+    typer.echo(f"Stage '{failure.stage_id}' failed: {failure.cause}", err=True)
+    if note:
+        typer.echo(note, err=True)
+    typer.echo(
+        "Artifacts from earlier stages are kept, so fix the cause and re-run just "
+        f"this stage:\n  videoai run {project} --config {config_path} "
+        f"--stage {failure.stage_id}",
+        err=True,
+    )
+    if debug:
+        raise failure
+    typer.echo("Run again with --debug for the full traceback.", err=True)
+    raise typer.Exit(1) from failure
 
 
 def _media_fingerprint(project_dir: Path) -> str:
@@ -114,23 +144,15 @@ def run(
                 typer.echo(f"Auto-fix round {rounds} of {auto_fix}: {failure.cause}")
                 typer.echo("Re-planning without the rejected segments.")
                 continue
-            typer.echo(f"Stage '{failure.stage_id}' failed: {failure.cause}", err=True)
-            if rounds:
-                typer.echo(
+            _report_stage_failure(
+                failure, project, config_path, debug,
+                note=(
                     f"Auto-fix gave up after {rounds} re-planning round(s); every "
-                    "rejected segment is listed above and in work/05c-rejected.json.",
-                    err=True,
-                )
-            typer.echo(
-                "Artifacts from earlier stages are kept, so fix the cause and re-run just "
-                f"this stage:\n  videoai run {project} --config {config_path} "
-                f"--stage {failure.stage_id}",
-                err=True,
+                    "rejected segment is listed above and in work/05c-rejected.json."
+                    if rounds
+                    else ""
+                ),
             )
-            if debug:
-                raise
-            typer.echo("Run again with --debug for the full traceback.", err=True)
-            raise typer.Exit(1) from failure
     if executed:
         typer.echo("Executed: " + ", ".join(executed))
     else:
@@ -166,8 +188,6 @@ def approve(
             "the project has no current timeline and draft; run the pipeline and review "
             "output/draft.mp4 first"
         )
-    from videoai.core.models import DraftResult
-
     draft = store.read("06-draft", DraftResult)
     if draft.timeline_hash != timeline_hash:
         raise typer.BadParameter(
@@ -198,6 +218,7 @@ def approve(
 def produce(
     project: Path = typer.Argument(..., help="Project to take through the production contract"),
     config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+    debug: bool = typer.Option(False, "--debug", help="Re-raise stage failures with their traceback"),
 ) -> None:
     """Build a review draft, then a contract-validated final after approval."""
     clip_dir = resolve_clip_dir(project)
@@ -209,10 +230,6 @@ def produce(
     work_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     loaded = load_config(config_path)
-    if not loaded.polish.strict_contract:
-        raise typer.BadParameter(
-            "production requires polish.strict_contract: true in the selected config"
-        )
     ctx = StageContext(
         project_dir=project,
         input_dir=project,
@@ -231,18 +248,13 @@ def produce(
             brief_fingerprint=brief_fingerprint,
         )
     except StageFailure as failure:
-        raise typer.BadParameter(
-            f"production stopped at {failure.stage_id}: {failure.cause}"
-        ) from failure
+        _report_stage_failure(failure, project, config_path, debug)
     if executed:
         typer.echo("Prepared review draft: " + ", ".join(executed))
 
-    from videoai.core.models import DraftResult
-    from videoai.stages.s08_polish import _approval_is_current
-
     draft = ctx.store.read("06-draft", DraftResult)
     try:
-        _approval_is_current(ctx, draft)
+        approval_is_current(ctx, draft)
     except RuntimeError as error:
         typer.echo(str(error))
         typer.echo(f"Review: {draft.path}")
@@ -258,9 +270,7 @@ def produce(
             brief_fingerprint=brief_fingerprint,
         )
     except StageFailure as failure:
-        raise typer.BadParameter(
-            f"production stopped at {failure.stage_id}: {failure.cause}"
-        ) from failure
+        _report_stage_failure(failure, project, config_path, debug)
     result = ctx.store.read("08-final", FinalResult)
     if not result.fully_decoded or not result.production_report:
         raise typer.BadParameter("final artifact did not pass the production contract")
