@@ -22,3 +22,23 @@ plan:
   gain_db_by_beat: {}
   reject_adult_in_frame: true
   reject_unusable_shots: true
+
+effects:
+  enabled: true
+  max_events: 8
+
+polish:
+  # There is one delivery renderer and production-contract.yaml always applies to
+  # it; enabled: false would copy the review draft out as preview-fallback.mp4.
+  enabled: true
+  # This file is the operator's re-render command, not the creator's workflow.
+  # `videoai produce` is the approval-bound path; keep this false so a rules or
+  # code change can be re-rendered without asking the creator to re-review an
+  # identical draft.
+  require_approval: false
+  captions_enabled: true
+  burn_captions: false
+  music_dir: assets/Music
+  output_height: 1080     # 1920x1080, as production-contract.yaml requires
+  output_crf: 18
+  hardware_encode: true

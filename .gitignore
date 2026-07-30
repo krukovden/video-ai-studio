@@ -17,7 +17,17 @@ projects/*/work/
 projects/*/output/
 
 # Source footage and music — gigabytes of media, never in git
-assets/
+#
+# `assets/*` rather than `assets/`, because git never looks inside an excluded
+# DIRECTORY — so the negation below would have no effect at all under `assets/`.
+assets/*
+# The exception: the cartoon-effects sprite library is a few hundred kilobytes of
+# committed pipeline input, not media. The effects stage may only offer what the
+# manifest lists, so a clone without it would plan no effects at all.
+!assets/effects/
 
 # macOS
 .DS_Store
+
+# Agent worktrees
+.claude/worktrees/

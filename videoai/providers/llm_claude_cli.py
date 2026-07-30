@@ -7,33 +7,15 @@ asked for JSON and its envelope is unwrapped; the model's own text lands in
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
+
+from videoai.providers.json_reply import cli_diagnostic, extract_json
 
 SYSTEM_PROMPT = (
     "You are a video editing analyst. You reply with a single JSON document and "
     "nothing else: no prose, no markdown fences."
 )
-
-
-def _extract_json(text: str) -> dict:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            raise ValueError(f"no JSON object found in model reply: {text[:300]}")
-        # The greedy match can span two sibling JSON objects (e.g. "{...} and {...}"),
-        # which is not valid JSON on its own; surface that as the same diagnostic
-        # ValueError rather than letting a raw JSONDecodeError escape.
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"could not parse JSON out of model reply: {text[:300]}") from exc
 
 
 class ClaudeCliLLM:
@@ -62,8 +44,10 @@ class ClaudeCliLLM:
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"claude CLI timed out after {timeout} seconds") from exc
         if result.returncode != 0:
-            raise RuntimeError(f"claude CLI failed: {result.stderr.strip()[:500]}")
+            raise RuntimeError(
+                cli_diagnostic("claude", result.returncode, result.stderr, result.stdout)
+            )
         envelope = json.loads(result.stdout)
         if envelope.get("is_error"):
             raise RuntimeError(f"claude CLI returned an error: {envelope.get('result')}")
-        return _extract_json(envelope["result"])
+        return extract_json(envelope["result"])

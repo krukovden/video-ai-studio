@@ -42,6 +42,16 @@ class StageSpec:
     # input, and changing one has to invalidate that stage's cached artifact.
     config_keys: tuple[str, ...] = ()
     prompt: str | None = None
+    # Some stages read only a semantic subset of a required artifact. For
+    # example, transcription needs source audio identity from the manifest but
+    # not the disposable proxy path. A projection prevents unrelated derived
+    # media changes from rerunning an expensive provider.
+    fingerprint_inputs: Callable[[StageContext], tuple[str, ...]] | None = None
+    # Inputs a stage reads that are neither config nor artifacts — the production
+    # contract's rules, for instance. Unlike `fingerprint_inputs` these are always
+    # mixed in, whether or not the required artifacts exist yet, because they are
+    # not derived from those artifacts.
+    fingerprint_extras: Callable[[StageContext], tuple[str, ...]] | None = None
 
 
 REGISTRY: dict[str, StageSpec] = {}
@@ -58,6 +68,8 @@ def stage(
     uses_brief: bool = False,
     config_keys: tuple[str, ...] = (),
     prompt: str | None = None,
+    fingerprint_inputs: Callable[[StageContext], tuple[str, ...]] | None = None,
+    fingerprint_extras: Callable[[StageContext], tuple[str, ...]] | None = None,
 ):
     def decorator(fn: Callable[[StageContext], BaseModel]):
         if id in REGISTRY:
@@ -79,6 +91,8 @@ def stage(
             uses_brief=uses_brief,
             config_keys=config_keys,
             prompt=prompt,
+            fingerprint_inputs=fingerprint_inputs,
+            fingerprint_extras=fingerprint_extras,
         )
         return fn
 

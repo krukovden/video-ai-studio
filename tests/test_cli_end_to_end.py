@@ -135,7 +135,7 @@ def test_stages_command_lists_pipeline_order():
     assert result.exit_code == 0
     for stage_id in (
         "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
-        "render_draft", "export_edit", "polish",
+        "effects", "render_draft", "export_edit", "polish",
     ):
         assert stage_id in result.output
 
@@ -272,6 +272,43 @@ def test_stage_failure_re_run_command_includes_the_custom_config_path(
     assert "--stage transcribe" in combined
 
 
+def test_produce_reports_a_stage_failure_exactly_as_run_does(tmp_path: Path, make_clip):
+    """`produce` used to raise a BadParameter naming the stage and nothing else: no
+    re-run command, no --debug hint. A creator should not have to know which of the
+    two commands they typed to learn what to do next."""
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=3.0).rename(project / "video" / "a.mp4")
+    config_path = tmp_path / "produce-config.yaml"
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
+
+    # No mock ASR sidecar exists, so `transcribe` raises FileNotFoundError.
+    result = runner.invoke(app, ["produce", str(project), "--config", str(config_path)])
+
+    assert result.exit_code != 0
+    combined = result.output + (result.stderr if result.stderr_bytes else "")
+    assert "Stage 'transcribe' failed" in combined
+    assert f"videoai run {project} --config {config_path} --stage transcribe" in combined
+    assert "--debug" in combined
+    assert "Traceback" not in combined
+
+
+def test_produce_debug_flag_keeps_the_traceback(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    (project / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=3.0).rename(project / "video" / "a.mp4")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["produce", str(project), "--config", str(config_path), "--debug"]
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, Exception)
+    assert "transcribe" in str(result.exception)
+
+
 def test_debug_flag_keeps_the_traceback(tmp_path: Path, make_clip):
     project = tmp_path / "project"
     (project / "video").mkdir(parents=True)
@@ -295,7 +332,7 @@ def _executed_stages(output: str) -> set[str]:
 
 ALL_STAGE_IDS = {
     "ingest", "quality", "sync", "transcribe", "analyze", "plan", "visual_check",
-    "render_draft", "export_edit", "polish",
+    "effects", "render_draft", "export_edit", "polish",
 }
 
 
@@ -356,7 +393,8 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
     after_brief_edit = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert after_brief_edit.exit_code == 0, after_brief_edit.output
     assert _executed_stages(after_brief_edit.output) == {
-        "analyze", "plan", "visual_check", "render_draft", "export_edit", "polish"
+        "analyze", "plan", "visual_check", "effects", "render_draft", "export_edit",
+        "polish",
     }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -489,7 +527,7 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
 
     assert after_exclusion.exit_code == 0, after_exclusion.output
     assert _executed_stages(after_exclusion.output) == {
-        "plan", "visual_check", "render_draft", "export_edit", "polish"
+        "plan", "visual_check", "effects", "render_draft", "export_edit", "polish"
     }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])

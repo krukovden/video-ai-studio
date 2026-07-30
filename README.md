@@ -12,7 +12,8 @@ cut, every rejection — is written to disk as a plain, readable JSON file under
 - macOS on Apple Silicon (speech recognition runs on the GPU via MLX)
 - ffmpeg 8.x (`brew install ffmpeg`)
 - Python 3.13 via uv (`brew install uv`)
-- Claude Code CLI, authenticated (the analysis and planning stages run through it)
+- Claude Code CLI or Codex CLI, authenticated (analysis and planning use the
+  selected subscription-backed CLI; Claude is the default)
 
 ## Setup
 
@@ -21,6 +22,20 @@ uv venv --python 3.13
 uv sync
 cp .env.example .env   # then fill in the keys you have (all optional today)
 ```
+
+The default `providers.llm: claude_cli` uses Claude Max without an API key.
+You can switch to the authenticated OpenAI subscription-backed CLI without
+changing the pipeline:
+
+```yaml
+providers:
+  asr: parakeet
+  llm: codex_cli
+```
+
+Codex runs ephemerally and read-only, receives the same prompts and reference
+frames, and is asked only for the JSON artifact. This is also useful for
+comparing Claude and Codex on the same project without adding a metered API.
 
 ## Project layout
 
@@ -56,15 +71,28 @@ Running the pipeline creates two more folders next to the brief:
 - `work/` — every stage's artifact (JSON), plus derived media it caches
   (audio, proxies, keyframes, rendered segments). Safe to delete entirely;
   everything rebuilds from the source clips.
-- `output/` — the rendered files, currently just `draft.mp4`.
+- `output/` — the review draft, contract-validated `final.mp4`, captions,
+  metadata, and the machine-readable production report.
 
 ## Running it
 
 ```bash
-uv run videoai run projects/my-review --auto-fix 2
+uv run videoai produce projects/my-review --config config.yaml
 open projects/my-review/output/draft.mp4
+uv run videoai approve projects/my-review --config config.yaml
+uv run videoai produce projects/my-review --config config.yaml
 ```
 
+`produce` is the normal creator command. On its first run it executes the
+provider-independent pipeline only through the review draft and tells you how
+to approve it. Approval is bound to the exact timeline, rendered draft, and
+effective configuration. After approval, the second run builds and fully
+validates the delivery. The required phases and features are defined once in
+[`PRODUCTION-CONTRACT.md`](PRODUCTION-CONTRACT.md); both `AGENTS.md` and
+`CLAUDE.md` are symbolic links to that file, so Codex and Claude follow the
+same workflow.
+
+Use the lower-level `run` command for diagnosis and individual-stage work.
 `--auto-fix N` closes the loop around the visual check described below: when a
 chosen shot turns out to have an adult filling the frame, or to be unusable,
 the segment is withheld and the edit is planned again without it, at most N
@@ -83,7 +111,7 @@ uv run videoai config                                          # effective confi
 
 ## Pipeline
 
-Ten stages run in this order, each reading artifacts written by the stages
+Eleven stages run in this order, each reading artifacts written by the stages
 before it and writing exactly one artifact of its own under `work/`.
 
 ```mermaid
@@ -95,6 +123,7 @@ flowchart TD
     analyze["analyze<br/>04-analysis"]
     plan["plan<br/>05-timeline"]
     visual_check["visual_check<br/>05b-visual"]
+    effects["effects<br/>05d-effects"]
     render_draft["render_draft<br/>06-draft"]
     polish["polish<br/>08-final"]
 
@@ -111,11 +140,15 @@ flowchart TD
     analyze --> plan
     ingest --> visual_check
     plan --> visual_check
+    transcribe --> effects
+    analyze --> effects
+    plan --> effects
     ingest --> render_draft
     plan --> render_draft
     visual_check --> render_draft
     render_draft --> polish
     plan --> polish
+    effects --> polish
     visual_check -. "rejected phrase ids<br/>05c-rejected" .-> plan
 ```
 
@@ -286,6 +319,44 @@ Reads `01-manifest` and `05-timeline`. Writes `05b-visual.json` always, and
 `05c-rejected.json` only when something is actually rejected. Cost: $0 under a
 Claude subscription.
 
+### effects — `05d-effects`
+
+Which cartoon accents this video gets, and where. One LLM call, no frames
+attached: by this point the toy and the video have already been analysed, so the
+model is given the sprite library's *words* — each sprite's name, its tags and one
+sentence saying what it expresses — plus the edit on its own clock with every
+segment's beat, quote and word timings, the descriptions of the silent close-up
+inserts, and the brief. It answers with moments: `{at_seconds, effect_name,
+screen_position, scale, text, reason}`.
+
+Nothing about a particular video is in the code. An accent is chosen because the
+STORY has a pop, a reveal, a reaction or a loud squish in it, not because a beat
+name matched a keyword — that was the version of this feature that got reverted,
+and it gave a second project a syringe it had never filmed.
+
+The prompt's rules are the editorial ones: punctuate moments rather than decorate,
+never cover the child's face (prefer an edge or corner cell; `center` only over a
+close-up with nobody in it), never two at once, four to eight in three minutes,
+and speech-bubble text must be something the presenter actually said or plainly
+meant. **An empty answer is a success** — a calm review needs no accents, and a
+stage that could not say "none" would guarantee every video got some.
+
+Parsing is defensive in the same way as every other stage: an unknown sprite name
+is refused *by name*, a time outside the edit is refused with both numbers, more
+than `effects.max_events` (8) is refused rather than truncated, and a speech
+bubble with no text is refused because it is stretched around its words and has no
+size without them.
+
+The library is `assets/effects/` — six sprites drawn procedurally with Pillow so
+this works with zero API calls, plus `manifest.yaml`, which is the only place the
+pipeline learns what exists. Any sprite can be replaced by a better PNG (for
+instance one generated with `gpt-image-1`) by dropping a file with the same name
+into that directory; see [docs/EFFECTS-LIBRARY.md](docs/EFFECTS-LIBRARY.md).
+`effects.enabled: false` plans nothing and composites nothing.
+
+Reads `03-transcript`, `04-analysis`, `05-timeline` and `05a-storyplan`. Writes
+`05d-effects.json`. Cost: $0 under a Claude subscription.
+
 ### render_draft — `06-draft`
 
 Cuts each timeline segment out of its clip's proxy with a short audio fade at
@@ -324,18 +395,43 @@ footage needs no special handling: ffmpeg autorotates on decode whenever the
 output goes through a filter chain, so a portrait clip stored as landscape
 frames plus a display matrix arrives upright and is delivered upright.
 
+Selected source ranges are always cut to lossless x264 intermediates (`-crf
+0`) before composition, so the final delivery encode is the only lossy video
+generation. This uses more temporary disk space and CPU, but `work/polish/`
+is disposable. `production-report.json`'s `quality.lossy_video_generations`
+is not a constant: it counts the intermediate and final encodes actually
+performed, so a change that made a source cut lossy too would fail the
+contract rather than misreport `1`.
+
 The audio target is unchanged — AAC, 44100 Hz, mono, exactly what the draft
 settled on — because the concat step depends on every segment agreeing on it.
 
-Four things are then added, in one ffmpeg invocation so the picture is encoded
-once rather than once per element:
+The strict production path uses finite, independently testable passes instead
+of one large ffmpeg graph. It cuts lossless source segments, builds a picture
+master, renders a finite alpha graphics track, prepares finite music and
+ducked-audio tracks, then performs one lossy H.264 delivery encode. This avoids
+the deadlocks caused by unbounded loop inputs while preserving one-generation
+picture quality.
+
+The production layers are:
 
 - **A title card** of `polish.intro_seconds`, carrying the title the planner
-  wrote into `05a-storyplan`, cross-dissolving into the first segment.
-- **A lower third** wherever a timeline clip's beat differs from the one
+  wrote into `05a-storyplan`, plus an **outro card** of
+  `polish.outro_seconds`.
+- **A section title** wherever a timeline clip's beat differs from the one
   before it, naming that beat for `polish.title_seconds` behind a
-  semi-transparent plate, fading in and out. The first clip never gets one —
-  the card has just named the video.
+  semi-transparent plate. It is a lower third: the plate sits inside the bottom
+  title-safe area, below the presenter.
+- **Word-timed captions** generated locally from `03-transcript.json`. They are
+  grouped into compact chunks (`polish.caption_words`, four by default), mapped
+  through cuts to delivery time and written to `output/final.srt`, ready for a
+  viewer-controlled YouTube caption track. Set `polish.burn_captions: true`
+  only when every phrase must be permanently rasterised into the picture, in
+  which case the caption lane sits directly above the section-title lower third
+  so the two can never collide. Neither mode depends on ffmpeg's optional libass
+  or drawtext support: every strip of text is rasterised with Pillow and a real
+  system font (Arial Rounded MT Bold when macOS has it, then Arial Bold,
+  Helvetica, and Pillow's own face on a machine that has none).
 - **A music bed** from `polish.music_dir`, chosen by your brief's `style`
   when that names a track the library has and otherwise by a stable digest of
   the project's name, so the same project always gets the same music. It is
@@ -345,23 +441,58 @@ once rather than once per element:
   Bensound's free licence wants a credit, so the track's attribution line is
   appended to `output/metadata.md` (once, however often you re-render) and
   recorded in the artifact.
-- **A cross-dissolve of `polish.transition_frames`** on the cuts between story
-  sections only. Cuts inside a section stay hard cuts: cutting straight on
-  speech is correct, and a dissolve on every cut reads as a slideshow.
+- **A fade-through-black transition of `polish.transition_frames`** at story
+  section boundaries. Cuts inside a section stay hard cuts.
+- **The cartoon accents `05d-effects` chose**, composited into the same finite
+  alpha graphics track as the titles and captions, on top of them. Each sprite is
+  loaded from `assets/effects/`, animated over its duration by one of five
+  built-in motions (`pop-in` overshoots and settles, `pulse` breathes, `shake`
+  jitters and decays, `drift-up` rises and fades, `none` holds), scaled to a
+  fraction of the frame's height, placed by its grid cell with the same
+  safe-area margin the lower thirds use, and alpha-blended. The speech bubble is a
+  nine-patch: its corners keep their pixels while its edges stretch around
+  whatever text the model wrote, rendered in the video's own typeface. Effects are
+  **not** among `production-contract.yaml`'s required features — they are
+  seasoning, not structure — but `output/production-report.json` records how many
+  were applied and exactly which, and so does the stage artifact.
 
-Every element degrades on its own. No music folder, an empty one, or an
-ffmpeg build without `drawtext` (Homebrew's macOS bottle has no libfreetype,
-in which case titles are rasterised and overlaid as images instead) all still
-produce a video, and the artifact says what was left out. `polish.enabled:
-false` copies the draft through untouched.
+Required elements never silently degrade. There is one delivery renderer and
+`production-contract.yaml` always applies to it: missing captions, music,
+closing beat, resolution, an unducked bed, no emitted transition, a proxy among
+the segment inputs, or a failed full decode makes production fail and removes
+`final.mp4`, `final.srt` and `production-report.json` rather than leaving an
+`output/` folder that describes a delivery which is not there. The measurements
+those rules are checked against are in `output/production-report.json`.
 
-Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `06-draft`. Writes its own
-delivery cuts under `work/polish/`, `output/final.mp4`, the credit in
-`output/metadata.md`, and `08-final.json` (path, duration, the delivered frame,
-the wall-clock render time, which elements were applied, the chosen track and
-its attribution). Runs locally with `ffmpeg`. Cost: $0 in money and real time
-in minutes — cutting twenty-two segments out of 4K HEVC is slower than cutting
-them out of proxies, which is why the artifact records how long it took.
+Preflight runs before any frame is cut: the contract's frame against
+`polish.output_height` and the source's display aspect, the music library, the
+closing beat, and the free disk space. An unsatisfiable delivery fails in
+seconds instead of after a 4K render.
+
+`polish.enabled: false` is the one way to skip delivery. It copies the review
+draft to `output/preview-fallback.mp4`, records what that file is missing, and
+writes no `final.mp4`.
+
+When `polish.require_approval: true`, delivery stops after the draft until the
+creator approves the exact current timeline:
+
+```bash
+open projects/my-review/output/draft.mp4
+uv run videoai approve projects/my-review --config config.yaml
+uv run videoai produce projects/my-review --config config.yaml
+```
+
+Approval is stored in `work/06-approval.json` with hashes for the timeline,
+draft file, and effective config. Any change to one of them requires a fresh
+review.
+
+Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `05d-effects`, `06-draft`.
+An absent `05d-effects` (an older project) or `effects.enabled: false` means no
+accents and never a failure. Writes its own delivery files under `work/delivery/`, `output/final.mp4`,
+`output/final.srt`, `output/production-report.json`, the music credit in
+`output/metadata.md`, and `08-final.json`. The renderer then decodes the whole
+file before publishing success. Runs locally with OpenCV and ffmpeg. Cost: $0
+in money and real time in minutes.
 
 
 ## Caching
@@ -387,11 +518,12 @@ Concretely:
   `transcribe` never read the brief at all, so their artifacts are reused
   untouched.
 - **Changing a config value** re-runs only the stages that declare reading it.
-  Most settings are scoped to one stage, but `render.draft_height` is read by
-  both `ingest` (it sets the proxy's build height) and `render_draft`, so
-  changing the draft resolution rebuilds every proxy, not just the final cut —
-  and `render.audio_fade_seconds` is read by `render_draft` and `polish` alike,
-  since both do their own cutting and have to fade a cut the same way. The
+  Most settings are scoped to one stage. `render.draft_height` directly
+  invalidates ingest and rebuilds the proxies; transcription fingerprints only
+  the source/audio identity, so a disposable proxy change does not trigger
+  Parakeet again. `render.audio_fade_seconds` is read by `render_draft` and
+  `polish` alike, since both do their own cutting and have to fade a cut the
+  same way. The
   three delivery settings (`polish.output_height`, `polish.output_crf`,
   `polish.hardware_encode`) re-render `output/final.mp4` and touch nothing
   upstream: they are about the deliverable, not about the review copy.
@@ -419,6 +551,18 @@ shouldn't hit this. If it recurs — an unusually long clip, or
 `chunk_duration_seconds` raised too high in `config.yaml` — lower
 `transcribe.chunk_duration_seconds` and re-run just that stage:
 `videoai run <project> --stage transcribe`.
+
+**`transcribe` says MLX cannot access a Metal device.** Headless and sandboxed
+macOS sessions may not expose the GPU. VideoAI probes MLX in an isolated child
+process, so this now produces a normal stage error instead of aborting the
+whole Python process. Keep the valid cached transcript, or run the
+`transcribe` stage once from an interactive macOS terminal with Metal access.
+
+**VideoToolbox is listed by ffmpeg but encoding fails with `-12903`.** VideoAI
+performs a real one-frame capability probe once per run. If macOS cannot create
+a compression session (for example in a headless session, CI, or while the
+media engine is busy), the pipeline automatically uses libx264 instead of
+failing every media stage.
 
 **`plan` fails with "timeline validation failed" naming a cut that starts or
 ends inside a word.** The validator caught its own planner (or a hand-edited

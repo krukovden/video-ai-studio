@@ -20,6 +20,25 @@ class LLMProvider(Protocol):
     def complete_json(self, prompt: str, images: list[Path], timeout: int) -> dict: ...
 
 
+def llm_system_preamble(name: str) -> str:
+    """The fixed instruction a provider prepends to, or sends alongside, the prompt.
+
+    It is part of what the model was asked, so it belongs in the fingerprint of any
+    stage that calls the provider: editing Codex's preamble changes the analysis
+    exactly as editing the stage's own prompt does. Read as a module constant so
+    fingerprinting never constructs a provider or touches a CLI.
+    """
+    if name == "claude_cli":
+        from videoai.providers.llm_claude_cli import SYSTEM_PROMPT
+
+        return SYSTEM_PROMPT
+    if name == "codex_cli":
+        from videoai.providers.llm_codex_cli import SYSTEM_PROMPT
+
+        return SYSTEM_PROMPT
+    return ""
+
+
 def resolve_asr(
     name: str,
     chunk_duration_seconds: float | None = None,
@@ -55,4 +74,10 @@ def resolve_llm(name: str, model: str | None = None) -> LLMProvider:
         from videoai.providers.llm_claude_cli import ClaudeCliLLM
 
         return ClaudeCliLLM(model) if model else ClaudeCliLLM()
+    if name == "codex_cli":
+        from videoai.providers.llm_codex_cli import CodexCliLLM
+
+        # Codex uses the model selected by the authenticated CLI profile. The
+        # existing `analyze.llm_model` setting is Claude-specific.
+        return CodexCliLLM()
     raise ValueError(f"unknown llm provider: {name}")

@@ -1,0 +1,120 @@
+# The cartoon-effects sprite library.
+#
+# Every entry is one RGBA PNG in this directory plus the metadata the pipeline
+# needs to choose it, place it and animate it:
+#
+#   name             what the placement stage calls it; the LLM must use it exactly
+#   file             the RGBA PNG, in this directory
+#   tags             what it expresses, as words a story can be matched against
+#   expresses        one sentence shown to the model instead of the picture
+#   anchor           which point of the sprite lands on the grid cell's point
+#                    (center | top | bottom | left | right)
+#   default_seconds  how long one event of it runs
+#   animation        a built-in motion the compositor implements:
+#                    pop-in | pulse | shake | drift-up | none
+#   nine_patch       present only for a sprite stretched around dynamic text
+#
+# THE DRAWINGS ARE SEEDS, NOT THE POINT. Everything here was drawn procedurally
+# with Pillow (`videoai/logic/effect_seeds.py`, re-runnable with
+# `uv run videoai seed-effects`) so that the effects stage works with zero API
+# calls and zero subscriptions. ANY entry can be replaced by a better PNG — for
+# example one generated with OpenAI's image model — by dropping a file with the
+# SAME NAME into this directory. Nothing else changes: the manifest, the
+# placement stage and the compositor never look at the pixels. Replacing a file
+# re-renders the delivery (the library's content is in the polish stage's
+# fingerprint) and does not re-plan the effects.
+#
+# docs/EFFECTS-LIBRARY.md has the prompt template, the cut-out steps and the
+# size and transparency requirements.
+#
+# A replacement must be: RGBA with a genuinely transparent background, square-ish
+# and at least 512px on its long edge, and free of text (text belongs in the
+# nine-patch bubble, where the pipeline renders it in the video's own typeface).
+
+sprites:
+- name: comic_starburst
+  file: comic_starburst.png
+  tags:
+  - impact
+  - pop
+  - hit
+  - surprise
+  - reveal
+  expresses: something popped, burst or landed hard, right now
+  anchor: center
+  default_seconds: 0.7
+  animation: pop-in
+- name: speed_lines
+  file: speed_lines.png
+  tags:
+  - speed
+  - fast
+  - motion
+  - rush
+  - zoom
+  expresses: this is happening fast, or something whipped past
+  anchor: center
+  default_seconds: 0.6
+  animation: pulse
+- name: sparkle_stars
+  file: sparkle_stars.png
+  tags:
+  - sparkle
+  - shiny
+  - clean
+  - magic
+  - pretty
+  - reveal
+  expresses: a clean, shiny or magical reveal — the nice-looking moment
+  anchor: center
+  default_seconds: 1.0
+  animation: pulse
+- name: sound_rings
+  file: sound_rings.png
+  tags:
+  - sound
+  - loud
+  - squish
+  - squeak
+  - noise
+  - listen
+  expresses: 'a noise the viewer should notice: a squish, a squeak, a bang'
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+- name: confetti_burst
+  file: confetti_burst.png
+  tags:
+  - celebration
+  - success
+  - yay
+  - finale
+  - win
+  expresses: it worked, it is finished, or it is worth celebrating
+  anchor: center
+  default_seconds: 1.4
+  animation: drift-up
+- name: speech_bubble
+  file: speech_bubble.png
+  tags:
+  - reaction
+  - uh-oh
+  - joke
+  - voice
+  - comment
+  - oops
+  expresses: a short reaction in words, in a comic bubble with a tail — only for something
+    the presenter actually said or plainly meant
+  anchor: bottom
+  default_seconds: 1.6
+  animation: shake
+  nine_patch:
+    left: 224
+    top: 96
+    right: 96
+    bottom: 212
+    text_left: 34
+    text_top: 34
+    text_right: 34
+    text_bottom: 170
+    max_lines: 3

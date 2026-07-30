@@ -268,18 +268,59 @@ class RejectedPhrases(BaseModel):
     phrase_ids: list[str] = Field(default_factory=list)
 
 
+class EffectEvent(BaseModel):
+    """One cartoon accent, placed on the timeline's clock by the story.
+
+    `at_seconds` is measured on the TIMELINE, not on the delivery: the model that
+    chose it was shown the edit, and the delivery adds an intro card and drifts by
+    a frame per cut. The compositor maps it forward through the measured segment
+    starts, exactly as it maps captions.
+    """
+
+    at_seconds: float
+    effect_name: str
+    screen_position: str
+    scale: str = "medium"
+    seconds: float = 0.0
+    # Speech-bubble entries only: the words to render inside the nine-patch.
+    text: str = ""
+    reason: str = ""
+
+
+class EffectPlan(BaseModel):
+    """Which accents to show, and where. An empty list is a valid answer: a calm
+    review needs no effects, and inventing some would be worse than none."""
+
+    provider: str = ""
+    library: str = ""
+    events: list[EffectEvent] = Field(default_factory=list)
+
+
 class DraftResult(BaseModel):
     path: str
     duration: float
     segment_count: int
+    # The exact edit this review file represents. Approval must never bind a
+    # stale draft to a newer plan merely because both files happen to exist.
+    timeline_hash: str = ""
+
+
+class Approval(BaseModel):
+    """Explicit creator approval bound to one exact timeline."""
+
+    timeline_hash: str
+    draft_hash: str = ""
+    config_hash: str = ""
+    approved_at: str
 
 
 class FinalResult(BaseModel):
-    """The watchable cut: the draft plus intro, section titles, music and dissolves.
+    """The watchable cut plus an exact record of the applied production layers.
 
-    Every polish element is optional and degrades on its own — a missing music
-    folder or an unreadable font must still produce a video — so the artifact
-    records what was actually applied rather than what was configured.
+    `production-contract.yaml` is validated against these measurements before the
+    file is allowed to keep the name `final.mp4`; a render that fails it, or a
+    deliberately degraded one, is named by the contract's fallback instead and
+    says here what it is missing.
     """
 
     path: str
@@ -295,6 +336,20 @@ class FinalResult(BaseModel):
     intro_title: str = ""
     title_count: int = 0
     transition_count: int = 0
+    caption_count: int = 0
+    burned_in_captions: bool = False
+    # Cartoon accents actually composited, and one line each naming what and when.
+    # Seasoning, not structure: the production contract does not require any, and a
+    # delivery with none is as valid as a delivery with eight.
+    effect_count: int = 0
+    effects: list[str] = Field(default_factory=list)
+    outro: bool = False
+    music_ducking: bool = False
+    # How far the music bed measurably dropped under speech, in dB. Measured from
+    # the delivered mix rather than assumed from the requested setting.
+    music_ducking_db: float = 0.0
+    fully_decoded: bool = False
+    production_report: str = ""
     music_track: str | None = None
     # Bensound's free licence requires the credit to travel with the video, so it
     # is recorded here as well as written to output/metadata.md.

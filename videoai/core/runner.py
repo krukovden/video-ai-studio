@@ -68,24 +68,46 @@ def _fingerprint(
     if spec.uses_brief:
         parts.append(brief_fingerprint)
     if spec.provider_key:
-        parts.append(f"{spec.provider_key}={ctx.config.providers.get(spec.provider_key, '')}")
+        provider = ctx.config.providers.get(spec.provider_key, "")
+        parts.append(f"{spec.provider_key}={provider}")
+        if spec.provider_key == "llm":
+            # The provider's own fixed instruction is as much a part of the prompt
+            # as `spec.prompt` is; Codex's preamble is prefixed to every prompt it
+            # sends, so editing it has to invalidate the analysis it produced.
+            from videoai.providers.base import llm_system_preamble
+
+            parts.append(f"system:{hash_parts(llm_system_preamble(provider))}")
     for key in spec.config_keys:
         parts.append(f"{key}={config_value(ctx.config, key)!r}")
     if spec.prompt is not None:
         parts.append(f"prompt:{hash_parts(spec.prompt)}")
+    if spec.fingerprint_extras is not None:
+        parts.extend(f"extra:{value}" for value in spec.fingerprint_extras(ctx))
     # Chain on upstream CONTENT, not on upstream fingerprints. `analyze` and
     # `plan` are LLM calls: re-running one with `--stage` produces different
     # content under an identical fingerprint, so a fingerprint chain would leave
     # everything downstream silently stale. Hashing the artifact on disk also
     # means a hand-edited artifact invalidates its dependents.
-    for name in spec.requires:
-        parts.append(f"{name}:{ctx.store.content_hash(name) or ''}")
+    #
+    # A stage may narrow that to a projection of the content it really reads (see
+    # `fingerprint_inputs`), which is only consulted once every required artifact
+    # exists — a projection reads those artifacts to compute itself. Until then the
+    # whole-artifact hashes below stand in, and they are '' for what is missing.
+    if (
+        spec.fingerprint_inputs is not None
+        and all(ctx.store.exists(name) for name in spec.requires)
+    ):
+        parts.extend(f"input:{value}" for value in spec.fingerprint_inputs(ctx))
+    else:
+        for name in spec.requires:
+            parts.append(f"{name}:{ctx.store.content_hash(name) or ''}")
     return hash_parts(*parts)
 
 
 def run_pipeline(
     ctx: StageContext,
     only: str | None = None,
+    stop_after: str | None = None,
     force: bool = False,
     media_fingerprint: str = "",
     brief_fingerprint: str = "",
@@ -93,6 +115,8 @@ def run_pipeline(
     """Run stages in order. Returns ids of stages that actually executed."""
     if only is not None and only not in REGISTRY:
         raise KeyError(f"unknown stage: {only}")
+    if stop_after is not None and stop_after not in REGISTRY:
+        raise KeyError(f"unknown stage: {stop_after}")
 
     executed: list[str] = []
     for spec in _ordered_stages():
@@ -111,6 +135,8 @@ def run_pipeline(
             and ctx.store.exists(spec.produces)
         )
         if skip_cached:
+            if stop_after == spec.id:
+                break
             continue
         try:
             artifact = spec.fn(ctx)
@@ -122,6 +148,8 @@ def run_pipeline(
             )
         ctx.store.write(spec.produces, artifact, fingerprint)
         executed.append(spec.id)
+        if stop_after == spec.id:
+            break
     return executed
 
 

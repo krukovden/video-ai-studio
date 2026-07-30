@@ -13,6 +13,8 @@ re-anchoring) ever sees them.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from functools import cache
 from pathlib import Path
 from typing import Protocol
@@ -64,6 +66,37 @@ def _load_model(model_name: str):
     return from_pretrained(model_name)
 
 
+_REAL_LOAD_MODEL = _load_model
+
+
+@cache
+def _require_usable_metal() -> None:
+    """Probe MLX in a child so a C++ Metal abort cannot kill VideoAI itself."""
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import mlx.core as mx; "
+                "value = mx.zeros((1,)); "
+                "mx.eval(value)"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if probe.returncode != 0:
+        detail = (probe.stderr or probe.stdout).strip().splitlines()
+        reason = detail[-1] if detail else f"probe exited {probe.returncode}"
+        raise RuntimeError(
+            "Parakeet/MLX cannot access a Metal device in this session. "
+            "Run transcription from an interactive macOS terminal with GPU access, "
+            "or keep/reuse the existing 03-transcript artifact. "
+            f"Metal probe: {reason}"
+        )
+
+
 class ParakeetASR:
     name = "parakeet"
 
@@ -78,6 +111,11 @@ class ParakeetASR:
         self.overlap_duration_seconds = overlap_duration_seconds
 
     def transcribe(self, audio_path: Path) -> list[Word]:
+        # Unit tests replace the model loader with an in-memory fake. The real
+        # loader is guarded because MLX may call std::terminate when Metal is
+        # unavailable, which Python cannot catch in-process.
+        if _load_model is _REAL_LOAD_MODEL:
+            _require_usable_metal()
         model = _load_model(self.model_name)
         result = model.transcribe(
             str(audio_path),

@@ -1,18 +1,50 @@
 """VideoAI command line interface."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
 
 import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import load_config
+from videoai.core.models import Approval, DraftResult, FinalResult
 from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir
 from videoai.core.registry import StageContext
 from videoai.core.runner import StageFailure, ordered_stages, run_pipeline, stale_downstream
-from videoai.core.store import ArtifactStore, hash_parts
+from videoai.core.store import ArtifactStore, hash_file, hash_parts
+from videoai.stages.s08_polish import approval_is_current
 
 app = typer.Typer(add_completion=False, help="Automated video pipeline.")
+
+
+def _report_stage_failure(
+    failure: StageFailure,
+    project: Path,
+    config_path: Path,
+    debug: bool,
+    note: str = "",
+) -> None:
+    """Name the stage, hand over the exact re-run command, and offer a traceback.
+
+    Every command that runs the pipeline reports a failure the same way: a stage
+    id, a cause, the one command that resumes from there, and how to get the
+    traceback. A creator should never have to know which command they used to
+    learn what to do next.
+    """
+    typer.echo(f"Stage '{failure.stage_id}' failed: {failure.cause}", err=True)
+    if note:
+        typer.echo(note, err=True)
+    typer.echo(
+        "Artifacts from earlier stages are kept, so fix the cause and re-run just "
+        f"this stage:\n  videoai run {project} --config {config_path} "
+        f"--stage {failure.stage_id}",
+        err=True,
+    )
+    if debug:
+        raise failure
+    typer.echo("Run again with --debug for the full traceback.", err=True)
+    raise typer.Exit(1) from failure
 
 
 def _media_fingerprint(project_dir: Path) -> str:
@@ -112,23 +144,15 @@ def run(
                 typer.echo(f"Auto-fix round {rounds} of {auto_fix}: {failure.cause}")
                 typer.echo("Re-planning without the rejected segments.")
                 continue
-            typer.echo(f"Stage '{failure.stage_id}' failed: {failure.cause}", err=True)
-            if rounds:
-                typer.echo(
+            _report_stage_failure(
+                failure, project, config_path, debug,
+                note=(
                     f"Auto-fix gave up after {rounds} re-planning round(s); every "
-                    "rejected segment is listed above and in work/05c-rejected.json.",
-                    err=True,
-                )
-            typer.echo(
-                "Artifacts from earlier stages are kept, so fix the cause and re-run just "
-                f"this stage:\n  videoai run {project} --config {config_path} "
-                f"--stage {failure.stage_id}",
-                err=True,
+                    "rejected segment is listed above and in work/05c-rejected.json."
+                    if rounds
+                    else ""
+                ),
             )
-            if debug:
-                raise
-            typer.echo("Run again with --debug for the full traceback.", err=True)
-            raise typer.Exit(1) from failure
     if executed:
         typer.echo("Executed: " + ", ".join(executed))
     else:
@@ -149,6 +173,132 @@ def stages() -> None:
     for spec in ordered_stages():
         requires = ", ".join(spec.requires) or "-"
         typer.echo(f"{spec.id:<14} produces={spec.produces:<16} requires={requires}")
+
+
+@app.command("seed-effects")
+def seed_effects(
+    directory: Path = typer.Option(
+        None, "--dir", help="Where to write the library (default: the repo's assets/effects)"
+    ),
+) -> None:
+    """Redraw the built-in cartoon sprite library and its manifest.
+
+    The library is committed, so this is only needed after editing a drawing in
+    `videoai/logic/effect_seeds.py`. It makes no network calls.
+    """
+    from videoai.logic.effect_seeds import seed_library
+    from videoai.logic.effects import default_library_dir, load_library
+
+    target = directory or default_library_dir()
+    manifest = seed_library(target)
+    library = load_library(target)
+    typer.echo(f"Wrote {manifest}")
+    for sprite in library.sprites:
+        image = library.path_of(sprite)
+        typer.echo(f"  {sprite.name:<18} {image.name:<22} {image.stat().st_size:>7} bytes")
+
+
+@app.command()
+def approve(
+    project: Path = typer.Argument(..., help="Project whose current draft was reviewed"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+) -> None:
+    """Approve the current timeline for delivery rendering."""
+    store = ArtifactStore(project / "work")
+    timeline_hash = store.content_hash("05-timeline")
+    if timeline_hash is None or not store.exists("06-draft"):
+        raise typer.BadParameter(
+            "the project has no current timeline and draft; run the pipeline and review "
+            "output/draft.mp4 first"
+        )
+    draft = store.read("06-draft", DraftResult)
+    if draft.timeline_hash != timeline_hash:
+        raise typer.BadParameter(
+            "draft.mp4 is stale: it was not rendered from the current timeline; "
+            "run the pipeline through render_draft and review the new file"
+        )
+    draft_hash = hash_file(Path(draft.path)) if Path(draft.path).is_file() else ""
+    if not draft_hash:
+        raise typer.BadParameter(f"draft file is missing: {draft.path}")
+    config_hash = hash_parts(load_config(config_path).model_dump_json())
+    store.write(
+        "06-approval",
+        Approval(
+            timeline_hash=timeline_hash,
+            draft_hash=draft_hash,
+            config_hash=config_hash,
+            approved_at=datetime.now(timezone.utc).isoformat(),
+        ),
+        fingerprint="manual-approval",
+    )
+    typer.echo(
+        "Approved the current timeline, draft, and effective config. Any change "
+        "to one of them invalidates this approval."
+    )
+
+
+@app.command()
+def produce(
+    project: Path = typer.Argument(..., help="Project to take through the production contract"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+    debug: bool = typer.Option(False, "--debug", help="Re-raise stage failures with their traceback"),
+) -> None:
+    """Build a review draft, then a contract-validated final after approval."""
+    clip_dir = resolve_clip_dir(project)
+    cameras = list_camera_clips(clip_dir)
+    if not any(cameras.values()):
+        raise typer.BadParameter(f"no video files found in {clip_dir}")
+    work_dir = project / "work"
+    output_dir = project / "output"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    loaded = load_config(config_path)
+    ctx = StageContext(
+        project_dir=project,
+        input_dir=project,
+        work_dir=work_dir,
+        output_dir=output_dir,
+        config=loaded,
+        store=ArtifactStore(work_dir),
+    )
+    media_fingerprint = _media_fingerprint(project)
+    brief_fingerprint = _brief_fingerprint(project)
+    try:
+        executed = run_pipeline(
+            ctx,
+            stop_after="render_draft",
+            media_fingerprint=media_fingerprint,
+            brief_fingerprint=brief_fingerprint,
+        )
+    except StageFailure as failure:
+        _report_stage_failure(failure, project, config_path, debug)
+    if executed:
+        typer.echo("Prepared review draft: " + ", ".join(executed))
+
+    draft = ctx.store.read("06-draft", DraftResult)
+    try:
+        approval_is_current(ctx, draft)
+    except RuntimeError as error:
+        typer.echo(str(error))
+        typer.echo(f"Review: {draft.path}")
+        typer.echo(
+            f"Then approve: videoai approve {project} --config {config_path}"
+        )
+        return
+
+    try:
+        executed = run_pipeline(
+            ctx,
+            media_fingerprint=media_fingerprint,
+            brief_fingerprint=brief_fingerprint,
+        )
+    except StageFailure as failure:
+        _report_stage_failure(failure, project, config_path, debug)
+    result = ctx.store.read("08-final", FinalResult)
+    if not result.fully_decoded or not result.production_report:
+        raise typer.BadParameter("final artifact did not pass the production contract")
+    typer.echo("Production passed: " + result.path)
+    typer.echo("Report: " + result.production_report)
 
 
 @app.command()

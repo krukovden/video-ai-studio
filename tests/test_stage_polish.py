@@ -1,4 +1,9 @@
-"""The polish stage: the finished cut on top of the reviewed draft.
+"""The polish stage: the delivered cut on top of the reviewed draft.
+
+There is one renderer and `production-contract.yaml` always applies to it, so
+every test that renders writes a contract next to the project describing the
+delivery it expects. That is the same file the repository ships, resized: a test
+that quietly relaxed the rules would be testing a pipeline nobody runs.
 
 Every fixture here is generated with ffmpeg's `lavfi` sources, including the
 music — the repository's real bensound mp3s are read-only inputs to the project,
@@ -7,6 +12,7 @@ file instead of the stage.
 """
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,12 +22,15 @@ from videoai.config import Config, PolishSettings
 from videoai.core.ffmpeg import probe
 from videoai.core.models import (
     ClipInfo,
+    ClipTranscript,
     DraftResult,
     FinalResult,
     Manifest,
     StoryPlan,
     Timeline,
     TimelineClip,
+    Transcript,
+    Word,
 )
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
@@ -32,7 +41,54 @@ from videoai.stages.s06_render_draft import (
     DRAFT_AUDIO_SAMPLE_RATE,
     render_draft,
 )
-from videoai.stages.s08_polish import duck_ratio, polish, section_changes, write_attribution
+from videoai.stages.s08_polish import (
+    _Caption,
+    _cut_delivery_segment,
+    clamp_caption_ends,
+    delivery_frame,
+    duck_ratio,
+    polish,
+    section_changes,
+    write_attribution,
+)
+
+CLOSING_BEAT = "Closing"
+
+
+def _write_contract(
+    project_dir: Path,
+    frame: tuple[int, int],
+    *,
+    minimum_duck_db: float = 3.0,
+    captions: bool = True,
+) -> None:
+    """The shipped contract, resized to the delivery this project can produce."""
+    width, height = frame
+    (project_dir / "production-contract.yaml").write_text(
+        f"""
+version: 1
+required_output:
+  width: {width}
+  height: {height}
+  full_decode: true
+required_features:
+  intro: true
+  outro: true
+  section_titles: true
+  captions: {str(captions).lower()}
+  transitions: true
+  music: true
+  music_ducking:
+    minimum_db: {minimum_duck_db}
+  closing_beat: true
+quality:
+  source: originals
+  maximum_lossy_video_generations: 1
+failure_policy:
+  fallback_output_name: preview-fallback.mp4
+""".lstrip(),
+        encoding="utf-8",
+    )
 
 
 def _probe_streams(path: Path) -> list[dict]:
@@ -52,6 +108,18 @@ def _mean_volume(path: Path) -> float:
     if not match:
         raise AssertionError(f"mean_volume not found in ffmpeg stderr:\n{result.stderr}")
     return float(match.group(1))
+
+
+def _mean_brightness(path: Path, at: float) -> float:
+    """The average luma of the frame at `at` seconds, 0-255."""
+    import numpy as np
+
+    result = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", f"{at:.3f}", "-i", str(path),
+         "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+        capture_output=True, check=True,
+    )
+    return float(np.frombuffer(result.stdout, dtype=np.uint8).mean())
 
 
 def _make_tone(path: Path, seconds: float = 5.0, hz: int = 660) -> Path:
@@ -80,25 +148,45 @@ def _context(tmp_path: Path, settings: PolishSettings | None = None) -> StageCon
 
 def _seed(
     ctx: StageContext, source: Path, beats: list[str], title: str = "A Test Review",
-    proxy: Path | None = None,
+    proxy: Path | None = None, clip_seconds: float = 3.0,
 ) -> None:
-    """A manifest, a timeline of 3-second clips carrying `beats`, and a story plan.
+    """A manifest, a timeline carrying `beats`, a story plan and a transcript.
 
-    `proxy` defaults to the source itself, which is enough for the tests that only
-    care about what polish assembles. The tests that care where the pixels came
-    from pass a real, smaller proxy.
+    The transcript is not decoration: the contract requires captions, and captions
+    are mapped from word timings, so a project with no words cannot be delivered.
+
+    `proxy` must be a real file — the draft is cut from it — and must not be the
+    source, because the delivery contract fails a final cut from a proxy.
     """
-    duration = 3.0 * len(beats) + 3.0
+    duration = clip_seconds * len(beats) + clip_seconds
     ctx.store.write("01-manifest", Manifest(clips=[
         ClipInfo(clip_id="clip-01", path=str(source), duration=duration, width=320,
                  height=240, fps=30.0, has_audio=True,
                  proxy_path=str(proxy or source)),
     ]), fingerprint="fp")
     ctx.store.write("05-timeline", Timeline(fps=30.0, width=320, height=240, clips=[
-        TimelineClip(src="clip-01", offset=3.0 * index, dur=3.0, start=3.0 * index, beat=beat)
+        TimelineClip(
+            src="clip-01", offset=clip_seconds * index, dur=clip_seconds,
+            start=clip_seconds * index, beat=beat,
+        )
         for index, beat in enumerate(beats)
     ]), fingerprint="fp")
     ctx.store.write("05a-storyplan", StoryPlan(title=title), fingerprint="fp")
+    words = [
+        Word(
+            text=f"word{index}",
+            start=clip_seconds * index + 0.2,
+            end=clip_seconds * index + 0.2 + min(0.4, clip_seconds / 4),
+        )
+        for index in range(len(beats))
+    ]
+    ctx.store.write(
+        "03-transcript",
+        Transcript(provider="test", clips=[
+            ClipTranscript(clip_id="clip-01", words=words),
+        ]),
+        fingerprint="fp",
+    )
 
 
 def _render(ctx: StageContext) -> DraftResult:
@@ -110,15 +198,24 @@ def _render(ctx: StageContext) -> DraftResult:
 @pytest.fixture
 def project(tmp_path: Path, make_clip):
     """A rendered draft plus a generated music library, ready to polish."""
-    def _build(beats: list[str], *, music: bool = True, **overrides) -> tuple[StageContext, DraftResult]:
+    def _build(beats: list[str], *, music: bool = True, contract: bool = True,
+               **overrides) -> tuple[StageContext, DraftResult]:
         music_dir = tmp_path / "music"
         if music:
             _make_tone(music_dir / "bensound-funday.mp3")
             _make_tone(music_dir / "bensound-energy.mp3", hz=440)
         overrides.setdefault("music_dir", str(music_dir))
+        overrides.setdefault("output_height", 240)
         ctx = _context(tmp_path, PolishSettings(**overrides))
         source = make_clip("a.mp4", seconds=3.0 * len(beats) + 3.0)
-        _seed(ctx, source, beats)
+        # A distinct proxy file, as ingest always builds: the delivery report
+        # records which of the two each segment was cut from.
+        proxy = Path(shutil.copyfile(source, tmp_path / "a-proxy.mp4"))
+        _seed(ctx, source, beats, proxy=proxy)
+        if contract:
+            _write_contract(
+                tmp_path, delivery_frame(probe(source), ctx.config.polish.output_height)
+            )
         return ctx, _render(ctx)
 
     return _build
@@ -182,24 +279,35 @@ def delivery(tmp_path: Path):
     """
     def _build(
         beats: list[str], *, size: str = "1280x720", proxy_height: int = 180,
-        source: Path | None = None, **overrides,
+        source: Path | None = None, clip_seconds: float = 3.0,
+        music: bool = True, contract: bool = True, **overrides,
     ) -> tuple[StageContext, Path, Path, DraftResult]:
-        # No music: these tests measure the picture, and a bed only slows them.
-        overrides.setdefault("music_dir", str(tmp_path / "no-music"))
+        music_dir = tmp_path / "music"
+        if music:
+            _make_tone(music_dir / "bensound-funday.mp3", seconds=2.0)
+        overrides.setdefault("music_dir", str(music_dir))
         overrides.setdefault("output_height", 720)
         ctx = _context(tmp_path, PolishSettings(**overrides))
         original = source or _make_detailed_clip(
-            tmp_path / "original.mp4", 3.0 * len(beats) + 3.0, size
+            tmp_path / "original.mp4", clip_seconds * len(beats) + clip_seconds, size
         )
         proxy = _scale_to(original, tmp_path / "proxy.mp4", proxy_height)
-        _seed(ctx, original, beats, proxy=proxy)
+        _seed(ctx, original, beats, proxy=proxy, clip_seconds=clip_seconds)
+        if contract:
+            _write_contract(
+                tmp_path,
+                delivery_frame(probe(original), ctx.config.polish.output_height),
+            )
         return ctx, original, proxy, _render(ctx)
 
     return _build
 
 
+# --- delivery quality -------------------------------------------------------
+
+
 def test_the_final_is_cut_at_delivery_height_while_the_draft_stays_at_proxy_height(delivery):
-    ctx, _, proxy, draft = delivery(["Hook", "Middle"])
+    ctx, _, proxy, draft = delivery(["Hook", CLOSING_BEAT])
 
     result = polish(ctx)
 
@@ -212,8 +320,8 @@ def test_the_final_is_cut_at_delivery_height_while_the_draft_stays_at_proxy_heig
 
 def test_the_final_is_materially_better_than_the_draft(delivery):
     """Resolution and bitrate, not file size: the final is longer than the draft by
-    the intro, so a bigger file on its own would prove nothing."""
-    ctx, _, _, draft = delivery(["Hook", "Middle"])
+    the cards, so a bigger file on its own would prove nothing."""
+    ctx, _, _, draft = delivery(["Hook", CLOSING_BEAT])
 
     result = polish(ctx)
 
@@ -230,9 +338,9 @@ def test_the_final_is_materially_better_than_the_draft(delivery):
 
 
 def test_the_delivered_audio_still_matches_the_draft(delivery):
-    """The concat homogeneity invariant: raising the picture must not move the
-    audio target, which the draft and every segment already agree on."""
-    ctx, _, _, draft = delivery(["Hook", "Middle"])
+    """The concat homogeneity invariant: raising the picture and mixing a bed under
+    it must not move the audio target every segment already agrees on."""
+    ctx, _, _, draft = delivery(["Hook", CLOSING_BEAT])
 
     result = polish(ctx)
 
@@ -250,8 +358,8 @@ def test_the_delivered_audio_still_matches_the_draft(delivery):
 
 def test_output_height_2160_delivers_true_4k(delivery):
     ctx, _, _, _ = delivery(
-        ["Hook"], size="3840x2160", proxy_height=540, output_height=2160,
-        intro_seconds=0.5, title_seconds=0.5,
+        ["Hook", CLOSING_BEAT], size="3840x2160", proxy_height=540, output_height=2160,
+        clip_seconds=1.0, intro_seconds=0.4, outro_seconds=0.4, title_seconds=0.4,
     )
 
     result = polish(ctx)
@@ -260,14 +368,75 @@ def test_output_height_2160_delivers_true_4k(delivery):
     assert result.height == 2160
 
 
+def test_lossy_video_generations_is_measured_not_a_constant(project):
+    """The report's `quality.lossy_video_generations` used to be a literal `1`.
+    It has to come from actually checking each delivery-path encode's own
+    arguments: today that means every intermediate is `-crf 0` and only the
+    final encode is not, so the measured count still lands on 1."""
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+
+    result = polish(ctx)
+
+    report = json.loads(Path(result.production_report).read_text())
+    assert report["quality"]["lossy_video_generations"] == 1
+
+
+def test_a_future_lossy_intermediate_would_fail_the_contract(project, monkeypatch):
+    """Proof the count above is really measured: if a later change made every
+    delivery-path encode lossy (not just the final one), the contract's
+    `maximum_lossy_video_generations: 1` must catch it instead of the report
+    still claiming 1."""
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+    monkeypatch.setattr(
+        "videoai.stages.s08_polish._is_lossless_x264_encode", lambda args: False
+    )
+
+    with pytest.raises(RuntimeError, match="lossy video generations"):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "final.mp4").exists()
+    assert not (ctx.output_dir / "final.srt").exists()
+    assert not (ctx.output_dir / "production-report.json").exists()
+
+
 def test_a_missing_original_is_refused_by_name_instead_of_falling_back_to_the_proxy(delivery):
     """Silently delivering the proxy is the defect. A source that has moved has to
     stop the stage and say which file it is."""
-    ctx, original, proxy, _ = delivery(["Hook", "Middle"])
+    ctx, original, proxy, _ = delivery(["Hook", CLOSING_BEAT])
     original.unlink()
     assert proxy.is_file(), "the proxy is still there, and must not be used"
 
     with pytest.raises(RuntimeError, match="original.mp4"):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "final.mp4").exists()
+
+
+def test_the_report_names_the_files_each_segment_was_really_cut_from(delivery):
+    ctx, original, proxy, _ = delivery(["Hook", CLOSING_BEAT])
+
+    result = polish(ctx)
+
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    assert report["quality"]["source"] == "originals"
+    assert report["quality"]["proxy_inputs"] == []
+    assert report["quality"]["segment_inputs"] == [str(original.resolve())] * 2
+    assert str(proxy.resolve()) not in report["quality"]["segment_inputs"]
+
+
+def test_a_proxy_that_reaches_the_delivery_cut_fails_the_contract(delivery, tmp_path: Path):
+    """The contract's `quality.source` has to be measured. Pointing the manifest's
+    `path` at the proxy is exactly the regression it exists to catch."""
+    ctx, original, proxy, _ = delivery(["Hook", CLOSING_BEAT], output_height=180)
+    manifest = ctx.store.read("01-manifest", Manifest)
+    ctx.store.write(
+        "01-manifest",
+        Manifest(clips=[manifest.clips[0].model_copy(update={"path": str(proxy)})]),
+        fingerprint="fp",
+    )
+    _write_contract(tmp_path, delivery_frame(probe(proxy), 180))
+
+    with pytest.raises(RuntimeError, match="cut from proxies"):
         polish(ctx)
 
     assert not (ctx.output_dir / "final.mp4").exists()
@@ -280,7 +449,9 @@ def test_a_turned_original_is_delivered_upright(delivery, tmp_path: Path, make_c
     landscape = make_clip("landscape.mov", seconds=9.0, size="640x480")
     turned = _turned(landscape, tmp_path / "turned.mov", 90)
     assert probe(turned).rotation == 90
-    ctx, _, _, _ = delivery(["Hook", "Middle"], source=turned, output_height=240)
+    ctx, _, _, _ = delivery(
+        ["Hook", CLOSING_BEAT], source=turned, output_height=240,
+    )
 
     result = polish(ctx)
 
@@ -291,10 +462,11 @@ def test_a_turned_original_is_delivered_upright(delivery, tmp_path: Path, make_c
     assert final.rotation == 0
 
 
-def test_final_is_the_draft_plus_the_intro(project):
-    """One beat, so no section dissolves eat into the length: the final is longer
-    than the draft by the intro, less the dissolve that opens it."""
-    ctx, draft = project(["Hook", "Hook"])
+# --- what the delivery contains --------------------------------------------
+
+
+def test_the_final_is_the_draft_plus_the_two_cards(project):
+    ctx, draft = project(["Hook", CLOSING_BEAT])
 
     result = polish(ctx)
 
@@ -306,13 +478,14 @@ def test_final_is_the_draft_plus_the_intro(project):
 
     measured = probe(output)
     grown = measured.duration - draft.duration
-    assert 1.9 < grown < 2.6, f"grew by {grown:.2f}s, expected about the 2.5s intro"
+    assert 4.4 < grown < 5.6, f"grew by {grown:.2f}s, expected the 2.5s+2.5s cards"
     assert result.intro is True
+    assert result.outro is True
     assert result.intro_title == "A Test Review"
 
 
-def test_final_decodes_cleanly(project):
-    ctx, _ = project(["Hook", "Middle"])
+def test_final_decodes_cleanly_and_says_so(project):
+    ctx, _ = project(["Hook", CLOSING_BEAT])
 
     result = polish(ctx)
 
@@ -322,12 +495,15 @@ def test_final_decodes_cleanly(project):
     )
     assert decode.returncode == 0
     assert decode.stderr.strip() == "", decode.stderr
+    assert result.fully_decoded is True
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    assert report["features"]["full_decode"] is True
 
 
 def test_final_keeps_the_drafts_single_video_and_audio_stream_layout(project):
     """The project's homogeneity invariant: one video stream, one audio stream,
     and the same codec, sample rate and channel count the draft settled on."""
-    ctx, draft = project(["Hook", "Middle", "End"])
+    ctx, draft = project(["Hook", "Middle", CLOSING_BEAT])
 
     result = polish(ctx)
 
@@ -345,44 +521,126 @@ def test_final_keeps_the_drafts_single_video_and_audio_stream_layout(project):
     assert int(audio[0]["channels"]) == int(draft_audio["channels"]) == DRAFT_AUDIO_CHANNELS
 
 
-def test_disabled_polish_copies_the_draft_through_unchanged(project):
-    ctx, draft = project(["Hook", "Middle"], enabled=False)
+def test_every_section_change_gets_a_title_and_an_emitted_transition(project):
+    """A title per beat change, and a transition count that is the number of fade
+    filters actually emitted rather than the number of boundaries planned."""
+    ctx, _ = project(["Hook", "Hook", "Middle", "Middle", CLOSING_BEAT])
 
     result = polish(ctx)
 
-    assert Path(result.path).read_bytes() == Path(draft.path).read_bytes()
-    assert result.music_track is None
-    assert result.title_count == 0
-    assert any("enabled" in note for note in result.notes)
+    assert result.title_count == 2
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    assert report["features"]["section_titles"] == 2
+    assert report["features"]["section_boundaries"] == 2
+    # Five segments: the first fades in, the last fades out, and each of the two
+    # boundaries fades out of one segment and into the next.
+    assert result.transition_count == 6
+    assert report["features"]["transitions"] == 6
 
 
-def test_a_missing_music_directory_still_renders_and_says_so(project, tmp_path: Path):
-    ctx, draft = project(["Hook", "Middle"], music=False,
-                         music_dir=str(tmp_path / "nowhere"))
+def test_a_transition_length_of_zero_frames_fails_the_contract(project):
+    """`transitions: true` means transitions were rendered. Zero emitted filters
+    with the feature required is a production failure, not a silent 'passed'."""
+    ctx, _ = project(["Hook", CLOSING_BEAT], transition_frames=0)
 
-    result = polish(ctx)
+    with pytest.raises(RuntimeError, match="required feature missing: transitions"):
+        polish(ctx)
 
-    assert Path(result.path).exists()
-    assert probe(Path(result.path)).duration > draft.duration
-    assert result.music_track is None
-    assert result.music_attribution == ""
-    assert any("no music" in note for note in result.notes)
+    assert not (ctx.output_dir / "final.mp4").exists()
+
+
+# --- preflight: fail in seconds, not after a 4K render ----------------------
+
+
+def _delivery_segments(ctx: StageContext) -> list[Path]:
+    return sorted((ctx.work_dir / "delivery").glob("segment-*.mp4"))
+
+
+def test_a_delivery_the_contract_cannot_accept_is_refused_before_any_cutting(
+    project, tmp_path: Path
+):
+    """The contract wants 1080p and the config asks for 240p. Discovering that
+    after cutting every segment costs an hour; discovering it here costs a probe."""
+    ctx, _ = project(["Hook", CLOSING_BEAT], contract=False)
+    _write_contract(tmp_path, (1920, 1080))
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        polish(ctx)
+
+    assert _delivery_segments(ctx) == [], "preflight ran after the cutting started"
+    assert not (ctx.output_dir / "final.mp4").exists()
+
+
+def test_preflight_names_the_setting_and_the_rule_that_disagree(project, tmp_path: Path):
+    ctx, _ = project(["Hook", CLOSING_BEAT], contract=False)
+    _write_contract(tmp_path, (1920, 1080))
+
+    with pytest.raises(RuntimeError) as failure:
+        polish(ctx)
+
+    message = str(failure.value)
+    assert "1080px-tall" in message
+    assert "polish.output_height=240" in message
+
+
+def test_a_timeline_without_a_closing_beat_is_refused_before_any_cutting(project):
+    ctx, _ = project(["Hook", "Middle"])
+
+    with pytest.raises(RuntimeError, match="closing story beat"):
+        polish(ctx)
+
+    assert _delivery_segments(ctx) == []
+
+
+def test_a_full_disk_is_refused_before_any_cutting(project, monkeypatch):
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+    monkeypatch.setattr("videoai.stages.s08_polish.free_bytes", lambda _: 4_000_000)
+
+    with pytest.raises(RuntimeError, match="scratch space"):
+        polish(ctx)
+
+    assert _delivery_segments(ctx) == []
+
+
+def test_a_missing_music_library_is_refused_before_any_cutting(project, tmp_path: Path):
+    ctx, _ = project(["Hook", CLOSING_BEAT], music=False,
+                     music_dir=str(tmp_path / "nowhere"))
+
+    with pytest.raises(RuntimeError, match="requires background music"):
+        polish(ctx)
+
+    assert _delivery_segments(ctx) == []
+
+
+# --- music -----------------------------------------------------------------
+
+
+def test_a_missing_music_directory_is_refused_and_names_the_directory(project, tmp_path: Path):
+    """The contract requires a music bed, so a library that is not there is a
+    production failure. Delivering silently without music is the degradation the
+    contract exists to forbid."""
+    ctx, _ = project(["Hook", CLOSING_BEAT], music=False,
+                     music_dir=str(tmp_path / "nowhere"))
+
+    with pytest.raises(RuntimeError, match="nowhere"):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "final.mp4").exists()
     assert not (ctx.output_dir / "metadata.md").exists()
 
 
-def test_an_empty_music_directory_still_renders_and_says_so(project, tmp_path: Path):
+def test_an_empty_music_directory_is_refused(project, tmp_path: Path):
     empty = tmp_path / "empty-music"
     empty.mkdir()
-    ctx, _ = project(["Hook", "Middle"], music=False, music_dir=str(empty))
+    ctx, _ = project(["Hook", CLOSING_BEAT], music=False, music_dir=str(empty))
 
-    result = polish(ctx)
+    with pytest.raises(RuntimeError, match="music"):
+        polish(ctx)
 
-    assert Path(result.path).exists()
-    assert result.music_track is None
-    assert any("no music" in note for note in result.notes)
+    assert not (ctx.output_dir / "final.mp4").exists()
 
 
-def test_the_same_project_always_selects_the_same_track(tmp_path: Path):
+def test_the_same_project_always_selects_the_same_track():
     """Selection must not depend on the process: `hash()` is salted per run and
     would hand the same project different music every time."""
     tracks = [Path(f"/music/bensound-{name}.mp3") for name in
@@ -397,7 +655,7 @@ def test_the_same_project_always_selects_the_same_track(tmp_path: Path):
     assert select_track(tracks, "", "1.Toy_Pimple_Popping") == first
 
 
-def test_a_known_style_picks_its_track_and_an_unknown_one_falls_back(tmp_path: Path):
+def test_a_known_style_picks_its_track_and_an_unknown_one_falls_back():
     tracks = [Path("/music/bensound-funday.mp3"), Path("/music/bensound-slowlife.mp3")]
     assert select_track(tracks, "playful", "project").name == "bensound-funday.mp3"
     assert select_track(tracks, "calm", "project").name == "bensound-slowlife.mp3"
@@ -405,7 +663,7 @@ def test_a_known_style_picks_its_track_and_an_unknown_one_falls_back(tmp_path: P
 
 
 def test_style_from_project_yaml_chooses_the_track(project, tmp_path: Path):
-    ctx, _ = project(["Hook", "Middle"])
+    ctx, _ = project(["Hook", CLOSING_BEAT])
     (tmp_path / "project.yaml").write_text("style: energetic\n", encoding="utf-8")
 
     result = polish(ctx)
@@ -414,7 +672,7 @@ def test_style_from_project_yaml_chooses_the_track(project, tmp_path: Path):
 
 
 def test_an_explicit_track_overrides_the_automatic_choice(project):
-    ctx, _ = project(["Hook", "Middle"], music_track="bensound-energy.mp3")
+    ctx, _ = project(["Hook", CLOSING_BEAT], music_track="bensound-energy.mp3")
 
     result = polish(ctx)
 
@@ -422,14 +680,14 @@ def test_an_explicit_track_overrides_the_automatic_choice(project):
 
 
 def test_an_explicit_track_that_is_not_there_is_refused(project):
-    ctx, _ = project(["Hook", "Middle"], music_track="bensound-nothing.mp3")
+    ctx, _ = project(["Hook", CLOSING_BEAT], music_track="bensound-nothing.mp3")
 
     with pytest.raises(RuntimeError, match="bensound-nothing.mp3"):
         polish(ctx)
 
 
 def test_the_attribution_reaches_metadata_md(project):
-    ctx, _ = project(["Hook", "Middle"])
+    ctx, _ = project(["Hook", CLOSING_BEAT])
 
     result = polish(ctx)
 
@@ -463,22 +721,11 @@ def test_the_attribution_is_appended_to_an_existing_metadata_file(tmp_path: Path
     assert "Bensound" in metadata
 
 
-def test_section_changes_become_titles_and_dissolves(project):
-    """A title per beat change and a dissolve on each of those cuts — never on the
-    cuts inside a section, where a straight cut on speech is what is wanted."""
-    ctx, _ = project(["Hook", "Hook", "Middle", "Middle", "End"])
-
-    result = polish(ctx)
-
-    assert result.title_count == 2
-    assert result.transition_count == 2
-
-
 def test_the_music_bed_sits_far_below_the_speech(project):
     """Measured, not eyeballed: the polished mix must stay within a decibel or so
     of the speech-only draft. A bed that pushed the mix up would be a bed the
     viewer hears over the child."""
-    ctx, draft = project(["Hook", "Middle"])
+    ctx, draft = project(["Hook", CLOSING_BEAT])
 
     result = polish(ctx)
 
@@ -487,6 +734,273 @@ def test_the_music_bed_sits_far_below_the_speech(project):
     assert mixed < speech + 1.5, (
         f"mixed {mixed:.1f} dB against speech-only {speech:.1f} dB: the bed is audible"
     )
+
+
+def test_the_duck_is_measured_from_the_delivered_mix_and_recorded_in_db(project):
+    """`music_ducking: true` used to be a literal in the report. It is now the
+    measured difference between the bed with and without the sidechain, over the
+    speech windows of this very render."""
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+
+    result = polish(ctx)
+
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    measured = report["features"]["music_ducking"]
+    assert isinstance(measured, (int, float))
+    assert measured >= 3.0, f"the bed only dropped {measured} dB under speech"
+    assert result.music_ducking_db == pytest.approx(measured)
+    assert any("dB down under speech" in note for note in result.notes)
+
+
+def test_the_duck_lands_on_the_requested_attenuation_rather_than_a_fixed_setting(
+    project,
+):
+    """A fixed sidechain threshold encodes an assumption about the recording level.
+    Two different requests against the same material must produce two different
+    measured ducks, or `polish.music_duck_db` is decoration."""
+    ctx, _ = project(["Hook", CLOSING_BEAT], music_duck_db=-6.0)
+    gentle = polish(ctx).music_ducking_db
+
+    ctx, _ = project(["Hook", CLOSING_BEAT], music_duck_db=-18.0)
+    deep = polish(ctx).music_ducking_db
+
+    assert gentle == pytest.approx(6.0, abs=1.5), gentle
+    assert deep > gentle + 4.0, f"{deep} dB is not deeper than {gentle} dB"
+
+
+def test_the_reported_duck_is_measured_from_the_bed_that_reaches_the_mix(project):
+    """The search renders several candidate beds. The figure in the report has to
+    belong to the one left on disk, not to whichever attempt happened to be last."""
+    from videoai.stages.s08_polish import (
+        _windowed_rms_db,
+        build_captions,
+        clamp_caption_ends,
+        cumulative_starts,
+        speech_windows,
+    )
+
+    ctx, _ = project(["Hook", CLOSING_BEAT], music_duck_db=-9.0)
+
+    result = polish(ctx)
+
+    delivery = ctx.work_dir / "delivery"
+    timeline = ctx.store.read("05-timeline", Timeline)
+    transcript = ctx.store.read("03-transcript", Transcript)
+    durations = [probe(path).duration for path in sorted(delivery.glob("segment-*.mp4"))]
+    captions = clamp_caption_ends(build_captions(
+        timeline, transcript, cumulative_starts(durations), [], 0.0,
+        probe(delivery / "intro.mp4").duration, 4,
+    ))
+    windows = speech_windows(captions)
+    on_disk = (
+        _windowed_rms_db(delivery / "music-bed.wav", windows)
+        - _windowed_rms_db(delivery / "music-bed-ducked.wav", windows)
+    )
+
+    assert result.music_ducking_db == pytest.approx(on_disk, abs=0.05)
+
+
+def test_a_duck_below_the_contracts_floor_fails_and_leaves_no_delivery(
+    project, tmp_path: Path
+):
+    ctx, _ = project(["Hook", CLOSING_BEAT], contract=False)
+    _write_contract(tmp_path, (320, 240), minimum_duck_db=200.0)
+
+    with pytest.raises(RuntimeError, match="music_ducking measured"):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "final.mp4").exists()
+    assert not (ctx.output_dir / "final.srt").exists()
+    assert not (ctx.output_dir / "production-report.json").exists()
+
+
+def test_a_contract_failure_removes_a_stale_report_and_srt(project, tmp_path: Path):
+    """`output/` must never describe a delivery that is not there."""
+    ctx, _ = project(["Hook", CLOSING_BEAT], contract=False)
+    _write_contract(tmp_path, (320, 240), minimum_duck_db=200.0)
+    (ctx.output_dir / "production-report.json").write_text(
+        '{"status": "passed"}\n', encoding="utf-8"
+    )
+    (ctx.output_dir / "final.srt").write_text("1\n", encoding="utf-8")
+    (ctx.output_dir / "final.mp4").write_bytes(b"stale")
+
+    with pytest.raises(RuntimeError):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "production-report.json").exists()
+    assert not (ctx.output_dir / "final.srt").exists()
+    assert not (ctx.output_dir / "final.mp4").exists()
+
+
+def test_a_failure_after_the_srt_write_leaves_no_delivery_output(project, monkeypatch):
+    """final.srt is written before every later step that can still raise
+    (section titles, effect overlays, the graphics track, duck measurement, the
+    final encode, validation). A crash among those must not leave a freshly
+    written final.srt beside a stale final.mp4/production-report.json from an
+    earlier, successful run."""
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+    (ctx.output_dir / "production-report.json").write_text(
+        '{"status": "passed"}\n', encoding="utf-8"
+    )
+    (ctx.output_dir / "final.mp4").write_bytes(b"stale")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom: simulated failure after the srt write")
+
+    monkeypatch.setattr("videoai.stages.s08_polish.build_section_titles", _boom)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        polish(ctx)
+
+    assert not (ctx.output_dir / "final.srt").exists()
+    assert not (ctx.output_dir / "final.mp4").exists()
+    assert not (ctx.output_dir / "production-report.json").exists()
+
+
+# --- degradation is never called final --------------------------------------
+
+
+def test_disabled_polish_writes_a_named_fallback_and_no_final(project):
+    ctx, draft = project(["Hook", CLOSING_BEAT], enabled=False)
+
+    result = polish(ctx)
+
+    fallback = ctx.output_dir / "preview-fallback.mp4"
+    assert Path(result.path) == fallback
+    assert fallback.read_bytes() == Path(draft.path).read_bytes()
+    assert not (ctx.output_dir / "final.mp4").exists()
+    assert result.music_track is None
+    assert result.title_count == 0
+    assert result.production_report == ""
+    assert result.fully_decoded is False
+    assert any("not a delivery" in note for note in result.notes)
+    assert any("missing:" in note for note in result.notes)
+
+
+def test_disabled_polish_removes_a_final_left_by_an_earlier_run(project):
+    ctx, _ = project(["Hook", CLOSING_BEAT], enabled=False)
+    (ctx.output_dir / "final.mp4").write_bytes(b"a delivery from before")
+    (ctx.output_dir / "final.srt").write_text("1\n", encoding="utf-8")
+
+    polish(ctx)
+
+    assert not (ctx.output_dir / "final.mp4").exists()
+    assert not (ctx.output_dir / "final.srt").exists()
+
+
+# --- captions ---------------------------------------------------------------
+
+
+def test_captions_disabled_writes_no_srt_and_clears_a_stale_one(project):
+    ctx, _ = project(["Hook", CLOSING_BEAT], captions_enabled=False, contract=False)
+    _write_contract(ctx.project_dir, (320, 240), captions=False)
+    (ctx.output_dir / "final.srt").write_text("1\nstale\n", encoding="utf-8")
+
+    result = polish(ctx)
+
+    assert not (ctx.output_dir / "final.srt").exists()
+    assert result.caption_count == 0
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    assert report["features"]["captions"] == 0
+
+
+def test_the_delivered_srt_has_no_overlapping_cues(project):
+    ctx, _ = project(["Hook", "Middle", CLOSING_BEAT], caption_words=1)
+
+    result = polish(ctx)
+
+    text = (ctx.output_dir / "final.srt").read_text(encoding="utf-8")
+    stamps = re.findall(
+        r"(\d\d):(\d\d):(\d\d),(\d\d\d) --> (\d\d):(\d\d):(\d\d),(\d\d\d)", text
+    )
+    assert stamps, text
+
+    def seconds(parts: tuple[str, ...]) -> float:
+        hours, minutes, whole, milli = (int(part) for part in parts)
+        return hours * 3600 + minutes * 60 + whole + milli / 1000
+
+    cues = [(seconds(row[:4]), seconds(row[4:])) for row in stamps]
+    assert all(end > start for start, end in cues)
+    overlaps = [
+        (cues[index], cues[index + 1])
+        for index in range(len(cues) - 1)
+        if cues[index][1] > cues[index + 1][0]
+    ]
+    assert overlaps == [], f"{len(overlaps)} overlapping cues"
+    assert result.caption_count == len(cues)
+
+
+# --- captions, transitions and ducking as units -----------------------------
+
+
+def test_clamp_caption_ends_stops_a_cue_at_the_next_cues_start():
+    captions = [
+        _Caption(start=0.0, end=2.0, text="one"),
+        _Caption(start=1.5, end=3.0, text="two"),
+        _Caption(start=2.9, end=4.0, text="three"),
+    ]
+
+    clamped = clamp_caption_ends(captions)
+
+    assert [(caption.start, caption.end) for caption in clamped] == [
+        (0.0, 1.5), (1.5, 2.9), (2.9, 4.0),
+    ]
+
+
+def test_clamp_caption_ends_drops_a_cue_squeezed_below_the_readable_minimum():
+    captions = [
+        _Caption(start=0.0, end=2.0, text="one"),
+        _Caption(start=0.05, end=3.0, text="two"),
+        _Caption(start=3.0, end=4.0, text="three"),
+    ]
+
+    clamped = clamp_caption_ends(captions)
+
+    assert [caption.text for caption in clamped] == ["two", "three"]
+
+
+def test_clamp_caption_ends_leaves_non_overlapping_cues_alone():
+    captions = [
+        _Caption(start=0.0, end=1.0, text="one"),
+        _Caption(start=2.0, end=3.0, text="two"),
+    ]
+
+    assert clamp_caption_ends(captions) == captions
+
+
+def test_a_transition_longer_than_the_segment_is_clamped_to_a_third_of_it(
+    tmp_path: Path, make_clip
+):
+    """An unclamped fade would consume the whole segment and deliver black."""
+    source = make_clip("clip.mp4", seconds=2.0)
+    target = tmp_path / "segment.mp4"
+
+    emitted = _cut_delivery_segment(
+        source,
+        TimelineClip(src="clip-01", offset=0.0, dur=1.5, start=0.0, beat="Hook"),
+        (320, 240), 30.0, 0.03, True,
+        transition=10.0, fade_in=True, fade_out=True, dst=target,
+    )
+
+    assert emitted == 2
+    assert probe(target).duration == pytest.approx(1.5, abs=0.1)
+    # The middle of the segment is between the two fades, so it must be at full
+    # strength rather than faded to black.
+    assert _mean_brightness(target, at=0.75) > 20, "the middle of the segment is black"
+    assert _mean_brightness(target, at=0.02) < _mean_brightness(target, at=0.75)
+
+
+def test_no_fade_is_emitted_when_neither_edge_needs_one(tmp_path: Path, make_clip):
+    source = make_clip("clip.mp4", seconds=2.0)
+
+    emitted = _cut_delivery_segment(
+        source,
+        TimelineClip(src="clip-01", offset=0.0, dur=1.0, start=0.0, beat="Hook"),
+        (320, 240), 30.0, 0.03, True,
+        transition=0.25, fade_in=False, fade_out=False, dst=tmp_path / "segment.mp4",
+    )
+
+    assert emitted == 0
 
 
 def test_section_changes_ignores_the_first_clip_and_repeated_beats():

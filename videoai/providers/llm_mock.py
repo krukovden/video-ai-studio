@@ -15,6 +15,7 @@ from pathlib import Path
 # Opening words of each stage's prompt. Matching on the prompt keeps the
 # production `LLMProvider` protocol free of test-only parameters.
 KIND_MARKERS = (
+    ("effects", "You are adding cartoon accents"),
     ("visual", "You are checking frames from segments already chosen"),
     ("inserts", "You are looking at silent visual insert clips"),
     ("plan", "You are assembling a short YouTube video"),

@@ -5,7 +5,10 @@ parakeet-mlx supports chunked transcription (its own CLI defaults to
 values through on every call so long clips stay inside the GPU memory limit."""
 from pathlib import Path
 
+import pytest
+
 from videoai.providers.asr_parakeet import ParakeetASR
+from videoai.providers import asr_parakeet
 
 
 class _FakeSentence:
@@ -49,3 +52,16 @@ def test_transcribe_defaults_match_the_documented_cli_defaults(monkeypatch):
 
     assert fake_model.calls[0]["chunk_duration"] == 120.0
     assert fake_model.calls[0]["overlap_duration"] == 15.0
+
+
+def test_metal_probe_failure_is_a_managed_python_error(monkeypatch):
+    class FailedProbe:
+        returncode = 134
+        stderr = "No Metal device available"
+        stdout = ""
+
+    asr_parakeet._require_usable_metal.cache_clear()
+    monkeypatch.setattr(asr_parakeet.subprocess, "run", lambda *args, **kwargs: FailedProbe())
+
+    with pytest.raises(RuntimeError, match="cannot access a Metal device"):
+        asr_parakeet._require_usable_metal()

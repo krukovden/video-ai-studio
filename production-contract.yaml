@@ -1,0 +1,34 @@
+# Every rule below is measured against the file that was actually written, by
+# videoai/logic/contract.py. Nothing is attested. A rule this repository cannot
+# check does not belong here.
+version: 1
+
+required_output:
+  width: 1920
+  height: 1080
+  # Decoded end to end with `ffmpeg -v error -f null -` before the report is written.
+  full_decode: true
+
+required_features:
+  intro: true
+  outro: true
+  # Counts, not flags: how many lower thirds, caption cues and emitted
+  # fade/dissolve filters the render actually produced. Zero fails.
+  section_titles: true
+  captions: true
+  transitions: true
+  music: true
+  # Measured: the speech-window RMS of the music bed with sidechain ducking
+  # against the same bed without it.
+  music_ducking:
+    minimum_db: 3.0
+  closing_beat: true
+
+quality:
+  source: originals
+  maximum_lossy_video_generations: 1
+
+failure_policy:
+  # A degraded render is never called final.mp4; it is written under this name and
+  # its missing features are recorded in the stage artifact.
+  fallback_output_name: preview-fallback.mp4

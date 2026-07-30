@@ -149,11 +149,46 @@ def _has_videotoolbox_encoder() -> bool:
     return "h264_videotoolbox" in result.stdout
 
 
+@cache
+def _videotoolbox_operational() -> bool:
+    """Whether VideoToolbox can create an encoding session right now.
+
+    Listing an encoder only proves that ffmpeg was compiled with it. In headless
+    sessions, CI, screen sharing, or while the media engine is busy, macOS may
+    still refuse to create a compression session. A one-frame probe is cheap and
+    prevents every real encode from failing just because the encoder was listed.
+    """
+    if not _has_videotoolbox_encoder():
+        return False
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1",
+            "-frames:v", "1", "-c:v", "h264_videotoolbox",
+            "-f", "null", "-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def videotoolbox_available() -> bool:
-    """True when this build can hand H.264 encoding — and HEVC decoding — to the
-    Apple media engine. One check covers both: `--enable-videotoolbox` brings in
-    the hwaccel and the encoder together."""
-    return _has_videotoolbox_encoder()
+    """True when this build and the current session can use VideoToolbox."""
+    return _videotoolbox_operational()
+
+
+@cache
+def filter_available(name: str) -> bool:
+    """Whether this ffmpeg build exposes a named audio/video filter."""
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True
+    )
+    return any(
+        line.split()[1:2] == [name]
+        for line in result.stdout.splitlines()
+        if line.strip() and not line.lstrip().startswith("-")
+    )
 
 
 # libx264 counts quality in quantiser steps (0 lossless .. 51 unwatchable);
@@ -169,7 +204,7 @@ def h264_encode_args(crf: int, hardware: bool) -> list[str]:
     is preferred when the caller allows it and the build has it; `-b:v 0` is what
     puts it in constant-quality mode rather than its default bitrate target.
     """
-    if hardware and _has_videotoolbox_encoder():
+    if hardware and videotoolbox_available():
         quality = max(1, min(100, round((QP_RANGE - crf) / QP_RANGE * 100)))
         return ["-c:v", "h264_videotoolbox", "-q:v", str(quality), "-b:v", "0"]
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf)]
@@ -182,7 +217,7 @@ def hardware_decode_args() -> list[str]:
     every filter downstream — including the rotation ffmpeg inserts itself —
     behaves identically.
     """
-    return ["-hwaccel", "videotoolbox"] if _has_videotoolbox_encoder() else []
+    return ["-hwaccel", "videotoolbox"] if videotoolbox_available() else []
 
 
 def _run_ffmpeg_to(args: list[str], dst: Path) -> None:
@@ -226,7 +261,7 @@ def make_proxy(src: Path, dst: Path, height: int) -> None:
     build supports it; software encoding is minutes per clip instead of seconds.
     """
     scale = f"scale=-2:{height}"
-    if _has_videotoolbox_encoder():
+    if videotoolbox_available():
         args = [
             "-hwaccel", "videotoolbox", "-i", str(src),
             "-vf", scale,
