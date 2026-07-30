@@ -72,7 +72,11 @@ Running the pipeline creates two more folders next to the brief:
   (audio, proxies, keyframes, rendered segments). Safe to delete entirely;
   everything rebuilds from the source clips.
 - `output/` — the review draft, contract-validated `final.mp4`, captions,
-  metadata, and the machine-readable production report.
+  metadata, and the machine-readable production report. Root always holds the
+  latest of each; every `run` or `produce` that actually executes a stage also
+  archives that snapshot into `output/<DD_Mon_HH_MM>/` (e.g. `output/30_Jul_08_15/`)
+  before returning, so a re-run's overwrite never erases the only copy of a
+  previous `final.mp4`. Set `output_snapshots: false` to turn this off.
 
 ## Running it
 

@@ -1,8 +1,11 @@
+import os
+from datetime import datetime
 from pathlib import Path
 
 import docx
+import pytest
 
-from videoai.core.project import read_brief, resolve_clip_dir
+from videoai.core.project import read_brief, resolve_clip_dir, snapshot_output
 
 
 def test_resolve_clip_dir_prefers_input(tmp_path: Path):
@@ -189,3 +192,101 @@ def test_subfolder_named_main_merges_with_loose_clips(tmp_path: Path, make_clip)
 
     assert list(cameras) == ["main"]
     assert sorted(path.name for path in cameras["main"]) == ["a.mp4", "b.mp4"]
+
+
+# --- Per-run output snapshots: history for a folder that a re-run overwrites ---
+
+
+def test_snapshot_output_returns_none_when_nothing_to_archive(tmp_path: Path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    assert snapshot_output(output_dir) is None
+    assert list(output_dir.iterdir()) == []
+
+
+def test_snapshot_output_names_the_folder_from_the_injected_timestamp(tmp_path: Path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "final.mp4").write_bytes(b"final")
+    (output_dir / "final.srt").write_text("1\n", encoding="utf-8")
+
+    snapshot = snapshot_output(output_dir, now=datetime(2026, 8, 11, 15, 1))
+
+    assert snapshot == output_dir / "11_Aug_15_01"
+    assert sorted(path.name for path in snapshot.iterdir()) == ["final.mp4", "final.srt"]
+    assert (snapshot / "final.mp4").read_bytes() == b"final"
+
+
+def test_snapshot_output_hardlinks_rather_than_copies(tmp_path: Path):
+    """Zero extra disk for unchanged content: the snapshot file and the root file
+    must be the same inode, not a duplicate. Some filesystems refuse hardlinks
+    (notably networked or exotic ones); this test's own tmp_path is a normal local
+    filesystem, but the assertion is skipped rather than failed if that ever
+    changes underneath it, since the fallback copy is correct behavior there too."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    source = output_dir / "final.mp4"
+    source.write_bytes(b"final")
+
+    snapshot = snapshot_output(output_dir, now=datetime(2026, 8, 11, 15, 1))
+
+    linked = snapshot / "final.mp4"
+    if source.stat().st_ino != linked.stat().st_ino:
+        pytest.skip("filesystem does not preserve hardlink identity here")
+    assert source.stat().st_ino == linked.stat().st_ino
+
+
+def test_snapshot_output_falls_back_to_copy_when_linking_fails(tmp_path: Path, monkeypatch):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "final.mp4").write_bytes(b"final")
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("cross-device link")
+
+    monkeypatch.setattr(os, "link", _refuse)
+
+    snapshot = snapshot_output(output_dir, now=datetime(2026, 8, 11, 15, 1))
+
+    assert (snapshot / "final.mp4").read_bytes() == b"final"
+
+
+def test_snapshot_output_second_call_in_the_same_minute_gets_suffixed(tmp_path: Path):
+    """Two runs inside the same minute must not collide on one folder name."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "final.mp4").write_bytes(b"v1")
+    when = datetime(2026, 8, 11, 15, 1)
+
+    first = snapshot_output(output_dir, now=when)
+    second = snapshot_output(output_dir, now=when)
+    third = snapshot_output(output_dir, now=when)
+
+    assert first == output_dir / "11_Aug_15_01"
+    assert second == output_dir / "11_Aug_15_01_2"
+    assert third == output_dir / "11_Aug_15_01_3"
+    assert (first / "final.mp4").is_file()
+    assert (second / "final.mp4").is_file()
+    assert (third / "final.mp4").is_file()
+
+
+def test_snapshot_output_never_recurses_into_an_existing_snapshot(tmp_path: Path):
+    """History is bookkeeping, not content: an earlier snapshot folder sitting in
+    output/ must never itself be picked up as a root-level file, nor have its
+    contents duplicated into the new snapshot."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "final.mp4").write_bytes(b"v2")
+    older = output_dir / "11_Aug_15_01"
+    older.mkdir()
+    (older / "final.mp4").write_bytes(b"v1")
+
+    snapshot = snapshot_output(output_dir, now=datetime(2026, 8, 11, 15, 2))
+
+    assert snapshot == output_dir / "11_Aug_15_02"
+    assert [path.name for path in snapshot.iterdir()] == ["final.mp4"]
+    assert (snapshot / "final.mp4").read_bytes() == b"v2"
+    # The older snapshot itself is untouched, not nested inside the new one.
+    assert (older / "final.mp4").read_bytes() == b"v1"
+    assert not (snapshot / "11_Aug_15_01").exists()

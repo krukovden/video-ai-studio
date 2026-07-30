@@ -141,6 +141,11 @@ class Config(BaseModel):
     plan: PlanSettings = PlanSettings()
     effects: EffectsSettings = EffectsSettings()
     polish: PolishSettings = PolishSettings()
+    # Archive output/'s deliverables into a timestamped subfolder after a run
+    # that actually executed something, so a re-run's overwrite never erases the
+    # only copy of a previous final.mp4. Bookkeeping, not pipeline content: no
+    # stage's fingerprint depends on this setting.
+    output_snapshots: bool = True
 
     @model_validator(mode="after")
     def _check_provider_keys(self) -> "Config":
@@ -167,4 +172,5 @@ def load_config(path: Path | None = None) -> Config:
         plan=PlanSettings(**(raw.get("plan") or {})),
         effects=EffectsSettings(**(raw.get("effects") or {})),
         polish=PolishSettings(**(raw.get("polish") or {})),
+        output_snapshots=raw.get("output_snapshots", defaults.output_snapshots),
     )

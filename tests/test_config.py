@@ -90,3 +90,15 @@ def test_load_config_overrides_insert_threshold(tmp_path: Path):
     path.write_text("analyze:\n  insert_max_words_per_second: 0.2\n", encoding="utf-8")
     config = load_config(path)
     assert config.analyze.insert_max_words_per_second == 0.2
+
+
+def test_load_config_default_output_snapshots_is_on(tmp_path: Path):
+    config = load_config(tmp_path / "nope.yaml")
+    assert config.output_snapshots is True
+
+
+def test_load_config_overrides_output_snapshots(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    path.write_text("output_snapshots: false\n", encoding="utf-8")
+    config = load_config(path)
+    assert config.output_snapshots is False

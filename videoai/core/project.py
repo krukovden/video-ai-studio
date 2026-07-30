@@ -5,6 +5,9 @@ in `input/` or `video/`, and the brief is whatever prose lives in `description/`
 """
 from __future__ import annotations
 
+import os
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 BRIEF_SUFFIXES = {".md", ".txt", ".docx"}
@@ -70,6 +73,40 @@ def _read_one(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         return f"[could not read {path.name}]"
+
+
+def snapshot_output(output_dir: Path, now: datetime | None = None) -> Path | None:
+    """Archive output/'s current deliverables into a timestamped subfolder.
+
+    Only regular files sitting directly in `output_dir` are snapshotted — existing
+    timestamped folders (and any other subdirectory) are never touched or
+    recursed into, so history never becomes part of itself. Returns None (and
+    creates nothing) when `output_dir` holds no files, since a "nothing to do"
+    run must leave no trace.
+
+    Linked with `os.link` so an unchanged file costs no extra disk on a
+    copy-on-write filesystem (APFS); a plain copy is the fallback when linking
+    fails, e.g. the two paths are on different devices.
+    """
+    files = sorted(path for path in output_dir.iterdir() if path.is_file())
+    if not files:
+        return None
+
+    stamp = (now or datetime.now()).strftime("%d_%b_%H_%M")
+    target = output_dir / stamp
+    suffix = 2
+    while target.exists():
+        target = output_dir / f"{stamp}_{suffix}"
+        suffix += 1
+    target.mkdir(parents=True)
+
+    for source in files:
+        dest = target / source.name
+        try:
+            os.link(source, dest)
+        except OSError:
+            shutil.copy2(source, dest)
+    return target
 
 
 def read_brief(project_dir: Path) -> str:

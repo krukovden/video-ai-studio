@@ -9,7 +9,7 @@ import typer
 import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import load_config
 from videoai.core.models import Approval, DraftResult, FinalResult
-from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir
+from videoai.core.project import BRIEF_SUFFIXES, list_camera_clips, resolve_clip_dir, snapshot_output
 from videoai.core.registry import StageContext
 from videoai.core.runner import StageFailure, ordered_stages, run_pipeline, stale_downstream
 from videoai.core.store import ArtifactStore, hash_file, hash_parts
@@ -45,6 +45,19 @@ def _report_stage_failure(
         raise failure
     typer.echo("Run again with --debug for the full traceback.", err=True)
     raise typer.Exit(1) from failure
+
+
+def _snapshot_if_executed(ctx: StageContext, project: Path, executed: bool) -> None:
+    """Archive output/ into a timestamped subfolder after a run that changed
+    something. A "nothing to do" run (executed is falsy) must leave no trace,
+    which is why the caller decides whether anything ran, not this function."""
+    if not executed or not ctx.config.output_snapshots:
+        return
+    snapshot_dir = snapshot_output(ctx.output_dir)
+    if snapshot_dir is None:
+        return
+    count = sum(1 for path in snapshot_dir.iterdir() if path.is_file())
+    typer.echo(f"Snapshot: {snapshot_dir.relative_to(project)}/ ({count} files)")
 
 
 def _media_fingerprint(project_dir: Path) -> str:
@@ -157,6 +170,7 @@ def run(
         typer.echo("Executed: " + ", ".join(executed))
     else:
         typer.echo("Nothing to do — every stage is up to date.")
+    _snapshot_if_executed(ctx, project, bool(executed))
 
     if stage_id is not None:
         stale = stale_downstream(ctx, stage_id, media_fingerprint, brief_fingerprint)
@@ -274,6 +288,7 @@ def produce(
         _report_stage_failure(failure, project, config_path, debug)
     if executed:
         typer.echo("Prepared review draft: " + ", ".join(executed))
+    draft_executed = bool(executed)
 
     draft = ctx.store.read("06-draft", DraftResult)
     try:
@@ -284,6 +299,7 @@ def produce(
         typer.echo(
             f"Then approve: videoai approve {project} --config {config_path}"
         )
+        _snapshot_if_executed(ctx, project, draft_executed)
         return
 
     try:
@@ -299,6 +315,7 @@ def produce(
         raise typer.BadParameter("final artifact did not pass the production contract")
     typer.echo("Production passed: " + result.path)
     typer.echo("Report: " + result.production_report)
+    _snapshot_if_executed(ctx, project, draft_executed or bool(executed))
 
 
 @app.command()

@@ -1,8 +1,10 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 from typer.testing import CliRunner
 
+import videoai.core.project as project_module
 from videoai.cli import app
 
 runner = CliRunner()
@@ -765,3 +767,105 @@ def test_auto_fix_gives_up_after_its_cap_and_names_what_it_dropped(
     # Both rounds' rejections survive, so a later run is not offered either shot.
     rejected = json.loads((project / "work" / "05c-rejected.json").read_text(encoding="utf-8"))
     assert rejected["phrase_ids"] == ["clip-01#002", "clip-01#001"]
+
+
+# --- Per-run output snapshots: a re-run must not silently erase the previous
+# final.mp4 with no history ---
+
+
+class _FrozenClock:
+    """Stands in for `datetime` inside `videoai.core.project`. The CLI itself has
+    no `--now` knob (there is no legitimate reason a creator would want one), so
+    freezing the clock the module reads is the only way to pin the snapshot
+    folder's name from an end-to-end test."""
+
+    def __init__(self, value: datetime) -> None:
+        self._value = value
+
+    def now(self) -> datetime:
+        return self._value
+
+
+def _seed_snapshot_project(tmp_path: Path, make_clip, monkeypatch) -> tuple[Path, Path]:
+    project = tmp_path / "project"
+    (project / "input").mkdir(parents=True)
+    make_clip("a.mp4", seconds=6.0).rename(project / "input" / "a.mp4")
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(MOCK_CONFIG, encoding="utf-8")
+    llm_path = tmp_path / "llm.json"
+    llm_path.write_text(json.dumps({
+        "segments": [{"phrase_id": "clip-01#001", "content": "intro", "delivery_score": 9,
+                      "visual_score": 8, "emotion": "excited", "is_failed_take": False,
+                      "shorts_candidate": False}],
+        "visual": _clean_visual(2),
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "open", "phrase_ids": ["clip-01#001"]}],
+    }), encoding="utf-8")
+    monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm_path))
+
+    runner.invoke(app, ["run", str(project), "--config", str(config_path), "--stage", "ingest"])
+    _write_words(project, "clip-01", [{"text": "hello", "start": 0.5, "end": 0.9},
+                                      {"text": "everyone", "start": 0.95, "end": 1.5}])
+    return project, config_path
+
+
+def test_full_run_snapshots_output_with_the_owners_naming(tmp_path: Path, make_clip, monkeypatch):
+    project, config_path = _seed_snapshot_project(tmp_path, make_clip, monkeypatch)
+    monkeypatch.setattr(project_module, "datetime", _FrozenClock(datetime(2026, 8, 11, 15, 1)))
+
+    result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    output_dir = project / "output"
+    snapshot = output_dir / "11_Aug_15_01"
+    assert snapshot.is_dir()
+    root_files = {p.name for p in output_dir.iterdir() if p.is_file()}
+    snapshot_files = {p.name for p in snapshot.iterdir() if p.is_file()}
+    assert root_files == snapshot_files
+    assert root_files  # the mock run actually produced deliverables to archive
+    assert f"Snapshot: output/11_Aug_15_01/ ({len(root_files)} files)" in result.output
+
+
+def test_second_run_in_the_same_minute_gets_a_suffixed_snapshot(tmp_path: Path, make_clip, monkeypatch):
+    project, config_path = _seed_snapshot_project(tmp_path, make_clip, monkeypatch)
+    monkeypatch.setattr(project_module, "datetime", _FrozenClock(datetime(2026, 8, 11, 15, 1)))
+
+    first = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert first.exit_code == 0, first.output
+    assert (project / "output" / "11_Aug_15_01").is_dir()
+
+    # --force so the second invocation, inside the same frozen minute, actually
+    # re-executes stages rather than reporting "nothing to do".
+    second = runner.invoke(app, ["run", str(project), "--config", str(config_path), "--force"])
+
+    assert second.exit_code == 0, second.output
+    assert (project / "output" / "11_Aug_15_01_2").is_dir()
+
+
+def test_nothing_to_do_run_creates_no_snapshot(tmp_path: Path, make_clip, monkeypatch):
+    project, config_path = _seed_snapshot_project(tmp_path, make_clip, monkeypatch)
+
+    first = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+    assert first.exit_code == 0, first.output
+    before = {p.name for p in (project / "output").iterdir() if p.is_dir()}
+    assert before  # the first run did archive something
+
+    second = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+
+    assert second.exit_code == 0, second.output
+    assert "nothing to do" in second.output.lower()
+    assert "Snapshot:" not in second.output
+    after = {p.name for p in (project / "output").iterdir() if p.is_dir()}
+    assert after == before
+
+
+def test_output_snapshots_false_disables_archiving(tmp_path: Path, make_clip, monkeypatch):
+    project, config_path = _seed_snapshot_project(tmp_path, make_clip, monkeypatch)
+    config_path.write_text(MOCK_CONFIG + "output_snapshots: false\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Snapshot:" not in result.output
+    assert [p for p in (project / "output").iterdir() if p.is_dir()] == []
