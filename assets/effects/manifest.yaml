@@ -1,36 +1,3 @@
-# The cartoon-effects sprite library.
-#
-# Every entry is one RGBA PNG in this directory plus the metadata the pipeline
-# needs to choose it, place it and animate it:
-#
-#   name             what the placement stage calls it; the LLM must use it exactly
-#   file             the RGBA PNG, in this directory
-#   tags             what it expresses, as words a story can be matched against
-#   expresses        one sentence shown to the model instead of the picture
-#   anchor           which point of the sprite lands on the grid cell's point
-#                    (center | top | bottom | left | right)
-#   default_seconds  how long one event of it runs
-#   animation        a built-in motion the compositor implements:
-#                    pop-in | pulse | shake | drift-up | none
-#   nine_patch       present only for a sprite stretched around dynamic text
-#
-# THE DRAWINGS ARE SEEDS, NOT THE POINT. Everything here was drawn procedurally
-# with Pillow (`videoai/logic/effect_seeds.py`, re-runnable with
-# `uv run videoai seed-effects`) so that the effects stage works with zero API
-# calls and zero subscriptions. ANY entry can be replaced by a better PNG — for
-# example one generated with OpenAI's image model — by dropping a file with the
-# SAME NAME into this directory. Nothing else changes: the manifest, the
-# placement stage and the compositor never look at the pixels. Replacing a file
-# re-renders the delivery (the library's content is in the polish stage's
-# fingerprint) and does not re-plan the effects.
-#
-# docs/EFFECTS-LIBRARY.md has the prompt template, the cut-out steps and the
-# size and transparency requirements.
-#
-# A replacement must be: RGBA with a genuinely transparent background, square-ish
-# and at least 512px on its long edge, and free of text (text belongs in the
-# nine-patch bubble, where the pipeline renders it in the video's own typeface).
-
 sprites:
 - name: comic_starburst
   file: comic_starburst.png
@@ -118,3 +85,215 @@ sprites:
     text_right: 34
     text_bottom: 170
     max_lines: 3
+- name: badge_boom
+  file: badge_boom.png
+  tags:
+  - impact
+  - pop
+  - burst
+  - hit
+  - explode
+  expresses: something burst, popped or landed hard, right now
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_sparkles
+  file: badge_sparkles.png
+  tags:
+  - sparkle
+  - clean
+  - reveal
+  - shiny
+  - magic
+  expresses: a clean reveal, or something turning out beautifully
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_party
+  file: badge_party.png
+  tags:
+  - celebrate
+  - finished
+  - success
+  - done
+  - win
+  expresses: a finished build or a moment worth celebrating
+  anchor: center
+  default_seconds: 1.4
+  animation: drift-up
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_confetti
+  file: badge_confetti.png
+  tags:
+  - celebrate
+  - party
+  - success
+  - ending
+  expresses: a cheerful sign-off or a small triumph
+  anchor: center
+  default_seconds: 1.4
+  animation: drift-up
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_splash
+  file: badge_splash.png
+  tags:
+  - liquid
+  - squirt
+  - splash
+  - wet
+  - squeeze
+  expresses: liquid squirting, splashing or being squeezed out
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_fire
+  file: badge_fire.png
+  tags:
+  - cool
+  - intense
+  - hot
+  - impressive
+  expresses: this bit is genuinely impressive or intense
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_star
+  file: badge_star.png
+  tags:
+  - great
+  - favourite
+  - best
+  - highlight
+  expresses: the best moment of a section, or a clear favourite
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_eyes
+  file: badge_eyes.png
+  tags:
+  - look
+  - watch
+  - attention
+  - closer
+  - notice
+  expresses: look closely at this — attention on the thing itself
+  anchor: center
+  default_seconds: 0.9
+  animation: pulse
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_shock
+  file: badge_shock.png
+  tags:
+  - shock
+  - surprise
+  - scared
+  - sudden
+  expresses: a genuine shock or a startled reaction
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_mindblown
+  file: badge_mindblown.png
+  tags:
+  - amazed
+  - wow
+  - unexpected
+  - disbelief
+  expresses: amazement — something worked far better than expected
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_laugh
+  file: badge_laugh.png
+  tags:
+  - funny
+  - laugh
+  - joke
+  - silly
+  expresses: a genuinely funny moment or an aside that lands
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_love
+  file: badge_love.png
+  tags:
+  - love
+  - delight
+  - favourite
+  - adore
+  expresses: delight — the presenter clearly loves this
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_clap
+  file: badge_clap.png
+  tags:
+  - well done
+  - applause
+  - achievement
+  expresses: an achievement worth applauding
+  anchor: center
+  default_seconds: 0.9
+  animation: shake
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_thumbsup
+  file: badge_thumbsup.png
+  tags:
+  - approve
+  - good
+  - verdict
+  - recommend
+  expresses: approval, or a positive verdict
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_question
+  file: badge_question.png
+  tags:
+  - curious
+  - unsure
+  - what
+  - mystery
+  expresses: curiosity or genuine uncertainty about what happens next
+  anchor: center
+  default_seconds: 0.9
+  animation: shake
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- name: badge_yuck
+  file: badge_yuck.png
+  tags:
+  - gross
+  - yuck
+  - disgust
+  - messy
+  expresses: something satisfyingly gross or messy
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
+    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).

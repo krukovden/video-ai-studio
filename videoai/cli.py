@@ -515,3 +515,54 @@ def _clip_at(timeline, at_seconds: float):
             return clip, clip.offset + (at_seconds - clock)
         clock += clip.dur
     return None, 0.0
+
+
+@app.command("fetch-badges")
+def fetch_badges(
+    library: Path = typer.Option(
+        None, "--library",
+        help="Where the sprite library lives (default: the packaged assets/effects)",
+    ),
+) -> None:
+    """Download the badge set and add it to the sprite library.
+
+    Run once. The drawings are fetched from Twemoji, rasterised to a size the
+    compositor never has to upscale, and written into the library's manifest with
+    the credit their licence requires attached to each one.
+    """
+    import yaml
+
+    from videoai.logic.badges import BADGES, manifest_entry, rasterise_badge
+    from videoai.logic.effects import default_library_dir, manifest_path
+
+    directory = library or default_library_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    path = manifest_path(directory)
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    sprites = list(document.get("sprites") or [])
+    known = {entry.get("name") for entry in sprites}
+
+    added, refreshed = 0, 0
+    for badge in BADGES:
+        target = directory / f"{badge.name}.png"
+        try:
+            target.write_bytes(rasterise_badge(badge.code))
+        except Exception as error:  # noqa: BLE001 - reported, not swallowed
+            typer.echo(f"  {badge.name}: could not fetch ({error})", err=True)
+            continue
+        entry = manifest_entry(badge)
+        if badge.name in known:
+            sprites = [entry if item.get("name") == badge.name else item for item in sprites]
+            refreshed += 1
+        else:
+            sprites.append(entry)
+            added += 1
+
+    document["sprites"] = sprites
+    path.write_text(yaml.safe_dump(document, sort_keys=False, allow_unicode=True),
+                    encoding="utf-8")
+    typer.echo(f"Badges: {added} added, {refreshed} refreshed, in {directory}")
+    typer.echo(
+        "Their licence needs a credit, which is attached to each sprite and is "
+        "written into output/metadata.md only when one of them is actually used."
+    )

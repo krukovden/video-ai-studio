@@ -3,6 +3,10 @@ name = "videoai"
 version = "0.1.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    # Rasterises the badge SVGs. Needed only by `videoai fetch-badges`, which is
+    # run once to build the sprite library, and it needs Homebrew's cairo
+    # (`brew install cairo`) — macOS ships no rasteriser that keeps transparency.
+    "cairosvg>=2.7",
     "numpy>=2.1",
     "opencv-python-headless>=4.10",
     "opentimelineio>=0.18.1",

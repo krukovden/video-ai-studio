@@ -101,6 +101,11 @@ class Sprite(BaseModel):
     default_seconds: float = 0.8
     animation: str = "none"
     nine_patch: NinePatch | None = None
+    # The credit this drawing's licence requires, empty when it needs none. Kept
+    # on the sprite rather than in a global list so a video carries only the
+    # credits for the art it actually used: a notice for something that is not
+    # in the video is noise, and noise is how a real obligation gets ignored.
+    attribution: str = ""
 
     @field_validator("animation")
     @classmethod

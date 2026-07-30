@@ -431,6 +431,26 @@ def duck_ratio(duck_db: float) -> float:
     return max(1.0, min(20.0, 1.0 / (1.0 - reduction / SPEECH_OVERSHOOT_DB)))
 
 
+def sprite_attributions(names: list[str], library: EffectLibrary) -> list[str]:
+    """The credits owed by the artwork actually used, each one only once.
+
+    Kept to what reached the picture: a notice for a badge the video does not
+    contain is noise, and a licence file full of noise is one nobody reads — so
+    the obligation that IS real gets ignored along with it.
+    """
+    lines: list[str] = []
+    for name in names:
+        try:
+            sprite = library.get(name)
+        except (KeyError, ValueError):
+            # A name the library no longer has cannot owe a credit; the render
+            # itself will have already refused to draw it.
+            continue
+        if sprite.attribution and sprite.attribution not in lines:
+            lines.append(sprite.attribution)
+    return lines
+
+
 def write_attribution(output_dir: Path, line: str) -> bool:
     """Append the credit to output/metadata.md. True when it was actually added.
 
@@ -1478,6 +1498,9 @@ def polish(ctx: StageContext) -> FinalResult:
         attribution = attribution_line(track)
         if attribution:
             write_attribution(ctx.output_dir, attribution)
+        # The artwork's own licences, for the accents that reached the picture.
+        for credit in sprite_attributions([item.name for item in effect_overlays], library):
+            write_attribution(ctx.output_dir, credit)
 
         # What the accents were, on the delivery's own clock. Recorded outside
         # `features` on purpose: the contract's required features are the
