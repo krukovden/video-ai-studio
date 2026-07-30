@@ -158,6 +158,10 @@ _PAGE = """<!doctype html>
   button:disabled { opacity:.4; cursor:default; }
   button:not(:disabled):hover { filter:brightness(1.15); }
   .count { color:var(--muted); }
+  .warn-box { margin:12px 0 0; padding:10px 13px; border-radius:8px; max-width:72ch;
+              background:#2a2113; border:1px solid #6b5320; color:#ffd79a; }
+  .warn-box code { background:#00000040; padding:1px 5px; border-radius:4px; }
+  .restored { background:#132a1c; border-color:#2c6b46; color:#9ae6bb; }
   .scene { display:grid; grid-template-columns:minmax(340px,1.9fr) 1fr; gap:22px;
            padding:22px 28px; border-bottom:1px solid var(--line); }
   @media (max-width:900px){ .scene { grid-template-columns:1fr; } }
@@ -193,12 +197,16 @@ _PAGE = """<!doctype html>
   <h1>Approve effects — __TITLE__</h1>
   <p class="lede"><b>Untick</b> to drop an accent, <b>drag</b> it where it belongs,
   or <b>swap</b> it from the list. The green target is where the picture is actually
-  moving at that moment. Nothing renders until you send the decisions back.</p>
+  moving at that moment.</p>
+  <p class="warn-box" id="handoff"><b>Your edits stay in this browser.</b> They are
+  saved here automatically and survive a refresh — but nothing reaches the video
+  until you press <b>Copy as text</b> and paste it back, or <b>Download decisions</b>
+  and run <code>videoai apply-effects</code>.</p>
   <div class="bar">
     <button class="primary" onclick="save()">Download decisions</button>
     <button onclick="copyOut()">Copy as text</button>
     <button onclick="snapAll()">Snap all to motion</button>
-    <button onclick="location.reload()">Reset</button>
+    <button onclick="if(confirm('Throw away your changes?')){localStorage.removeItem(SAVE_KEY);location.reload();}">Reset</button>
     <span class="count" id="count"></span>
   </div>
   <textarea id="out" readonly></textarea>
@@ -211,6 +219,39 @@ const DATA = __DATA__;
 // fraction of its WIDTH, so converting between them needs the frame's shape.
 const FRAME_ASPECT = DATA.length ? (DATA[0].frame_h / DATA[0].frame_w) : (9 / 16);
 const state = DATA.map(d => ({...d, x0:d.x, y0:d.y, name0:d.name}));
+
+// The browser will not let this page write to disk, so every edit is kept in
+// localStorage instead. Without it a refresh, a closed tab or a regenerated
+// page threw away everything the creator had done — which is exactly what
+// happened the first time somebody used this in anger.
+const SAVE_KEY = 'videoai-effects-' + (DATA.length ? DATA[0].at : 'empty');
+
+function persist() {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(
+      state.map(s => ({index:s.index, keep:s.keep, name:s.name, x:s.x, y:s.y, w:s.w, h:s.h}))
+    ));
+  } catch (e) {}
+}
+
+function restore() {
+  // True when there was anything saved to come back to. Deliberately not "does
+  // it differ from the proposal": the creator wants to know their work survived,
+  // and re-deciding to keep exactly what was proposed is still their decision.
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+    if (!Array.isArray(saved) || !saved.length) return false;
+    saved.forEach(row => {
+      const s = state.find(item => item.index === row.index);
+      if (!s) return;
+      s.keep = row.keep; s.name = row.name;
+      s.x = row.x; s.y = row.y; s.w = row.w; s.h = row.h;
+    });
+    return true;
+  } catch (e) { return false; }
+}
+
+const RESTORED = restore();
 
 function el(tag, cls, inner) {
   const n = document.createElement(tag);
@@ -237,11 +278,14 @@ function build() {
 
     const sprite = el('div', 'sprite');
     sprite.id = 'sprite' + i;
+    // A restored swap has to show the restored drawing, not the proposed one.
+    const restoredSprite = SPRITES.find(sp => sp.name === s.name);
     sprite.style.width = (s.w * 100) + '%';
     sprite.style.left = (s.x * 100) + '%';
     sprite.style.top = (s.y * 100) + '%';
     const img = el('img');
-    img.src = 'data:image/png;base64,' + s.sprite;
+    img.src = 'data:image/png;base64,' +
+              (restoredSprite && s.name !== s.name0 ? restoredSprite.data : s.sprite);
     sprite.append(img);
     stage.append(sprite);
     makeDraggable(sprite, stage, i);
@@ -377,6 +421,7 @@ function decisions() {
 }
 
 function refresh() {
+  persist();
   const kept = state.filter(s => s.keep).length;
   document.getElementById('count').textContent =
     kept + ' of ' + state.length + ' kept · ' +
@@ -404,6 +449,13 @@ function copyOut() {
 }
 
 build();
+if (RESTORED) {
+  const box = document.getElementById('handoff');
+  box.className = 'warn-box restored';
+  box.innerHTML = '<b>Your earlier edits were restored</b> from this browser. ' +
+    'They still have to be sent back: press <b>Copy as text</b> and paste them, ' +
+    'or <b>Download decisions</b> and run <code>videoai apply-effects</code>.';
+}
 </script>
 </body></html>
 """
