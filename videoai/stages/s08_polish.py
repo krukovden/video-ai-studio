@@ -46,6 +46,8 @@ from videoai.core.ffmpeg import (
 )
 from videoai.core.models import (
     DraftResult,
+    EffectEvent,
+    EffectPlan,
     FinalResult,
     Manifest,
     StoryPlan,
@@ -57,6 +59,17 @@ from videoai.core.models import (
 from videoai.core.registry import StageContext, stage
 from videoai.core.text import render_text_image
 from videoai.core.store import hash_file, hash_parts
+from videoai.logic.effects import (
+    EffectLibrary,
+    SpriteTransform,
+    animation_transform,
+    bubble_max_width,
+    library_fingerprint,
+    load_library,
+    place_sprite,
+    render_speech_bubble,
+    sprite_target_height,
+)
 from videoai.logic.music import attribution_line, list_tracks, select_track
 from videoai.logic.contract import (
     contract_hash,
@@ -121,6 +134,24 @@ class _Caption:
     start: float
     end: float
     text: str
+
+
+@dataclass(frozen=True)
+class _EffectOverlay:
+    """One cartoon accent, resolved onto the delivery clock and ready to draw.
+
+    `image` is the sprite at its resting size — already stretched around its text
+    if it is a nine-patch, already scaled if it is not — so the frame loop only has
+    to apply the animation curve.
+    """
+
+    name: str
+    start: float
+    duration: float
+    cell: str
+    anchor: str
+    animation: str
+    image: object
 
 
 @dataclass(frozen=True)
@@ -631,25 +662,30 @@ def _concat_copy(parts: list[Path], work_dir: Path, dst: Path) -> None:
     )
 
 
-def _blend(canvas, overlay, y: int) -> None:
-    """Composite one horizontally centred RGBA strip onto an RGBA canvas.
+def _blend_at(canvas, overlay, x: int, y: int) -> None:
+    """Composite an RGBA overlay onto an RGBA canvas at `(x, y)`, clipping edges.
 
     Alpha compositing rather than assignment: a strip is only partly opaque (a
     semi-transparent plate with hard glyphs on it), and two strips can overlap in
     time, so writing the pixels straight in would punch a rectangular hole in
     whatever was already there and hand ffmpeg the plate's alpha as if it were the
     text's.
+
+    Negative positions are clipped rather than refused: a cartoon accent is placed
+    by an anchor point and scaled per frame, so a large sprite in a corner cell can
+    legitimately want to start off the edge of the frame.
     """
     import numpy as np
 
     height, width = canvas.shape[:2]
-    x = max(0, (width - overlay.shape[1]) // 2)
-    bottom = min(height, y + overlay.shape[0])
+    left = max(0, x)
+    top = max(0, y)
     right = min(width, x + overlay.shape[1])
-    if bottom <= y or right <= x:
+    bottom = min(height, y + overlay.shape[0])
+    if bottom <= top or right <= left:
         return
-    source = overlay[: bottom - y, : right - x].astype(np.float32)
-    target = canvas[y:bottom, x:right].astype(np.float32)
+    source = overlay[top - y : bottom - y, left - x : right - x].astype(np.float32)
+    target = canvas[top:bottom, left:right].astype(np.float32)
     source_alpha = source[:, :, 3:4] / 255.0
     target_alpha = target[:, :, 3:4] / 255.0
     out_alpha = source_alpha + target_alpha * (1.0 - source_alpha)
@@ -658,8 +694,131 @@ def _blend(canvas, overlay, y: int) -> None:
         source[:, :, :3] * source_alpha
         + target[:, :, :3] * target_alpha * (1.0 - source_alpha)
     ) / safe_alpha
-    canvas[y:bottom, x:right, :3] = np.clip(colour, 0, 255).astype(np.uint8)
-    canvas[y:bottom, x:right, 3:4] = np.clip(out_alpha * 255.0, 0, 255).astype(np.uint8)
+    canvas[top:bottom, left:right, :3] = np.clip(colour, 0, 255).astype(np.uint8)
+    canvas[top:bottom, left:right, 3:4] = np.clip(out_alpha * 255.0, 0, 255).astype(np.uint8)
+
+
+def _blend(canvas, overlay, y: int) -> None:
+    """Composite a horizontally centred RGBA strip. Titles and captions are lanes:
+    they span most of the frame's width and are always centred in it."""
+    _blend_at(canvas, overlay, (canvas.shape[1] - overlay.shape[1]) // 2, y)
+
+
+def _sprite_base_image(
+    library: EffectLibrary,
+    event: EffectEvent,
+    frame: tuple[int, int],
+    work_dir: Path,
+    index: int,
+):
+    """The sprite for one event at its final resting size, as an RGBA array.
+
+    A nine-patch is stretched around its text first, so its size comes from the
+    words; every other sprite is scaled to a fraction of the frame's height. The
+    per-frame animation then works from this image, so the overshoot of a pop-in is
+    an overshoot of the size the sprite is meant to end at.
+    """
+    import cv2
+
+    sprite = library.get(event.effect_name)
+    source = library.path_of(sprite)
+    if sprite.nine_patch is not None:
+        target = work_dir / f"effect-{index:02d}-{sprite.name}.png"
+        render_speech_bubble(
+            source,
+            sprite.nine_patch,
+            event.text,
+            bubble_max_width(event.scale, frame[0]),
+            target,
+        )
+        return _load_rgba(target)
+    image = _load_rgba(source)
+    height = sprite_target_height(event.scale, frame[1])
+    width = max(1, round(image.shape[1] * height / max(1, image.shape[0])))
+    return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+
+
+def _transform_sprite(image, transform: SpriteTransform):
+    """One animation frame of a sprite: scaled, rotated, and alpha-scaled.
+
+    Rotation happens on a padded canvas so a shake never clips the sprite's own
+    corners, and the alpha is scaled rather than the colour so a fading accent goes
+    transparent instead of going black.
+    """
+    import cv2
+    import numpy as np
+
+    scale = max(0.01, transform.scale)
+    width = max(1, round(image.shape[1] * scale))
+    height = max(1, round(image.shape[0] * scale))
+    out = cv2.resize(
+        image,
+        (width, height),
+        interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR,
+    )
+    if abs(transform.rotation) > 0.01:
+        pad = max(2, round(max(width, height) * 0.12))
+        out = cv2.copyMakeBorder(
+            out, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(0, 0, 0, 0)
+        )
+        centre = (out.shape[1] / 2, out.shape[0] / 2)
+        matrix = cv2.getRotationMatrix2D(centre, transform.rotation, 1.0)
+        out = cv2.warpAffine(
+            out,
+            matrix,
+            (out.shape[1], out.shape[0]),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0, 0),
+        )
+    alpha = max(0.0, min(1.0, transform.alpha))
+    if alpha < 1.0:
+        out = out.copy()
+        out[:, :, 3] = np.clip(out[:, :, 3].astype(np.float32) * alpha, 0, 255).astype(
+            np.uint8
+        )
+    return out
+
+
+def build_effect_overlays(
+    events: list[EffectEvent],
+    library: EffectLibrary,
+    timeline: Timeline,
+    measured_starts: list[float],
+    intro_offset: float,
+    frame: tuple[int, int],
+    work_dir: Path,
+) -> list[_EffectOverlay]:
+    """Map planned events onto the delivery clock and prepare their sprites.
+
+    The planned time is on the timeline's clock; a rendered segment is a whole
+    number of frames, so by the twentieth cut the delivery has drifted from the
+    plan by more than a frame. The event is therefore placed at the same offset
+    inside the same segment, measured — the identical correction captions get.
+    """
+    planned = cumulative_starts([clip.dur for clip in timeline.clips])
+    overlays: list[_EffectOverlay] = []
+    for index, event in enumerate(events):
+        segment = 0
+        for candidate, start in enumerate(planned):
+            if event.at_seconds + 1e-6 >= start:
+                segment = candidate
+        inside = max(0.0, event.at_seconds - planned[segment])
+        image = _sprite_base_image(library, event, frame, work_dir, index)
+        sprite = library.get(event.effect_name)
+        duration = event.seconds if event.seconds > 0 else sprite.default_seconds
+        overlays.append(
+            _EffectOverlay(
+                name=event.effect_name,
+                start=intro_offset + measured_starts[segment] + inside,
+                duration=max(0.1, duration),
+                cell=event.screen_position,
+                anchor=sprite.anchor,
+                animation=sprite.animation,
+                image=image,
+            )
+        )
+    return overlays
 
 
 def _render_graphics_track(
@@ -670,6 +829,7 @@ def _render_graphics_track(
     captions: list[_Caption],
     titles: list[_TextOverlay],
     work_dir: Path,
+    effects: list[_EffectOverlay] = (),
 ) -> None:
     """One finite alpha video containing every title and caption.
 
@@ -723,6 +883,23 @@ def _render_graphics_track(
                 if not (start <= at < end):
                     continue
                 _blend(canvas, image, y)
+            # Accents go on last: they are the top layer, and a starburst behind a
+            # lower third would be a starburst nobody sees.
+            for effect in effects:
+                if not (effect.start <= at < effect.start + effect.duration):
+                    continue
+                progress = (at - effect.start) / effect.duration
+                transform = animation_transform(effect.animation, progress)
+                sprite = _transform_sprite(effect.image, transform)
+                x, y = place_sprite(
+                    (sprite.shape[1], sprite.shape[0]), effect.cell, effect.anchor, frame
+                )
+                _blend_at(
+                    canvas,
+                    sprite,
+                    x + round(transform.dx * sprite.shape[0]),
+                    y + round(transform.dy * sprite.shape[0]),
+                )
             process.stdin.write(canvas.tobytes())
         process.stdin.close()
         stderr = process.stderr.read().decode("utf-8", errors="replace")
@@ -913,12 +1090,46 @@ def approval_is_current(ctx: StageContext, draft: DraftResult) -> None:
 
 
 def _polish_fingerprint_extras(ctx: StageContext) -> tuple[str, ...]:
-    """The delivery rules this stage is judged against.
+    """The delivery rules this stage is judged against, and the sprites it draws.
 
     Editing `production-contract.yaml` changes what a valid `final.mp4` is, so it
-    has to invalidate the cached one exactly as a config change does.
+    has to invalidate the cached one exactly as a config change does. The effects
+    library's own content is here too, and hashed all the way down to the PNGs:
+    swapping in a better drawing of `comic_starburst` changes the delivered picture
+    without changing any artifact this stage reads.
     """
-    return (f"contract:{contract_hash(ctx.project_dir)}",)
+    return (
+        f"contract:{contract_hash(ctx.project_dir)}",
+        f"effects-library:{library_fingerprint()}",
+    )
+
+
+def _planned_effects(ctx: StageContext) -> tuple[EffectPlan, EffectLibrary]:
+    """The accents to composite, or none.
+
+    Effects are seasoning: a missing artifact (an older project, a pipeline run
+    that stopped before the effects stage) and `effects.enabled: false` both mean
+    no accents, and neither is an error. Delivery has never depended on them and
+    must not start now.
+    """
+    library = load_library()
+    if not ctx.config.effects.enabled or not ctx.store.exists("05d-effects"):
+        return EffectPlan(), library
+    plan = ctx.store.read("05d-effects", EffectPlan)
+    unknown = sorted(
+        {event.effect_name for event in plan.events}
+        - set(library.names())
+    )
+    if unknown:
+        # The plan was validated against the library that existed when it was
+        # written. A sprite removed since then cannot be drawn, and quietly
+        # skipping it would deliver a video missing accents the artifact promises.
+        raise RuntimeError(
+            "05d-effects names sprites that are not in "
+            f"{library.directory}: {', '.join(unknown)}; restore them or re-run the "
+            "effects stage"
+        )
+    return plan, library
 
 
 def _resolve_music_dir(ctx: StageContext, configured: str) -> Path:
@@ -961,7 +1172,10 @@ def _discard_delivery_outputs(output_dir: Path, output: Path) -> None:
     (output_dir / "production-report.json").unlink(missing_ok=True)
 
 
-POLISH_REQUIRES = ("01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "06-draft")
+POLISH_REQUIRES = (
+    "01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "05d-effects",
+    "06-draft",
+)
 
 
 @stage(
@@ -972,10 +1186,13 @@ POLISH_REQUIRES = ("01-manifest", "03-transcript", "05-timeline", "05a-storyplan
     # the final is only worth building after, and it is what `polish.enabled:
     # false` degrades to a preview of.
     requires=POLISH_REQUIRES,
-    version="5",
+    version="6",
     model=FinalResult,
     config_keys=(
         "polish.enabled",
+        # Read here as well as by the effects stage: turning effects off has to
+        # re-render a delivery that already has them composited into its picture.
+        "effects.enabled",
         "polish.require_approval",
         "polish.intro_seconds",
         "polish.outro_seconds",
@@ -1062,6 +1279,11 @@ def polish(ctx: StageContext) -> FinalResult:
 
     music_dir = _resolve_music_dir(ctx, settings.music_dir)
     tracks = list_tracks(music_dir)
+    # Read here rather than beside the graphics track, which is built after the
+    # picture master: this is a JSON read and a directory listing, and the one way
+    # it can fail — a plan naming a sprite the library no longer has — must not
+    # cost a full render first.
+    effect_plan, library = _planned_effects(ctx)
 
     # Everything above is a probe, a listing and some arithmetic. Everything below
     # re-encodes gigabytes, so the contract is checked against what is knowable
@@ -1158,11 +1380,15 @@ def polish(ctx: StageContext) -> FinalResult:
     if not title_overlays:
         raise RuntimeError("production contract requires section titles")
 
+    effect_overlays = build_effect_overlays(
+        effect_plan.events, library, timeline, starts, intro_offset, frame, work_dir,
+    )
+
     graphics = work_dir / "graphics.mov"
     _render_graphics_track(
         graphics, frame, fps, total,
         captions if settings.burn_captions else [],
-        title_overlays, work_dir,
+        title_overlays, work_dir, effect_overlays,
     )
 
     bed = work_dir / "music-bed.wav"
@@ -1197,6 +1423,15 @@ def polish(ctx: StageContext) -> FinalResult:
     if attribution:
         write_attribution(ctx.output_dir, attribution)
 
+    # What the accents were, on the delivery's own clock. Recorded outside
+    # `features` on purpose: the contract's required features are the structure of
+    # a finished video, and an effect is seasoning — a delivery with none is as
+    # valid as a delivery with eight.
+    effect_lines = [
+        f"{overlay.name} at {overlay.start:.2f}s for {overlay.duration:.2f}s "
+        f"({overlay.cell}, {overlay.animation})"
+        for overlay in effect_overlays
+    ]
     report_path = ctx.output_dir / "production-report.json"
     report = {
         "contract_version": contract.get("version"),
@@ -1221,6 +1456,21 @@ def polish(ctx: StageContext) -> FinalResult:
             "section_boundaries": len(changes),
             "closing_beat": has_closing_beat(timeline),
             "full_decode": decoded,
+        },
+        "effects": {
+            "applied": len(effect_overlays),
+            "library": str(library.directory),
+            "events": [
+                {
+                    "name": event.effect_name,
+                    "at_seconds": event.at_seconds,
+                    "position": event.screen_position,
+                    "scale": event.scale,
+                    "text": event.text,
+                    "reason": event.reason,
+                }
+                for event in effect_plan.events
+            ],
         },
         "quality": {
             "source": "proxies" if leaked else "originals",
@@ -1251,6 +1501,8 @@ def polish(ctx: StageContext) -> FinalResult:
         transition_count=emitted_transitions,
         caption_count=len(captions) if settings.captions_enabled else 0,
         burned_in_captions=settings.burn_captions,
+        effect_count=len(effect_overlays),
+        effects=effect_lines,
         outro=True,
         music_track=track.name,
         music_attribution=attribution,
@@ -1265,6 +1517,12 @@ def polish(ctx: StageContext) -> FinalResult:
             f"music bed measured {duck.attenuation_db:.1f} dB down under speech "
             f"(requested {abs(settings.music_duck_db):.1f} dB; sidechain threshold "
             f"{duck.threshold:.5f}, key gain {duck.key_gain:.2f})",
+            (
+                f"{len(effect_overlays)} cartoon accents composited: "
+                + "; ".join(effect_lines)
+                if effect_overlays
+                else "no cartoon accents were planned for this video"
+            ),
             (
                 "captions burned into picture"
                 if settings.burn_captions

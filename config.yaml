@@ -39,6 +39,15 @@ plan:
   reject_adult_in_frame: true
   reject_unusable_shots: true
 
+effects:
+  # Cartoon accents. One LLM call reads the story and picks which sprites from
+  # assets/effects/ punctuate which moments; polish composites them. Off plans
+  # none and draws none — they are seasoning, not a required delivery feature.
+  enabled: true
+  # A hard ceiling. The prompt asks for four to eight in three minutes; a model
+  # that returns more is refused rather than silently truncated.
+  max_events: 8
+
 polish:
   # false does not deliver: it copies the review draft out as
   # output/preview-fallback.mp4 and writes no final.mp4. There is one delivery

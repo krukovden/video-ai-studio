@@ -23,6 +23,10 @@ plan:
   reject_adult_in_frame: true
   reject_unusable_shots: true
 
+effects:
+  enabled: true
+  max_events: 8
+
 polish:
   # There is one delivery renderer and production-contract.yaml always applies to
   # it; enabled: false would copy the review draft out as preview-fallback.mp4.

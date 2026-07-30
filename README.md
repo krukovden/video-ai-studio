@@ -111,7 +111,7 @@ uv run videoai config                                          # effective confi
 
 ## Pipeline
 
-Ten stages run in this order, each reading artifacts written by the stages
+Eleven stages run in this order, each reading artifacts written by the stages
 before it and writing exactly one artifact of its own under `work/`.
 
 ```mermaid
@@ -123,6 +123,7 @@ flowchart TD
     analyze["analyze<br/>04-analysis"]
     plan["plan<br/>05-timeline"]
     visual_check["visual_check<br/>05b-visual"]
+    effects["effects<br/>05d-effects"]
     render_draft["render_draft<br/>06-draft"]
     polish["polish<br/>08-final"]
 
@@ -139,11 +140,15 @@ flowchart TD
     analyze --> plan
     ingest --> visual_check
     plan --> visual_check
+    transcribe --> effects
+    analyze --> effects
+    plan --> effects
     ingest --> render_draft
     plan --> render_draft
     visual_check --> render_draft
     render_draft --> polish
     plan --> polish
+    effects --> polish
     visual_check -. "rejected phrase ids<br/>05c-rejected" .-> plan
 ```
 
@@ -314,6 +319,44 @@ Reads `01-manifest` and `05-timeline`. Writes `05b-visual.json` always, and
 `05c-rejected.json` only when something is actually rejected. Cost: $0 under a
 Claude subscription.
 
+### effects — `05d-effects`
+
+Which cartoon accents this video gets, and where. One LLM call, no frames
+attached: by this point the toy and the video have already been analysed, so the
+model is given the sprite library's *words* — each sprite's name, its tags and one
+sentence saying what it expresses — plus the edit on its own clock with every
+segment's beat, quote and word timings, the descriptions of the silent close-up
+inserts, and the brief. It answers with moments: `{at_seconds, effect_name,
+screen_position, scale, text, reason}`.
+
+Nothing about a particular video is in the code. An accent is chosen because the
+STORY has a pop, a reveal, a reaction or a loud squish in it, not because a beat
+name matched a keyword — that was the version of this feature that got reverted,
+and it gave a second project a syringe it had never filmed.
+
+The prompt's rules are the editorial ones: punctuate moments rather than decorate,
+never cover the child's face (prefer an edge or corner cell; `center` only over a
+close-up with nobody in it), never two at once, four to eight in three minutes,
+and speech-bubble text must be something the presenter actually said or plainly
+meant. **An empty answer is a success** — a calm review needs no accents, and a
+stage that could not say "none" would guarantee every video got some.
+
+Parsing is defensive in the same way as every other stage: an unknown sprite name
+is refused *by name*, a time outside the edit is refused with both numbers, more
+than `effects.max_events` (8) is refused rather than truncated, and a speech
+bubble with no text is refused because it is stretched around its words and has no
+size without them.
+
+The library is `assets/effects/` — six sprites drawn procedurally with Pillow so
+this works with zero API calls, plus `manifest.yaml`, which is the only place the
+pipeline learns what exists. Any sprite can be replaced by a better PNG (for
+instance one generated with `gpt-image-1`) by dropping a file with the same name
+into that directory; see [docs/EFFECTS-LIBRARY.md](docs/EFFECTS-LIBRARY.md).
+`effects.enabled: false` plans nothing and composites nothing.
+
+Reads `03-transcript`, `04-analysis`, `05-timeline` and `05a-storyplan`. Writes
+`05d-effects.json`. Cost: $0 under a Claude subscription.
+
 ### render_draft — `06-draft`
 
 Cuts each timeline segment out of its clip's proxy with a short audio fade at
@@ -397,6 +440,18 @@ The production layers are:
   recorded in the artifact.
 - **A fade-through-black transition of `polish.transition_frames`** at story
   section boundaries. Cuts inside a section stay hard cuts.
+- **The cartoon accents `05d-effects` chose**, composited into the same finite
+  alpha graphics track as the titles and captions, on top of them. Each sprite is
+  loaded from `assets/effects/`, animated over its duration by one of five
+  built-in motions (`pop-in` overshoots and settles, `pulse` breathes, `shake`
+  jitters and decays, `drift-up` rises and fades, `none` holds), scaled to a
+  fraction of the frame's height, placed by its grid cell with the same
+  safe-area margin the lower thirds use, and alpha-blended. The speech bubble is a
+  nine-patch: its corners keep their pixels while its edges stretch around
+  whatever text the model wrote, rendered in the video's own typeface. Effects are
+  **not** among `production-contract.yaml`'s required features — they are
+  seasoning, not structure — but `output/production-report.json` records how many
+  were applied and exactly which, and so does the stage artifact.
 
 Required elements never silently degrade. There is one delivery renderer and
 `production-contract.yaml` always applies to it: missing captions, music,
@@ -428,8 +483,9 @@ Approval is stored in `work/06-approval.json` with hashes for the timeline,
 draft file, and effective config. Any change to one of them requires a fresh
 review.
 
-Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `06-draft`. Writes its own
-delivery files under `work/delivery/`, `output/final.mp4`,
+Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `05d-effects`, `06-draft`.
+An absent `05d-effects` (an older project) or `effects.enabled: false` means no
+accents and never a failure. Writes its own delivery files under `work/delivery/`, `output/final.mp4`,
 `output/final.srt`, `output/production-report.json`, the music credit in
 `output/metadata.md`, and `08-final.json`. The renderer then decodes the whole
 file before publishing success. Runs locally with OpenCV and ffmpeg. Cost: $0

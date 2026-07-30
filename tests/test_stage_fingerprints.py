@@ -11,6 +11,7 @@ import videoai.stages  # noqa: F401  (imports register every stage)
 from videoai.config import (
     AnalyzeSettings,
     Config,
+    EffectsSettings,
     PlanSettings,
     PolishSettings,
     RenderSettings,
@@ -71,7 +72,10 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         ),
         (Config(analyze=AnalyzeSettings(keyframes_per_phrase=0)), {"analyze"}),
         (Config(analyze=AnalyzeSettings(max_keyframes=10)), {"analyze"}),
-        (Config(analyze=AnalyzeSettings(llm_model="opus")), {"analyze", "plan", "visual_check"}),
+        (
+            Config(analyze=AnalyzeSettings(llm_model="opus")),
+            {"analyze", "plan", "visual_check", "effects"},
+        ),
         (
             Config(analyze=AnalyzeSettings(insert_max_words_per_second=0.2)),
             {"analyze"},
@@ -88,6 +92,10 @@ def _stages_invalidated_by(tmp_path: Path, config: Config) -> set[str]:
         (Config(plan=PlanSettings(gain_db_by_beat={"Popping": -6.0})), {"plan"}),
         (Config(plan=PlanSettings(reject_adult_in_frame=False)), {"visual_check"}),
         (Config(plan=PlanSettings(reject_unusable_shots=False)), {"visual_check"}),
+        # Effects are chosen by one stage and drawn by another, so switching them
+        # off has to re-run both: the delivery has them composited into its picture.
+        (Config(effects=EffectsSettings(enabled=False)), {"effects", "polish"}),
+        (Config(effects=EffectsSettings(max_events=3)), {"effects"}),
         (Config(polish=PolishSettings(enabled=False)), {"polish"}),
         (Config(polish=PolishSettings(require_approval=True)), {"polish"}),
         (Config(polish=PolishSettings(intro_seconds=4.0)), {"polish"}),
@@ -121,7 +129,7 @@ def test_an_unrelated_setting_invalidates_nothing(tmp_path: Path):
     assert _stages_invalidated_by(tmp_path, Config(analyze=AnalyzeSettings(llm_timeout_seconds=1))) == set()
 
 
-@pytest.mark.parametrize("stage_id", ["analyze", "plan", "visual_check"])
+@pytest.mark.parametrize("stage_id", ["analyze", "plan", "visual_check", "effects"])
 def test_editing_a_prompt_invalidates_its_stage(tmp_path: Path, stage_id: str):
     ctx = _context(tmp_path, Config())
     spec = REGISTRY[stage_id]

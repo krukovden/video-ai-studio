@@ -71,6 +71,14 @@ have:
 If any required feature is missing, stop with a clear diagnostic and do not
 write or retain a file called `final.mp4`.
 
+Cartoon effects are deliberately **not** in that list. They are seasoning, not
+structure: a video with none is as valid a delivery as a video with eight, so
+requiring them would either force an accent onto a calm review or make one model
+call able to fail a delivery. They are still recorded — `production-report.json`
+carries `effects.applied` and every event with its reason, and the stage artifact
+carries one line per composited accent — because a feature nobody measures is a
+feature nobody can review.
+
 ## Editing and verification rules
 
 - Preserve creator changes and unrelated worktree changes.
