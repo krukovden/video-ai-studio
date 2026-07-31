@@ -1,12 +1,17 @@
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
+import videoai.core.ffmpeg as ffmpeg
+import videoai.stages.s01_ingest as s01_ingest
 from videoai.config import Config, RenderSettings
+from videoai.core.ffmpeg import proxy_encoder
 from videoai.core.models import Manifest
 from videoai.core.registry import StageContext
 from videoai.core.store import ArtifactStore
-from videoai.stages.s01_ingest import ingest
+from videoai.stages.s01_ingest import _proxy_filename, ingest
 
 
 def _context(project: Path, *, draft_height: int | None = None) -> StageContext:
@@ -244,6 +249,137 @@ def test_proxy_is_rebuilt_when_draft_height_changes_but_audio_path_is_stable(
     assert _video_height(Path(second.clips[0].proxy_path)) == 480
     assert second.clips[0].proxy_path != first.clips[0].proxy_path
     assert second.clips[0].audio_path == first.clips[0].audio_path
+
+
+# --- a cached proxy is only the right file for the encoder that wrote it ---
+
+
+def test_ingest_records_the_encoder_that_built_each_proxy(tmp_path: Path, make_clip):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=1.0).rename(clips / "a.mp4")
+
+    clip = ingest(_context(project)).clips[0]
+
+    assert clip.proxy_encoder == proxy_encoder()
+    assert clip.proxy_encoder in Path(clip.proxy_path).name
+
+
+def test_proxy_filename_separates_the_two_encoders():
+    assert _proxy_filename("a-key", 720, "libx264") != _proxy_filename(
+        "a-key", 720, "h264_videotoolbox"
+    )
+
+
+def _pin_encoder(monkeypatch, name: str) -> list[str]:
+    """Pin the encoder ingest believes it has, and record what it asked to build.
+
+    The pixels stay software-encoded whichever name is pinned, so the
+    VideoToolbox case runs on a machine whose media engine cannot open a session
+    — what is under test is the cache key, not the encoder.
+    """
+    requested: list[str] = []
+    monkeypatch.setattr(s01_ingest, "proxy_encoder", lambda: name)
+
+    def build(src: Path, dst: Path, height: int, encoder: str) -> str:
+        requested.append(encoder)
+        return ffmpeg.make_proxy(src, dst, height, encoder="libx264")
+
+    monkeypatch.setattr(s01_ingest, "make_proxy", build)
+    return requested
+
+
+def test_a_proxy_built_by_one_encoder_is_not_reused_by_the_other(
+    tmp_path: Path, make_clip, monkeypatch
+):
+    """A run while the media engine was busy writes libx264 pixels. A later
+    VideoToolbox run reusing them re-scores every clip's blur off frames its own
+    encoder never produced, and the analyze prompt — so the edit — moves."""
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=1.0).rename(clips / "a.mp4")
+    ctx = _context(project)
+
+    _pin_encoder(monkeypatch, "libx264")
+    first = ingest(ctx)
+
+    requested = _pin_encoder(monkeypatch, "h264_videotoolbox")
+    second = ingest(ctx)
+
+    assert requested == ["h264_videotoolbox"]
+    assert second.clips[0].proxy_path != first.clips[0].proxy_path
+    assert second.clips[0].proxy_encoder == "h264_videotoolbox"
+    # The software run's proxy stays where it is, ready for the next busy session.
+    assert Path(first.clips[0].proxy_path).exists()
+
+
+def test_the_same_encoder_still_reuses_its_own_proxy(
+    tmp_path: Path, make_clip, monkeypatch
+):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=1.0).rename(clips / "a.mp4")
+    ctx = _context(project)
+
+    _pin_encoder(monkeypatch, "libx264")
+    first = ingest(ctx)
+    marker = Path(first.clips[0].proxy_path).stat().st_mtime_ns
+
+    requested = _pin_encoder(monkeypatch, "libx264")
+    second = ingest(ctx)
+
+    assert requested == []
+    assert Path(second.clips[0].proxy_path).stat().st_mtime_ns == marker
+
+
+# --- Finding: derived media must survive a transfer and a move, or every one of
+# them is rebuilt and every metered model call is paid for twice ---
+
+
+def test_derived_media_is_reused_after_a_transfer_restamps_mtime(
+    tmp_path: Path, make_clip
+):
+    project = tmp_path / "project"
+    clips = project / "video"
+    clips.mkdir(parents=True)
+    make_clip("a.mp4", seconds=1.0).rename(clips / "a.mp4")
+    ctx = _context(project)
+
+    first = ingest(ctx)
+    marker = Path(first.clips[0].proxy_path).stat().st_mtime_ns
+
+    # What an rsync, a restore or a cloud sync leaves behind: same bytes, new date.
+    os.utime(clips / "a.mp4", (1_600_000_000, 1_600_000_000))
+    second = ingest(ctx)
+
+    assert second.clips[0].source_key == first.clips[0].source_key
+    assert second.clips[0].proxy_path == first.clips[0].proxy_path
+    assert Path(second.clips[0].proxy_path).stat().st_mtime_ns == marker
+
+
+def test_derived_media_is_reused_after_the_project_folder_moves(
+    tmp_path: Path, make_clip
+):
+    """`work/` travels with the project, so a move must leave every proxy and every
+    source key exactly as they were — only the folder above them changed."""
+    first_home = tmp_path / "Desktop" / "toy-review"
+    (first_home / "video").mkdir(parents=True)
+    make_clip("a.mp4", seconds=1.0).rename(first_home / "video" / "a.mp4")
+
+    first = ingest(_context(first_home))
+    marker = Path(first.clips[0].proxy_path).stat().st_mtime_ns
+
+    second_home = tmp_path / "Archive" / "toy-review"
+    second_home.parent.mkdir(parents=True)
+    shutil.move(str(first_home), str(second_home))
+    second = ingest(_context(second_home))
+
+    assert second.clips[0].source_key == first.clips[0].source_key
+    assert Path(second.clips[0].proxy_path).name == Path(first.clips[0].proxy_path).name
+    assert Path(second.clips[0].proxy_path).stat().st_mtime_ns == marker
 
 
 def test_ingest_labels_clips_with_their_camera(tmp_path: Path, make_clip):

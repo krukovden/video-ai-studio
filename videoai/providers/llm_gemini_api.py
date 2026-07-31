@@ -58,6 +58,15 @@ INTERACTIONS_URL = f"{BASE}/v1beta/interactions"
 # users"), so it is not a safe default even though it is still listed.
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
+# Sampling, pinned. Left alone the service samples at its own default, near 1.0,
+# and asking the same model about the same reel twice returns different scores
+# for the same phrase — the edit moves, and nothing in the diff says why. This is
+# the only provider in the pipeline that can be told not to do that; the CLI ones
+# have no such control and are made repeatable by the replay cache instead.
+# `seed` matters because temperature 0 is greedy decoding, not a guarantee: ties
+# still have to be broken somehow.
+GENERATION_CONFIG = {"temperature": 0.0, "top_p": 1.0, "seed": 7}
+
 # Published rates: roughly 300 tokens per second of video at default media
 # resolution, roughly 100 at low, and this endpoint bills at the low rate — a
 # 6-second silent clip measured 378 video tokens, or 63 a second, which is one
@@ -278,8 +287,13 @@ class GeminiApiLLM:
         # on the input part), and sending it fails the whole call. Measured
         # against a live key, video already tokenises at roughly 63 tokens per
         # second here, which is the low-resolution rate rather than the default
-        # one, so there is nothing being left on the table.
-        body: dict = {"model": self.model, "input": parts}
+        # one, so there is nothing being left on the table. The sampling controls
+        # travel in the same generation_config it refused that one key from.
+        body: dict = {
+            "model": self.model,
+            "input": parts,
+            "generation_config": dict(GENERATION_CONFIG),
+        }
         return extract_json(self._generate(body, timeout))
 
 

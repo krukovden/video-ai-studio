@@ -1,11 +1,14 @@
 """A description of every source clip, written once and kept.
 
 Watching footage costs money, and the answer does not change unless the footage
-does. So each clip is described once, keyed by the identity of the file rather
-than by its position, and a later run reuses that description instead of paying
-for it again.
+does — or unless the question does. So each clip is described once, keyed by the
+identity of the file rather than by its position and by the question that was put
+to the model, and a later run reuses that description instead of paying for it
+again.
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 from videoai.core.models import ClipEvent, ClipNote, ClipNotes
 from videoai.logic.clip_notes import (
@@ -105,3 +108,124 @@ def test_events_are_written_in_time_order():
     )])
     text = render_notes_markdown(notes)
     assert text.index("earlier") < text.index("later")
+
+
+# --- The stage: a note answers a question, and the question is editable ---
+
+
+class _WatchingLLM:
+    name = "gemini_api"
+    reads_video = True
+
+    def __init__(self) -> None:
+        self.watched: list[str] = []
+
+    def complete_json(self, prompt, images, timeout, videos=None) -> dict:
+        self.watched.append(str(videos[0]))
+        return {"summary": "a hand squeezes the toy", "events": []}
+
+
+def _describe_context(tmp_path, clip_names: tuple[str, ...], model: str = "gemini-3.1-flash-lite"):
+    from videoai.config import AnalyzeSettings, Config, DescribeSettings
+    from videoai.core.models import ClipInfo, Manifest
+    from videoai.core.registry import StageContext
+    from videoai.core.store import ArtifactStore
+
+    for name in ("work", "output"):
+        (tmp_path / name).mkdir(exist_ok=True)
+    clips = []
+    for index, name in enumerate(clip_names, start=1):
+        path = tmp_path / name
+        path.write_bytes(f"pretend footage of {name}".encode("utf-8"))
+        clips.append(ClipInfo(
+            clip_id=f"clip-{index:02d}", path=str(path), duration=12.0,
+            width=320, height=240, fps=30.0, has_audio=True, source_key=name,
+        ))
+    ctx = StageContext(
+        project_dir=tmp_path,
+        input_dir=tmp_path,
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
+        config=Config(
+            providers={"asr": "mock", "llm": "gemini_api"},
+            describe=DescribeSettings(enabled=True),
+            analyze=AnalyzeSettings(llm_model=model),
+        ),
+        store=ArtifactStore(tmp_path / "work"),
+    )
+    ctx.store.write("01-manifest", Manifest(clips=clips), fingerprint="fp")
+    return ctx
+
+
+def _run_describe(ctx, monkeypatch, provider):
+    import videoai.stages.s04b_describe as s04b
+
+    monkeypatch.setattr(s04b, "resolve_llm", lambda *args, **kwargs: provider)
+    return s04b.describe(ctx)
+
+
+def test_footage_already_watched_is_not_watched_again(tmp_path, monkeypatch):
+    ctx = _describe_context(tmp_path, ("a.mp4",))
+    provider = _WatchingLLM()
+
+    first = _run_describe(ctx, monkeypatch, provider)
+    second = _run_describe(ctx, monkeypatch, provider)
+
+    assert len(provider.watched) == 1
+    assert second == first
+
+
+def test_only_new_footage_is_watched(tmp_path, monkeypatch):
+    ctx = _describe_context(tmp_path, ("a.mp4",))
+    provider = _WatchingLLM()
+    _run_describe(ctx, monkeypatch, provider)
+
+    grown = _describe_context(tmp_path, ("a.mp4", "b.mp4"))
+    notes = _run_describe(grown, monkeypatch, provider)
+
+    assert [Path(path).name for path in provider.watched] == ["a.mp4", "b.mp4"]
+    assert len(notes.notes) == 2
+
+
+def test_a_changed_prompt_makes_every_clip_undescribed(tmp_path, monkeypatch):
+    """Keyed by the file alone, the stage "ran", found nothing new and returned
+    the old notes byte for byte — under the new fingerprint, so everything
+    downstream stayed cached against an answer to a question nobody asked."""
+    import videoai.stages.s04b_describe as s04b
+
+    ctx = _describe_context(tmp_path, ("a.mp4",))
+    provider = _WatchingLLM()
+    before = _run_describe(ctx, monkeypatch, provider)
+
+    monkeypatch.setattr(s04b, "INSTRUCTIONS", s04b.INSTRUCTIONS + "\n- Also name the colours.")
+    after = _run_describe(ctx, monkeypatch, provider)
+
+    assert len(provider.watched) == 2
+    assert [note.clip_id for note in after.notes] == ["clip-01"]
+    assert after.notes[0].source_key != before.notes[0].source_key
+
+
+def test_a_changed_model_makes_every_clip_undescribed(tmp_path, monkeypatch):
+    """Flash-lite's account of a clip is not Pro's, and the notes are what the
+    planner reads when it decides where a silent shot belongs."""
+    ctx = _describe_context(tmp_path, ("a.mp4",))
+    provider = _WatchingLLM()
+    _run_describe(ctx, monkeypatch, provider)
+
+    switched = _describe_context(tmp_path, ("a.mp4",), model="gemini-3.6-pro")
+    notes = _run_describe(switched, monkeypatch, provider)
+
+    assert len(provider.watched) == 2
+    assert [note.clip_id for note in notes.notes] == ["clip-01"]
+
+
+def test_notes_about_footage_that_left_the_project_are_kept(tmp_path, monkeypatch):
+    ctx = _describe_context(tmp_path, ("a.mp4", "b.mp4"))
+    provider = _WatchingLLM()
+    _run_describe(ctx, monkeypatch, provider)
+
+    shrunk = _describe_context(tmp_path, ("a.mp4",))
+    notes = _run_describe(shrunk, monkeypatch, provider)
+
+    assert len(provider.watched) == 2  # nothing was re-watched
+    assert len(notes.notes) == 2

@@ -4,12 +4,14 @@ from pathlib import Path
 
 import pytest
 
+import videoai.core.ffmpeg as ffmpeg
 from videoai.core.ffmpeg import (
     extract_audio,
     extract_frame,
     list_video_files,
     make_proxy,
     probe,
+    proxy_encoder,
 )
 
 
@@ -79,6 +81,37 @@ def test_make_proxy_keeps_audio(make_clip, tmp_path: Path):
     proxy = tmp_path / "out" / "a-proxy.mp4"
     make_proxy(clip, proxy, height=240)
     assert probe(proxy).has_audio is True
+
+
+# --- which encoder built a proxy is part of what the proxy IS: the pixels differ,
+# and everything measured off them (s02's blur score, and the prompt it feeds)
+# differs with them ---
+
+
+def test_make_proxy_reports_the_encoder_it_used(make_clip, tmp_path: Path):
+    clip = make_clip("a.mp4", seconds=1.0, size="640x480")
+    proxy = tmp_path / "out" / "a-proxy.mp4"
+
+    assert make_proxy(clip, proxy, height=240) == proxy_encoder()
+
+
+def test_proxy_encoder_names_one_of_the_two_encoders_make_proxy_can_run():
+    assert proxy_encoder() in {"h264_videotoolbox", "libx264"}
+
+
+@pytest.mark.parametrize("encoder", ["libx264", "h264_videotoolbox"])
+def test_make_proxy_encodes_with_the_encoder_it_was_given(
+    tmp_path: Path, monkeypatch, encoder: str
+):
+    """The caller names the encoder because the caller owns the filename the proxy
+    is cached under. ffmpeg is stubbed so both branches are covered on a machine
+    whose media engine cannot open a session."""
+    commands: list[list[str]] = []
+    monkeypatch.setattr(ffmpeg, "run_ffmpeg", lambda args: commands.append(args))
+
+    assert make_proxy(tmp_path / "a.mov", tmp_path / "a-proxy.mp4", 240, encoder) == encoder
+
+    assert commands[0][commands[0].index("-c:v") + 1] == encoder
 
 
 def test_extract_frame_writes_image(make_clip, tmp_path: Path):

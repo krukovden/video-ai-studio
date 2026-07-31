@@ -33,16 +33,29 @@ from videoai.core.store import ArtifactStore
 from videoai.logic.effect_seeds import seed_library
 from videoai.logic.effects import (
     GRID_CELLS,
+    MAX_SCALE_FACTOR,
+    MIN_SCALE_FACTOR,
+    SpriteTransform,
     animation_transform,
+    apply_creator_rotation,
+    bubble_max_width,
     cell_anchor_point,
+    clamp_scale_factor,
     default_library_dir,
     load_library,
     place_sprite,
     render_speech_bubble,
+    sprite_target_height,
 )
 from videoai.stages.s05d_effects import build_effects_prompt, effects, parse_events
 from videoai.stages.s06_render_draft import render_draft
-from videoai.stages.s08_polish import polish
+from videoai.stages.s08_polish import (
+    _EffectOverlay,
+    _effect_position,
+    _sprite_base_image,
+    _transform_sprite,
+    polish,
+)
 
 CONTRACT = """
 version: 1
@@ -349,14 +362,17 @@ def _timeline() -> Timeline:
         height=1080,
         clips=[
             TimelineClip(
+                ref="clip-01#001",
                 src="clip-01", offset=0, dur=6, start=0, beat="Hook",
                 quote="Look at this toy",
             ),
             TimelineClip(
+                ref="insert:clip-02@2-6",
                 src="clip-02", offset=2, dur=4, start=6, beat="Popping Time",
                 is_insert=True,
             ),
             TimelineClip(
+                ref="clip-01#002",
                 src="clip-01", offset=10, dur=5, start=10, beat="Closing",
                 quote="Thanks for watching",
             ),
@@ -374,6 +390,10 @@ def _effects_context(tmp_path: Path, config: Config) -> StageContext:
         config=config,
         store=ArtifactStore(work),
     )
+    # The stage plans against the planner's proposal, so a creator's reorder never
+    # costs it a model call; the assembled edit is written too, for the callers
+    # below that render one.
+    ctx.store.write("05-proposal", _timeline(), fingerprint="proposal")
     ctx.store.write("05-timeline", _timeline(), fingerprint="timeline")
     ctx.store.write(
         "05a-storyplan",
@@ -411,14 +431,19 @@ def _effects_context(tmp_path: Path, config: Config) -> StageContext:
         ),
         fingerprint="transcript",
     )
-    # The placement step measures the footage; there is none here, so it finds
-    # nothing moving and leaves the model's own positions alone — which is what
-    # these tests are about.
+    # Placeholders the placement step can resolve but never opens: the tests that
+    # run the stage stub the measurement out, because what they are about is the
+    # artifact and not the pixels. Missing media is no longer read as a still
+    # shot, so every clip the edit uses has to be here and has to exist.
+    for clip_id in ("clip-01", "clip-02"):
+        (tmp_path / f"{clip_id}.mp4").write_bytes(b"")
     ctx.store.write(
         "01-manifest",
-        Manifest(clips=[ClipInfo(
-            clip_id="clip-01", path="clip-01.mp4", duration=30.0,
-            width=1920, height=1080, fps=30.0, has_audio=True)]),
+        Manifest(clips=[
+            ClipInfo(clip_id=clip_id, path=str(tmp_path / f"{clip_id}.mp4"),
+                     duration=30.0, width=1920, height=1080, fps=30.0, has_audio=True)
+            for clip_id in ("clip-01", "clip-02")
+        ]),
         fingerprint="manifest",
     )
     return ctx
@@ -439,6 +464,11 @@ def test_the_effects_stage_maps_a_canned_reply_to_an_artifact(
     llm = tmp_path / "llm.json"
     llm.write_text(json.dumps(reply), encoding="utf-8")
     monkeypatch.setenv("VIDEOAI_MOCK_LLM", str(llm))
+    # Nothing is moving in a placeholder file; the model's own positions stand,
+    # which is what this test is about.
+    monkeypatch.setattr(
+        "videoai.stages.s05d_effects.busiest_cell", lambda path, at: None
+    )
     ctx = _effects_context(tmp_path, Config(providers={"asr": "mock", "llm": "mock"}))
 
     plan = effects(ctx)
@@ -657,6 +687,159 @@ def test_a_bubble_never_grows_past_the_width_it_was_given(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------- #
+# The creator's own size and tilt
+# --------------------------------------------------------------------------- #
+
+FRAME = (1920, 1080)
+
+
+def _accent(
+    effect_name: str = "comic_starburst", scale: str = "medium", **fields
+) -> EffectEvent:
+    return EffectEvent(
+        at_seconds=1.0, effect_name=effect_name, screen_position="center",
+        scale=scale, reason="the creator moved it", **fields,
+    )
+
+
+def test_a_creator_resize_really_changes_the_pixels_the_sprite_is_drawn_at(tmp_path: Path):
+    """Not a per-frame zoom of an already-drawn bitmap: the multiplier reaches the
+    base image, so a badge made bigger is redrawn bigger."""
+    library = load_library()
+    planned = _sprite_base_image(library, _accent(), FRAME, tmp_path, 0)
+    bigger = _sprite_base_image(library, _accent(scale_factor=1.6), FRAME, tmp_path, 1)
+    smaller = _sprite_base_image(library, _accent(scale_factor=0.6), FRAME, tmp_path, 2)
+
+    assert bigger.shape[0] == pytest.approx(planned.shape[0] * 1.6, rel=0.02)
+    assert smaller.shape[0] == pytest.approx(planned.shape[0] * 0.6, rel=0.02)
+    assert bigger.shape[1] > planned.shape[1] > smaller.shape[1]
+
+
+def test_a_resize_that_would_swallow_the_frame_is_clamped_rather_than_refused():
+    """The number comes from dragging a handle, so both ends are held silently: a
+    delivery that failed because somebody dragged too far would be a worse answer
+    than one that stopped growing."""
+    assert clamp_scale_factor(50.0) == MAX_SCALE_FACTOR
+    assert clamp_scale_factor(0.0) == MIN_SCALE_FACTOR
+    assert clamp_scale_factor(-3.0) == MIN_SCALE_FACTOR
+
+    assert sprite_target_height("large", 1080, 50.0) == sprite_target_height(
+        "large", 1080, MAX_SCALE_FACTOR
+    )
+    # Still an accent at the top of the range, and still legible at the bottom.
+    assert sprite_target_height("large", 1080, MAX_SCALE_FACTOR) < 1080 * 0.7
+    assert sprite_target_height("small", 1080, MIN_SCALE_FACTOR) > 64
+    assert bubble_max_width("large", 1920, 50.0) <= 1920
+
+
+def test_a_resize_grows_the_speech_bubble_that_is_sized_by_its_text(tmp_path: Path):
+    """A nine-patch takes its size from its words rather than from a scale band, so
+    the multiplier has to reach the width it is stretched inside — which takes the
+    lettering with it instead of resampling a bubble that was already drawn."""
+    library = load_library()
+    words = {"text": "OH NO"}
+    planned = _sprite_base_image(library, _accent("speech_bubble", **words), FRAME, tmp_path, 0)
+    bigger = _sprite_base_image(
+        library, _accent("speech_bubble", scale_factor=1.8, **words), FRAME, tmp_path, 1
+    )
+
+    assert bigger.shape[1] > planned.shape[1]
+    assert bigger.shape[0] > planned.shape[0]
+
+
+def test_two_accents_that_differ_only_in_size_do_not_share_one_bitmap(tmp_path: Path):
+    """The cache key is the whole risk in sizing the base image instead of the
+    per-frame transform: with the factor missing from it, whichever of two accents
+    rendered second would be the size of both."""
+    library = load_library()
+    cache: dict = {}
+    small = _sprite_base_image(library, _accent(scale_factor=0.6), FRAME, tmp_path, 0, cache)
+    large = _sprite_base_image(library, _accent(scale_factor=1.8), FRAME, tmp_path, 1, cache)
+
+    assert len(cache) == 2
+    assert small.shape[0] < large.shape[0]
+    # The same accent twice is the same drawing, and is drawn once.
+    assert _sprite_base_image(
+        library, _accent(scale_factor=0.6), FRAME, tmp_path, 2, cache
+    ) is small
+    # A tilt deliberately is not in the key: it is applied per frame on top of
+    # this image, so two accents differing only in tilt really are one drawing.
+    assert _sprite_base_image(
+        library, _accent(scale_factor=0.6, rotation=30.0), FRAME, tmp_path, 3, cache
+    ) is small
+
+
+def test_two_bubbles_that_differ_only_in_size_are_written_to_different_files(tmp_path: Path):
+    """Both are the first accent in the plan, so it is the key and not the index
+    that keeps one from overwriting the other."""
+    library = load_library()
+    for factor in (1.0, 1.8):
+        _sprite_base_image(
+            library,
+            _accent("speech_bubble", text="OH NO", scale_factor=factor),
+            FRAME, tmp_path, 0,
+        )
+
+    assert len(list(tmp_path.glob("effect-00-speech_bubble-*.png"))) == 2
+
+
+def test_a_tilt_grows_the_bounding_box_instead_of_cutting_the_corners_off(tmp_path: Path):
+    library = load_library()
+    base = _sprite_base_image(library, _accent(scale="large"), FRAME, tmp_path, 0)
+    turned = _transform_sprite(base, SpriteTransform(rotation=45.0))
+
+    assert turned.shape[0] > base.shape[0] and turned.shape[1] > base.shape[1]
+    # Padding by a fixed fraction of the sprite is what cuts a corner off a badge
+    # turned this far; the ink is all still here.
+    assert turned[:, :, 3].sum() > base[:, :, 3].sum() * 0.97
+    # And it really is turned: the corners of a 45-degree bounding box are empty.
+    assert turned[0, 0, 3] == 0 and turned[-1, -1, 3] == 0
+
+
+def test_a_tilted_badge_in_a_corner_cell_is_still_inside_the_frame(tmp_path: Path):
+    """The grown bounding box is what gets placed, so the placement clamp sees the
+    size that is actually drawn rather than the size before the turn."""
+    library = load_library()
+    event = _accent(scale="large", scale_factor=MAX_SCALE_FACTOR, rotation=35.0)
+    base = _sprite_base_image(library, event, FRAME, tmp_path, 0)
+    transform = apply_creator_rotation(
+        animation_transform("shake", 0.0625), event.rotation
+    )
+    turned = _transform_sprite(base, transform)
+    overlay = _EffectOverlay(
+        name=event.effect_name, start=0.0, duration=1.0, cell="top-left",
+        anchor="center", animation="shake", image=base, rotation=event.rotation,
+    )
+
+    x, y = _effect_position(overlay, (turned.shape[1], turned.shape[0]), transform, FRAME)
+
+    assert x >= 0 and y >= 0
+    assert x + turned.shape[1] <= FRAME[0]
+    assert y + turned.shape[0] <= FRAME[1]
+
+
+def test_a_tilted_accent_dragged_to_the_corner_is_pulled_back_onto_the_frame(tmp_path: Path):
+    """The approval page promises that where the creator put an accent is where it
+    stays; a bounce lifting it and a tilt growing it are both inside that promise,
+    so the clamp comes after them."""
+    library = load_library()
+    event = _accent(scale="large", scale_factor=1.8, rotation=40.0, x=0.99, y=0.99)
+    base = _sprite_base_image(library, event, FRAME, tmp_path, 0)
+    transform = apply_creator_rotation(animation_transform("bounce", 0.1), event.rotation)
+    turned = _transform_sprite(base, transform)
+    overlay = _EffectOverlay(
+        name=event.effect_name, start=0.0, duration=1.0, cell="center",
+        anchor="center", animation="bounce", image=base,
+        point=(event.x, event.y), rotation=event.rotation,
+    )
+
+    x, y = _effect_position(overlay, (turned.shape[1], turned.shape[0]), transform, FRAME)
+
+    assert (x, y) == (FRAME[0] - turned.shape[1], FRAME[1] - turned.shape[0])
+    assert x >= 0 and y >= 0
+
+
+# --------------------------------------------------------------------------- #
 # Compositing onto the delivery
 # --------------------------------------------------------------------------- #
 
@@ -850,6 +1033,52 @@ def test_a_composited_effect_changes_the_frame_it_is_on_and_nothing_else(
     assert np.array_equal(off_event, plain_off_event)
 
 
+def test_a_creator_resize_and_tilt_reach_the_delivered_pixels(tmp_path: Path, make_clip):
+    """The end of the chain. Three deliveries of one edit — no accent, the accent
+    at the size the planner chose, and the same accent as the creator left it —
+    and the resized one has to cover measurably more of the frame than the planned
+    one, on the delivered file rather than on an intermediate."""
+    import numpy as np
+
+    def accent(**creator) -> EffectEvent:
+        return EffectEvent(
+            at_seconds=EVENT_AT, effect_name="comic_starburst",
+            screen_position="center", scale="medium", seconds=0.8,
+            reason="the toy pops", **creator,
+        )
+
+    def deliver(name: str, events: list[EffectEvent]):
+        room = tmp_path / name
+        room.mkdir()
+        ctx, project = _delivery_context(room, make_clip, EffectsSettings(enabled=True))
+        ctx.store.write("05d-effects", EffectPlan(events=events), fingerprint=name)
+        result = polish(ctx)
+        report = json.loads((project / "output" / "production-report.json").read_text())
+        return result, report
+
+    plain, _ = deliver("plain", [])
+    planned, _ = deliver("planned", [accent()])
+    resized, report = deliver("resized", [accent(scale_factor=1.8, rotation=25.0)])
+
+    at = 0.5 + EVENT_AT + 0.3
+    reference = np.asarray(
+        _frame_at(Path(plain.path), at, tmp_path / "none.png"), dtype=np.int16
+    )
+
+    def covered(result, name: str) -> float:
+        shot = np.asarray(
+            _frame_at(Path(result.path), at, tmp_path / f"{name}.png"), dtype=np.int16
+        )
+        return float((np.abs(shot - reference).max(axis=2) > 30).mean())
+
+    assert covered(resized, "resized") > covered(planned, "planned") * 1.5
+
+    event = report["effects"]["events"][0]
+    assert (event["scale_factor"], event["rotation"]) == (1.8, 25.0)
+    assert "25 deg" in resized.effects[0]
+    assert "deg" not in planned.effects[0]
+
+
 def test_delivery_renders_with_an_empty_effects_plan(tmp_path: Path, make_clip):
     """An empty plan is the ordinary case for a calm video, and it must produce a
     contract-passing delivery rather than an absence of one."""
@@ -952,7 +1181,7 @@ def test_a_speech_bubble_event_is_composited_with_its_own_words(
     assert result.effect_count == 1
     assert "speech_bubble" in result.effects[0]
     rendered = next(
-        (project / "work" / "delivery").glob("effect-*-speech_bubble.png"), None
+        (project / "work" / "delivery").glob("effect-*-speech_bubble-*.png"), None
     )
     assert rendered is not None and rendered.is_file()
     report = json.loads((project / "output" / "production-report.json").read_text())

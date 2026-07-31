@@ -8,9 +8,11 @@ across the whole edit rather than a record of each video.
 This stage is the record. Every clip is watched in full, once, and its
 description is kept in `work/04c-clip-notes.json` and written out as
 `video-notes.md` in the project folder. Because the cache is keyed by the file's
-identity, re-editing costs nothing: a later run reads the notes instead of
-sending the footage again, and only genuinely new or replaced clips are ever
-described. Deleting the artifact is how you ask for a fresh look.
+identity and by the question that was put to the model, re-editing costs
+nothing: a later run reads the notes instead of sending the footage again, and
+only genuinely new footage — or footage nobody has yet asked this question
+about — is ever described. Deleting the artifact is how you ask for a fresh
+look.
 
 The events it collects carry a screen position as well as a time. That is what
 lets an accent be placed on the thing that is happening instead of in whichever
@@ -23,12 +25,13 @@ from pathlib import Path
 from videoai.core.models import ClipEvent, ClipNote, ClipNotes, Manifest
 from videoai.core.project import read_brief, resolve_media_path
 from videoai.core.registry import StageContext, stage
+from videoai.core.store import hash_parts
 from videoai.logic.clip_notes import (
     clips_needing_description,
     merge_notes,
     render_notes_markdown,
 )
-from videoai.providers.base import resolve_llm
+from videoai.providers.base import llm_cache_dir, resolve_llm, resolved_llm_model
 
 # The nine cells the effects stage already speaks in, so a position recorded here
 # can be handed straight to an accent without translation.
@@ -71,6 +74,52 @@ Rules:
   not be visible. Do not report a moment you had to infer.
 - No preamble, no extra keys, no commentary outside the JSON document.
 """
+
+
+# Separates the file a note is about from the question that was asked about it.
+DESCRIBE_KEY_SEPARATOR = "@"
+
+
+def describe_key(source_key: str, signature: str) -> str:
+    """The cache key for one clip's description.
+
+    The file's identity alone is not enough. A note answers a specific question
+    put to a specific model, and both are editable: change the instructions or
+    switch the model and every cached note becomes an answer to a question this
+    pipeline is no longer asking. Keyed by identity alone the stage "runs",
+    finds nothing new, returns the old notes byte for byte — and the runner
+    stamps the new fingerprint over them, so every stage downstream stays
+    cached against a description that was never re-made.
+
+    The creator's brief is deliberately not in the signature. It reaches the
+    model as vocabulary rather than as the question, and re-watching the whole
+    shoot because one word of it was reworded is a real bill for a description
+    that would come back saying the same thing.
+    """
+    return f"{source_key}{DESCRIBE_KEY_SEPARATOR}{signature}"
+
+
+def describe_signature(model: str) -> str:
+    return hash_parts(INSTRUCTIONS, model)
+
+
+def forget_superseded(cached: ClipNotes, keys: set[str]) -> ClipNotes:
+    """Drop notes about footage we still have that answer an older question.
+
+    Without this the cache accumulates two notes with the same `clip_id` — the
+    old question's and the new one's — and everything that looks a clip up by id
+    (the action-aware cutter, the creator's `video-notes.md`) reads whichever
+    came first. Notes about files that have left the project are kept: they cost
+    nothing and they are still the answer if that footage comes back.
+    """
+    sources = {key.split(DESCRIBE_KEY_SEPARATOR, 1)[0] for key in keys}
+    kept = [
+        note
+        for note in cached.notes
+        if note.source_key in keys
+        or note.source_key.split(DESCRIBE_KEY_SEPARATOR, 1)[0] not in sources
+    ]
+    return cached.model_copy(update={"notes": kept})
 
 
 def build_describe_prompt(clip_id: str, duration: float, brief: str) -> str:
@@ -149,14 +198,26 @@ def describe(ctx: StageContext) -> ClipNotes:
         if ctx.store.exists("04c-clip-notes")
         else ClipNotes()
     )
-    pairs = [(clip.clip_id, clip.source_key or clip.path) for clip in manifest.clips]
+    choice = ctx.config.llm_for("describe")
+    signature = describe_signature(
+        resolved_llm_model(choice, ctx.config.analyze.llm_model)
+    )
+    pairs = [
+        (clip.clip_id, describe_key(clip.source_key or clip.path, signature))
+        for clip in manifest.clips
+    ]
+    cached = forget_superseded(cached, {key for _, key in pairs})
     pending = clips_needing_description(cached, pairs)
 
     if not pending:
         _write_markdown(ctx, cached)
         return cached
 
-    provider = resolve_llm(ctx.config.llm_for("describe"), ctx.config.analyze.llm_model)
+    provider = resolve_llm(
+        choice,
+        ctx.config.analyze.llm_model,
+        cache_dir=llm_cache_dir(ctx.work_dir),
+    )
     if not getattr(provider, "reads_video", False):
         raise RuntimeError(
             f"describe needs a provider that can watch video; '{provider.name}' is "
@@ -178,7 +239,7 @@ def describe(ctx: StageContext) -> ClipNotes:
         note = parse_clip_note(
             response,
             clip_id,
-            clip.source_key or clip.path,
+            describe_key(clip.source_key or clip.path, signature),
             clip.duration,
             Path(clip.path).name,
         )

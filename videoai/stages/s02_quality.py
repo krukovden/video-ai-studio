@@ -14,7 +14,10 @@ SAMPLE_COUNT = 12
 # project (56 clips, iPhone 4K HEVC, scored at 720p proxy): mean Laplacian variance
 # ranged 276-1493, giving blur scores 0.000-0.447 — nowhere near the 0.95 unusable
 # cutoff below, so no real footage is falsely rejected. The cutoff is deliberately
-# conservative, tuned to reject only genuine defocus.
+# conservative, tuned to reject only genuine defocus. The variance is read off the
+# proxy's pixels, so it also depends on which encoder built that proxy — which is
+# why ingest names the encoder in the proxy's filename rather than reusing one
+# encoder's file for another's run.
 BLUR_REFERENCE = 500.0
 BLACK_LUMA_THRESHOLD = 12.0
 

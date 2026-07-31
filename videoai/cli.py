@@ -19,7 +19,7 @@ from videoai.core.project import (
 )
 from videoai.core.registry import StageContext
 from videoai.core.runner import StageFailure, ordered_stages, run_pipeline, stale_downstream
-from videoai.core.store import ArtifactStore, hash_file, hash_parts
+from videoai.core.store import ArtifactStore, hash_file, hash_file_ends, hash_parts
 from videoai.stages.s08_polish import approval_is_current
 
 app = typer.Typer(add_completion=False, help="Automated video pipeline.")
@@ -68,16 +68,22 @@ def _snapshot_if_executed(ctx: StageContext, project: Path, executed: bool) -> N
 
 
 def _media_fingerprint(project_dir: Path) -> str:
-    """Fingerprint every clip ingest will read, including per-camera subfolders."""
+    """Fingerprint every clip ingest will read, including per-camera subfolders.
+
+    Addressed by content, exactly like `store.source_key`, and for the same
+    reason: this value is mixed into EVERY stage's fingerprint, so keying it on
+    mtime meant an rsync, a Time Machine restore or a cloud-sync round-trip
+    re-ran the whole pipeline — including re-uploading the entire shoot to a
+    metered video model — over footage that had not changed by a byte.
+    """
     parts: list[str] = []
     clip_dir = resolve_clip_dir(project_dir)
     cameras = list_camera_clips(clip_dir)
     for camera in sorted(cameras):
         for path in cameras[camera]:
             if path.is_file():
-                stat = path.stat()
-                key = path.relative_to(project_dir) if path.is_relative_to(project_dir) else path
-                parts.append(f"{key}:{stat.st_size}:{int(stat.st_mtime)}")
+                key = path.relative_to(project_dir) if path.is_relative_to(project_dir) else path.name
+                parts.append(f"{key}:{hash_file_ends(path)}")
     return hash_parts(*parts)
 
 
@@ -263,6 +269,10 @@ def produce(
     project: Path = typer.Argument(..., help="Project to take through the production contract"),
     config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
     debug: bool = typer.Option(False, "--debug", help="Re-raise stage failures with their traceback"),
+    open_editor: bool = typer.Option(
+        False, "--edit",
+        help="When the draft needs approving, open the edit page instead of just naming it",
+    ),
 ) -> None:
     """Build a review draft, then a contract-validated final after approval."""
     clip_dir = resolve_clip_dir(project)
@@ -303,6 +313,22 @@ def produce(
     except RuntimeError as error:
         typer.echo(str(error))
         typer.echo(f"Review: {draft.path}")
+        # The one moment a creator is deciding anything, and the only place the
+        # edit page has ever been reachable from the workflow they actually run.
+        if open_editor:
+            saved = _serve_edit_page(project, config_path)
+            if saved:
+                typer.echo(
+                    "Your changes are saved. Run produce again to rebuild the draft "
+                    "from them before approving."
+                )
+                _snapshot_if_executed(ctx, project, draft_executed)
+                return
+        else:
+            typer.echo(
+                "Change it — reorder or switch off shots, and swap, move, resize or "
+                f"turn any accent:\n  videoai edit {project} --config {config_path}"
+            )
         typer.echo(
             f"Then approve: videoai approve {project} --config {config_path}"
         )
@@ -331,26 +357,101 @@ def config(path: Path = typer.Option(Path("config.yaml"), help="Config file path
     typer.echo(load_config(path).model_dump_json(indent=2))
 
 
-if __name__ == "__main__":
-    app()
+def _grab_jpeg(
+    source: Path, at_seconds: float, frame: tuple[int, int], width: int
+) -> bytes | None:
+    """One frame of a source file, in the delivery's shape, as JPEG bytes.
+
+    JPEG rather than PNG, and downscaled: these are photographs, and a page of
+    full-resolution stills was 40MB and nobody opened it. Returns None when the
+    file will not seek or decode, which is a shot the page simply does not draw
+    rather than a run that fails.
+    """
+    import cv2
+
+    capture = cv2.VideoCapture(str(source))
+    capture.set(cv2.CAP_PROP_POS_MSEC, at_seconds * 1000.0)
+    ok, picture = capture.read()
+    capture.release()
+    if not ok:
+        return None
+    picture = cv2.resize(picture, frame, interpolation=cv2.INTER_AREA)
+    if picture.shape[1] > width:
+        scale = width / picture.shape[1]
+        picture = cv2.resize(
+            picture, (width, max(1, round(picture.shape[0] * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    ok, encoded = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    return encoded.tobytes() if ok else None
+
+
+def _shown_order(store, timeline):
+    """Every shot the creator may arrange, in the order they last left it.
+
+    Deliberately built from the PROPOSAL and not from `05-timeline`: assembly has
+    already removed the shots that were switched off, and a shot that vanishes
+    from the page cannot be switched back on — there would be nothing left to
+    click. So the running order is reapplied here with every shot enabled, which
+    reuses assembly's own placement rule (including where a shot the creator has
+    never seen belongs) and then marks the disabled ones instead of dropping them.
+    """
+    from videoai.core.models import Timeline
+    from videoai.logic.decisions import read_overrides
+    from videoai.logic.timeline import apply_clip_overrides
+
+    overrides = read_overrides(store)
+    proposal = store.read("05-proposal", Timeline) if store.exists("05-proposal") else timeline
+    arranged, _ = apply_clip_overrides(
+        proposal,
+        overrides.model_copy(update={
+            "clips": [
+                decided.model_copy(update={"enabled": True})
+                for decided in overrides.clips
+            ]
+        }),
+    )
+    switched_off = {decided.ref for decided in overrides.clips if not decided.enabled}
+    return [(clip, clip.ref not in switched_off) for clip in arranged.clips]
+
+
+def _accent_shot(timeline, event):
+    """The shot an accent is drawn over, and where in its source that moment is.
+
+    Found by ref wherever there is one: an accent belongs to a moment in a shot,
+    so looking it up by second would go hunting on whatever footage the last
+    reorder happened to move underneath it. Only an accent from before refs
+    existed falls back to the clock.
+    """
+    if event.clip_ref:
+        try:
+            clip = timeline.clips[timeline.index_of(event.clip_ref)]
+        except KeyError:
+            return None, 0.0
+        return clip, clip.offset + min(max(0.0, event.at_in_clip), clip.dur)
+    return _clip_at(timeline, event.at_seconds)
 
 
 def _build_preview(
     project: Path, config_path: Path, save_url: str = "", token: str = ""
 ) -> str | None:
-    """The approval page as HTML, or None when there is nothing to approve.
+    """The edit page as HTML, or None when there is no edit to show yet.
 
     Shared by the command that writes it to a file and the one that serves it, so
-    what a creator edits is the same page either way.
+    what a creator changes is the same page either way.
     """
-    import base64
-
     import cv2
 
     from videoai.core.models import EffectPlan, Manifest, StoryPlan, Timeline
+    from videoai.logic.decisions import (
+        apply_effect_overrides,
+        read_overrides,
+        reproject_events,
+    )
     from videoai.logic.effects import load_library
     from videoai.logic.effects_preview import (
         EffectProposal,
+        ShotCard,
         proposal_geometry,
         render_preview_html,
     )
@@ -359,50 +460,53 @@ def _build_preview(
 
     work_dir = project / "work"
     store = ArtifactStore(work_dir)
-    for name in ("05-timeline", "05d-effects"):
-        if not store.exists(name):
-            raise typer.BadParameter(
-                f"{name} is missing; run the pipeline through the effects stage first"
-            )
+    if not store.exists("05-timeline"):
+        raise typer.BadParameter(
+            "05-timeline is missing; run the pipeline through the assemble stage first"
+        )
     timeline = store.read("05-timeline", Timeline)
-    plan = store.read("05d-effects", EffectPlan)
+    # The page has to show the video the creator will get, which means their own
+    # earlier decisions — not the proposal the model made against whatever order
+    # it happened to be shown. A second visit that silently reverted the first
+    # visit's work would be the same silent loss this whole path exists to stop.
+    # Effects are optional: a calm review with none is still an edit to arrange.
+    planned = store.read("05d-effects", EffectPlan) if store.exists("05d-effects") else EffectPlan()
+    plan, _ = apply_effect_overrides(planned, read_overrides(store))
+    plan, _ = reproject_events(plan, timeline)
     manifest = store.read("01-manifest", Manifest)
     story = store.read("05a-storyplan", StoryPlan) if store.exists("05a-storyplan") else StoryPlan()
-    if not plan.events:
-        typer.echo("No effects were planned, so there is nothing to approve.")
-        return None
 
     library = load_library(Path(plan.library) if plan.library else None)
     frame = (timeline.width, timeline.height)
     preview_dir = work_dir / "effects-preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
 
+    shots: list[ShotCard] = []
+    for clip, enabled in _shown_order(store, timeline):
+        info = manifest.by_id(clip.src)
+        thumb = _grab_jpeg(
+            resolve_media_path(project, info.proxy_path or info.path),
+            clip.offset + clip.dur / 2.0, frame, 320,
+        )
+        if thumb is None:
+            continue
+        shots.append(ShotCard(
+            ref=clip.ref or clip.src, beat=clip.beat, quote=clip.quote,
+            duration=clip.dur, enabled=enabled, thumb_jpeg=thumb,
+        ))
+    if not shots:
+        typer.echo("This project has no edit to show yet.")
+        return None
+
     proposals = []
     for index, event in enumerate(plan.events):
-        clip, offset = _clip_at(timeline, event.at_seconds)
+        clip, offset = _accent_shot(timeline, event)
         if clip is None:
             continue
         info = manifest.by_id(clip.src)
         source = resolve_media_path(project, info.proxy_path or info.path)
-        capture = cv2.VideoCapture(str(source))
-        capture.set(cv2.CAP_PROP_POS_MSEC, offset * 1000.0)
-        ok, picture = capture.read()
-        capture.release()
-        if not ok:
-            continue
-        picture = cv2.resize(picture, frame, interpolation=cv2.INTER_AREA)
-
-        # JPEG, not PNG: these are photographs, and eight full-resolution PNGs
-        # made a 40MB page nobody wants to open.
-        preview_width = 1280
-        if picture.shape[1] > preview_width:
-            scale = preview_width / picture.shape[1]
-            picture = cv2.resize(
-                picture, (preview_width, max(1, round(picture.shape[0] * scale))),
-                interpolation=cv2.INTER_AREA,
-            )
-        ok, frame_bytes = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, 88])
-        if not ok:
+        frame_bytes = _grab_jpeg(source, offset, frame, 1280)
+        if frame_bytes is None:
             continue
 
         sprite = _sprite_base_image(library, event, frame, preview_dir, index)
@@ -421,8 +525,9 @@ def _build_preview(
 
         proposals.append(
             EffectProposal(
-                index=index, event=event, motion_xy=motion_xy, motion_cell=cell,
-                frame_jpeg=frame_bytes.tobytes(), sprite_png=sprite_bytes.tobytes(),
+                index=index, event=event, clip_ref=clip.ref or clip.src,
+                motion_xy=motion_xy, motion_cell=cell,
+                frame_jpeg=frame_bytes, sprite_png=sprite_bytes.tobytes(),
                 sprite_width=width_frac, sprite_height=height_frac,
                 start_x=x_frac, start_y=y_frac, frame_size=frame,
             )
@@ -433,119 +538,43 @@ def _build_preview(
         if item.motion_cell and item.motion_cell == item.event.screen_position
     )
     typer.echo(
-        f"{len(proposals)} accent(s); {agree} sit where the picture is actually moving."
+        f"{len(shots)} shot(s) and {len(proposals)} accent(s); "
+        f"{agree} sit where the picture is actually moving."
     )
     return render_preview_html(
-        proposals, story.title or project.name,
-        _sprite_choices(library, frame), save_url=save_url, token=token,
+        shots, proposals, story.title or project.name,
+        _sprite_choices(library, frame),
+        # Scoped to this project's own folder, so two projects cannot inherit
+        # each other's half-finished work out of one browser's storage.
+        project_key=hash_parts(str(project.resolve())),
+        save_url=save_url, token=token,
     )
 
 
-@app.command("preview-effects")
-def preview_effects(
-    project: Path = typer.Argument(..., help="Project whose planned effects to draw"),
-    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
-) -> None:
-    """Write the approval page to a file, for opening by hand.
+def _serve_edit_page(project: Path, config_path: Path) -> bool:
+    """Serve the edit page until Ctrl-C, and say whether anything was saved.
 
-    `approve-effects` is usually what you want: it serves the same page and saves
-    what you decide. This is the version for looking at it later, or on another
-    machine.
-    """
-    page = _build_preview(project, config_path)
-    if page is None:
-        return
-    output_dir = project / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_dir / "effects-preview.html"
-    target.write_text(page, encoding="utf-8")
-    typer.echo(f"Wrote {target}")
-    typer.echo("Edits there stay in the browser — use 'videoai approve-effects' to save them.")
-
-
-def _effects_fingerprint(project: Path, config_path: Path) -> str:
-    """The fingerprint the effects stage would store for this project right now.
-
-    Written alongside applied decisions so the runner treats the creator's plan
-    as current. Without it the stage looks stale, re-plans, and throws the
-    decisions away — which is exactly what happened, twice.
-    """
-    from videoai.core.registry import REGISTRY
-    from videoai.core.runner import _fingerprint
-
-    work_dir = project / "work"
-    ctx = StageContext(
-        project_dir=project, input_dir=project, work_dir=work_dir,
-        output_dir=project / "output", config=load_config(config_path),
-        store=ArtifactStore(work_dir),
-    )
-    return _fingerprint(
-        REGISTRY["effects"], ctx, _media_fingerprint(project), _brief_fingerprint(project)
-    )
-
-
-@app.command("apply-effects")
-def apply_effects(
-    project: Path = typer.Argument(..., help="Project to apply the decisions to"),
-    decisions: Path = typer.Option(
-        ..., "--decisions", help="effects-decisions.json downloaded from the preview page"
-    ),
-    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
-) -> None:
-    """Write the creator's decisions from the approval page into the effect plan.
-
-    Dropped accents are kept in the plan and marked, rather than deleted: a
-    decision that vanishes is one the next re-plan will happily make again, and
-    the record of what was looked at and turned down is worth keeping.
-    """
-    import json as _json
-
-    from videoai.logic.approval import apply_decisions
-
-    store = ArtifactStore(project / "work")
-    if not store.exists("05d-effects"):
-        raise typer.BadParameter("this project has no effect plan to apply decisions to")
-    result = apply_decisions(
-        store,
-        _json.loads(decisions.read_text(encoding="utf-8")),
-        _effects_fingerprint(project, config_path),
-    )
-    typer.echo("Applied: " + result.summary() + ".")
-    typer.echo("Re-run the delivery to render them: videoai produce " + str(project))
-
-
-@app.command("approve-effects")
-def approve_effects(
-    project: Path = typer.Argument(..., help="Project whose accents to approve"),
-    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
-) -> None:
-    """Open the approval page and save what you decide, with no file shuffling.
-
-    The page cannot write to disk, so this serves it from a small server that
-    lives only while the approval is open: press Save and the decisions are in
-    the plan before the button stops looking pressed. Stop it with Ctrl-C when
-    you are done.
+    The page cannot write to disk, so it posts to a small server that lives only
+    while the editing is open: press Save and the decisions are in the edit
+    before the button stops looking pressed.
     """
     import webbrowser
 
     from videoai.logic.approval_server import ApprovalSession, serve
 
-    page = _build_preview(project, config_path)
+    # The session is created first because the page has to be built around the
+    # token it mints. No stage fingerprint: the decisions land in the creator's
+    # own artifact, which no stage writes, so there is nothing to call stale.
+    session = ApprovalSession(project_dir=project, page_html="")
+    page = _build_preview(project, config_path, save_url="/save", token=session.token)
     if page is None:
-        return
-
-    session = ApprovalSession(
-        project_dir=project, page_html="",
-        stage_fingerprint=_effects_fingerprint(project, config_path),
-    )
-    session.page_html = _build_preview(
-        project, config_path, save_url="/save", token=session.token
-    )
+        return False
+    session.page_html = page
     session.on_save = lambda result: typer.echo("  Saved: " + result.summary())
 
     server, url = serve(session)
-    typer.echo(f"Approval page: {url}")
-    typer.echo("Edit it, press Save, then stop this with Ctrl-C.")
+    typer.echo(f"Edit page: {url}")
+    typer.echo("Rearrange it, press Save, then stop this with Ctrl-C.")
     webbrowser.open(url)
     try:
         while True:
@@ -554,10 +583,86 @@ def approve_effects(
         typer.echo("")
     finally:
         server.shutdown()
-    if session.saves:
-        typer.echo("Decisions applied. Render them: videoai produce " + str(project))
-    else:
-        typer.echo("Nothing was saved, so the plan is unchanged.")
+    if not session.saves:
+        typer.echo("Nothing was saved, so the edit is unchanged.")
+    return bool(session.saves)
+
+
+@app.command("edit")
+def edit(
+    project: Path = typer.Argument(..., help="Project whose edit to arrange"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+    write: bool = typer.Option(
+        False, "--write",
+        help="Write the page to output/edit.html instead of serving it; edits then "
+             "stay in the browser until you copy them back",
+    ),
+) -> None:
+    """Arrange the edit: the running order, and every accent on its own frame.
+
+    Drag a shot to move it or untick it to take it out; swap, drag, resize or
+    turn any badge. Press Save and it is on disk. `--write` produces the same
+    page as a file, for looking at later or on another machine.
+    """
+    if not write:
+        if _serve_edit_page(project, config_path):
+            typer.echo("Render the changes: videoai produce " + str(project))
+        return
+    page = _build_preview(project, config_path)
+    if page is None:
+        return
+    output_dir = project / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / "edit.html"
+    target.write_text(page, encoding="utf-8")
+    typer.echo(f"Wrote {target}")
+    typer.echo("Edits there stay in the browser — run 'videoai edit' to save them.")
+
+
+@app.command("preview-effects", hidden=True)
+def preview_effects(
+    project: Path = typer.Argument(...),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config"),
+) -> None:
+    """The old name for `videoai edit --write`."""
+    edit(project, config_path, write=True)
+
+
+@app.command("approve-effects", hidden=True)
+def approve_effects(
+    project: Path = typer.Argument(...),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config"),
+) -> None:
+    """The old name for `videoai edit`."""
+    edit(project, config_path, write=False)
+
+
+@app.command("apply-effects")
+def apply_effects(
+    project: Path = typer.Argument(..., help="Project to apply the decisions to"),
+    decisions: Path = typer.Option(
+        ..., "--decisions", help="effects-decisions.json downloaded from the edit page"
+    ),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
+) -> None:
+    """Write the creator's decisions from the edit page into work/05e-overrides.json.
+
+    Dropped accents are recorded as refused rather than deleted: a decision that
+    vanishes is one the next re-plan will happily make again, and the record of
+    what was looked at and turned down is worth keeping.
+    """
+    import json as _json
+
+    from videoai.logic.approval import apply_decisions
+
+    store = ArtifactStore(project / "work")
+    if not store.exists("05-timeline"):
+        raise typer.BadParameter("this project has no edit to apply decisions to")
+    result = apply_decisions(
+        store, _json.loads(decisions.read_text(encoding="utf-8"))
+    )
+    typer.echo("Applied: " + result.summary() + ".")
+    typer.echo("Re-run the delivery to render them: videoai produce " + str(project))
 
 
 def _sprite_choices(library, frame: tuple[int, int]) -> list[dict]:
@@ -660,3 +765,10 @@ def fetch_badges(
         "Their licence needs a credit, which is attached to each sprite and is "
         "written into output/metadata.md only when one of them is actually used."
     )
+
+
+# At the very bottom, and not in the middle of the file: everything below the
+# `app()` call would otherwise never be defined when the module is run with
+# `python -m videoai.cli`, so half the commands did not exist that way.
+if __name__ == "__main__":
+    app()

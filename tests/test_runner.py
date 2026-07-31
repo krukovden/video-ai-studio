@@ -350,3 +350,97 @@ def test_hand_edited_artifact_reruns_its_dependents(clean_registry, ctx: StageCo
     assert executed == ["second"]
     assert calls == ["second"]
     assert ctx.store.read("02-second", Payload).value == 42
+
+
+# --- The provider name is an alias; the model behind it is what answered ---
+
+
+def _register_llm_stage(calls: list[str]) -> None:
+    @stage(id="scoring", produces="01-scoring", requires=(), provider_key="llm", model=Payload)
+    def scoring(ctx: StageContext) -> Payload:
+        calls.append("scoring")
+        return Payload(value=1)
+
+
+def _with_config(ctx: StageContext, config: Config) -> StageContext:
+    return StageContext(
+        project_dir=ctx.project_dir,
+        input_dir=ctx.input_dir,
+        work_dir=ctx.work_dir,
+        output_dir=ctx.output_dir,
+        config=config,
+        store=ctx.store,
+    )
+
+
+def test_a_changed_model_reruns_the_stage_that_called_it(clean_registry, ctx: StageContext):
+    """Sonnet's judgement of a take is not Opus's. Fingerprinting the provider
+    name alone left the analysis cached across a model change."""
+    from videoai.config import AnalyzeSettings
+
+    calls: list[str] = []
+    _register_llm_stage(calls)
+    run_pipeline(ctx, only=None, force=False, media_fingerprint="src")
+    calls.clear()
+
+    switched = _with_config(ctx, Config(analyze=AnalyzeSettings(llm_model="opus")))
+    executed = run_pipeline(switched, only=None, force=False, media_fingerprint="src")
+
+    assert executed == ["scoring"]
+    assert calls == ["scoring"]
+
+
+def test_rotating_the_model_behind_an_alias_reruns_the_stage(
+    clean_registry, ctx: StageContext, monkeypatch
+):
+    """"gemini_api" names whichever weights DEFAULT_MODEL points at today.
+    Google retiring one, or an edit to this repository, changes every editorial
+    decision in the pipeline while the cache reports it is up to date."""
+    from videoai.config import AnalyzeSettings
+
+    import videoai.providers.llm_gemini_api as gemini
+
+    _register_llm_stage([])
+    config = Config(
+        providers={"asr": "mock", "llm": "gemini_api"},
+        analyze=AnalyzeSettings(llm_model=""),
+    )
+    run_pipeline(_with_config(ctx, config), only=None, force=False, media_fingerprint="src")
+
+    monkeypatch.setattr(gemini, "DEFAULT_MODEL", "gemini-4.0-flash-lite")
+    executed = run_pipeline(
+        _with_config(ctx, config), only=None, force=False, media_fingerprint="src"
+    )
+
+    assert executed == ["scoring"]
+
+
+def test_a_model_named_alongside_the_provider_is_fingerprinted(
+    clean_registry, ctx: StageContext
+):
+    """"gemini_api:gemini-3.6-pro" and "gemini_api:gemini-3.1-flash-lite" are two
+    different models, and the provider name they share says nothing about which
+    one made the edit."""
+    calls: list[str] = []
+    _register_llm_stage(calls)
+    flash = _with_config(ctx, Config(providers={"llm": "gemini_api:gemini-3.1-flash-lite"}))
+    run_pipeline(flash, only=None, force=False, media_fingerprint="src")
+
+    pro = _with_config(ctx, Config(providers={"llm": "gemini_api:gemini-3.6-pro"}))
+    executed = run_pipeline(pro, only=None, force=False, media_fingerprint="src")
+
+    assert executed == ["scoring"]
+
+
+def test_fingerprinting_never_constructs_a_provider(clean_registry, ctx: StageContext, monkeypatch):
+    """A fingerprint is computed for every stage on every run, including the
+    ones that will be skipped: it must not start a CLI or open a socket."""
+    import videoai.providers.base as base
+    from videoai.core.runner import _fingerprint
+
+    _register_llm_stage([])
+    monkeypatch.setattr(
+        base, "_build_llm", lambda *a, **k: pytest.fail("a provider was constructed")
+    )
+
+    assert _fingerprint(REGISTRY["scoring"], ctx, "src", "brief")

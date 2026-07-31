@@ -59,15 +59,25 @@ from videoai.core.models import (
 from videoai.core.registry import StageContext, stage
 from videoai.core.text import render_text_image
 from videoai.core.store import hash_file, hash_parts
+from videoai.logic.decisions import (
+    OVERRIDES_ARTIFACT,
+    apply_effect_overrides,
+    read_overrides,
+    reproject_events,
+)
 from videoai.logic.effects import (
     EffectLibrary,
     SpriteTransform,
     animation_transform,
+    apply_creator_rotation,
     bubble_max_width,
+    clamp_scale_factor,
     library_fingerprint,
     load_library,
+    normalise_rotation,
     place_sprite,
     render_speech_bubble,
+    sprite_render_key,
     sprite_target_height,
 )
 from videoai.logic.music import attribution_line, list_tracks, select_track
@@ -156,6 +166,10 @@ class _EffectOverlay:
     # over `cell`: nine cells are what a model aims with, and a person who can
     # see the shot can say "just above his hand".
     point: tuple[float, float] | None = None
+    # The creator's tilt, in degrees. The size they asked for is already in
+    # `image`, because it decides which pixels are drawn; the tilt cannot be,
+    # because the animation is still turning the sprite every frame.
+    rotation: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -753,32 +767,57 @@ def _sprite_base_image(
     frame: tuple[int, int],
     work_dir: Path,
     index: int,
+    cache: dict | None = None,
 ):
     """The sprite for one event at its final resting size, as an RGBA array.
 
     A nine-patch is stretched around its text first, so its size comes from the
-    words; every other sprite is scaled to a fraction of the frame's height. The
-    per-frame animation then works from this image, so the overshoot of a pop-in is
-    an overshoot of the size the sprite is meant to end at.
+    words; every other sprite is scaled to a fraction of the frame's height. Both
+    are then multiplied by the creator's own `scale_factor`, which belongs here
+    rather than in the per-frame transform: it decides how many pixels the drawing
+    is rendered at, so folding it into the animation instead would resample an
+    already-resampled bitmap and lose the detail the creator asked to see. The
+    per-frame animation works from this image, so the overshoot of a pop-in is an
+    overshoot of the size the sprite is meant to end at.
+
+    `cache` is optional and keyed by `sprite_render_key`, so a bubble repeated at
+    three moments is stretched and lettered once.
     """
     import cv2
 
     sprite = library.get(event.effect_name)
     source = library.path_of(sprite)
+    key = sprite_render_key(sprite, event.text, event.scale, event.scale_factor, frame)
+    if cache is not None and key in cache:
+        return cache[key]
     if sprite.nine_patch is not None:
-        target = work_dir / f"effect-{index:02d}-{sprite.name}.png"
+        # The index orders the work directory for whoever opens it; the key is
+        # what keeps two accents that differ only in the creator's size from
+        # overwriting each other's file.
+        target = work_dir / f"effect-{index:02d}-{sprite.name}-{key}.png"
         render_speech_bubble(
             source,
             sprite.nine_patch,
             event.text,
-            bubble_max_width(event.scale, frame[0]),
+            bubble_max_width(event.scale, frame[0], event.scale_factor),
             target,
         )
-        return _load_rgba(target)
-    image = _load_rgba(source)
-    height = sprite_target_height(event.scale, frame[1])
-    width = max(1, round(image.shape[1] * height / max(1, image.shape[0])))
-    return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+        image = _load_rgba(target)
+    else:
+        image = _load_rgba(source)
+        height = sprite_target_height(event.scale, frame[1], event.scale_factor)
+        width = max(1, round(image.shape[1] * height / max(1, image.shape[0])))
+        image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+    # A wide drawing at the top of the scale range can come out wider than the
+    # delivery itself, and a sprite wider than the frame cannot be placed
+    # anywhere — only cropped on both sides.
+    if image.shape[1] > frame[0]:
+        width = frame[0]
+        height = max(1, round(image.shape[0] * width / image.shape[1]))
+        image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+    if cache is not None:
+        cache[key] = image
+    return image
 
 
 def _transform_sprite(image, transform: SpriteTransform):
@@ -808,16 +847,25 @@ def _transform_sprite(image, transform: SpriteTransform):
         ),
     )
     if abs(transform.rotation) > 0.01:
-        pad = max(2, round(max(width, height) * 0.12))
-        out = cv2.copyMakeBorder(
-            out, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(0, 0, 0, 0)
-        )
-        centre = (out.shape[1] / 2, out.shape[0] / 2)
-        matrix = cv2.getRotationMatrix2D(centre, transform.rotation, 1.0)
+        # The canvas grows to the turned bounding box rather than by a fixed
+        # fraction of the sprite. A twelfth of the sprite's size covers a
+        # seven-degree shake and quietly cuts the corners off anything turned
+        # further — a spin-in on its first frames, or a creator who tilted a badge
+        # properly. The two spare pixels are for the interpolated edge.
+        angle = math.radians(transform.rotation)
+        across, along = abs(math.cos(angle)), abs(math.sin(angle))
+        turned_width = math.ceil(width * across + height * along) + 2
+        turned_height = math.ceil(width * along + height * across) + 2
+        matrix = cv2.getRotationMatrix2D((width / 2, height / 2), transform.rotation, 1.0)
+        # Rotating about the sprite's own centre and then moving that centre to
+        # the middle of the larger canvas keeps the drawing where it was; the
+        # placement code is handed the grown size and pulls it back into frame.
+        matrix[0, 2] += (turned_width - width) / 2
+        matrix[1, 2] += (turned_height - height) / 2
         out = cv2.warpAffine(
             out,
             matrix,
-            (out.shape[1], out.shape[0]),
+            (turned_width, turned_height),
             flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=(0, 0, 0, 0),
@@ -829,6 +877,39 @@ def _transform_sprite(image, transform: SpriteTransform):
             np.uint8
         )
     return out
+
+
+def _effect_position(
+    effect: _EffectOverlay,
+    size: tuple[int, int],
+    transform: SpriteTransform,
+    frame: tuple[int, int],
+) -> tuple[int, int]:
+    """The top-left pixel this frame's sprite is composited at, motion included.
+
+    The two placements keep different promises. A dragged point is the sprite's
+    centre — what a person aims at — and it is clamped *after* the motion offset,
+    because what the approval page promised is that the accent the creator put
+    there stays on the frame: neither a tilt growing the bounding box nor a bounce
+    lifting the sprite may break that. A grid cell is only pulled inside the safe
+    margin, and the motion is then free to carry the sprite out of that margin,
+    which is precisely what drift-up exists to do.
+    """
+    sprite_width, sprite_height = size
+    # Both axes off the height: an accent's drift is a fraction of the thing
+    # itself, and a wide sprite drifting further sideways than a tall one reads
+    # as two different motions.
+    dx = round(transform.dx * sprite_height)
+    dy = round(transform.dy * sprite_height)
+    if effect.point is None:
+        x, y = place_sprite(size, effect.cell, effect.anchor, frame)
+        return x + dx, y + dy
+    x = round(effect.point[0] * frame[0] - sprite_width / 2) + dx
+    y = round(effect.point[1] * frame[1] - sprite_height / 2) + dy
+    return (
+        min(max(x, 0), max(0, frame[0] - sprite_width)),
+        min(max(y, 0), max(0, frame[1] - sprite_height)),
+    )
 
 
 def build_effect_overlays(
@@ -846,20 +927,34 @@ def build_effect_overlays(
     number of frames, so by the twentieth cut the delivery has drifted from the
     plan by more than a frame. The event is therefore placed at the same offset
     inside the same segment, measured — the identical correction captions get.
+
+    Which segment that is comes from the accent's own `clip_ref` wherever it has
+    one. Searching by absolute time would find whichever shot now happens to sit
+    under that second, which after a reorder is a different shot: a badge chosen
+    for "he spots the syringe" appearing over the box being opened is not a badge
+    in the wrong place, it is a badge that is now a lie.
     """
     planned = cumulative_starts([clip.dur for clip in timeline.clips])
+    index_of_ref = {clip.ref: index for index, clip in enumerate(timeline.clips) if clip.ref}
     overlays: list[_EffectOverlay] = []
+    rendered: dict[str, object] = {}
     for index, event in enumerate(events):
         if not event.keep:
             # Turned down on the approval page. Dropped here rather than earlier
             # so the plan keeps the record of what was considered and refused.
             continue
-        segment = 0
-        for candidate, start in enumerate(planned):
-            if event.at_seconds + 1e-6 >= start:
-                segment = candidate
-        inside = max(0.0, event.at_seconds - planned[segment])
-        image = _sprite_base_image(library, event, frame, work_dir, index)
+        if event.clip_ref in index_of_ref:
+            segment = index_of_ref[event.clip_ref]
+            inside = min(max(0.0, event.at_in_clip), timeline.clips[segment].dur)
+        else:
+            # No anchor: an artifact written before refs existed. Absolute time is
+            # all it has ever had, so it is placed the way it always was.
+            segment = 0
+            for candidate, start in enumerate(planned):
+                if event.at_seconds + 1e-6 >= start:
+                    segment = candidate
+            inside = max(0.0, event.at_seconds - planned[segment])
+        image = _sprite_base_image(library, event, frame, work_dir, index, rendered)
         sprite = library.get(event.effect_name)
         duration = event.seconds if event.seconds > 0 else sprite.default_seconds
         overlays.append(
@@ -872,6 +967,7 @@ def build_effect_overlays(
                 animation=sprite.animation,
                 image=image,
                 point=(event.x, event.y) if event.x is not None and event.y is not None else None,
+                rotation=event.rotation,
             )
         )
     return overlays
@@ -945,26 +1041,14 @@ def _render_graphics_track(
                 if not (effect.start <= at < effect.start + effect.duration):
                     continue
                 progress = (at - effect.start) / effect.duration
-                transform = animation_transform(effect.animation, progress)
-                sprite = _transform_sprite(effect.image, transform)
-                if effect.point is not None:
-                    # A dragged point is the sprite's centre, which is what a
-                    # person aims at; clamped so a drag to the edge cannot push
-                    # the accent off the frame.
-                    x = round(effect.point[0] * frame[0] - sprite.shape[1] / 2)
-                    y = round(effect.point[1] * frame[1] - sprite.shape[0] / 2)
-                    x = min(max(x, 0), max(0, frame[0] - sprite.shape[1]))
-                    y = min(max(y, 0), max(0, frame[1] - sprite.shape[0]))
-                else:
-                    x, y = place_sprite(
-                        (sprite.shape[1], sprite.shape[0]), effect.cell, effect.anchor, frame
-                    )
-                _blend_at(
-                    canvas,
-                    sprite,
-                    x + round(transform.dx * sprite.shape[0]),
-                    y + round(transform.dy * sprite.shape[0]),
+                transform = apply_creator_rotation(
+                    animation_transform(effect.animation, progress), effect.rotation
                 )
+                sprite = _transform_sprite(effect.image, transform)
+                x, y = _effect_position(
+                    effect, (sprite.shape[1], sprite.shape[0]), transform, frame
+                )
+                _blend_at(canvas, sprite, x, y)
             process.stdin.write(canvas.tobytes())
         process.stdin.close()
         stderr = process.stderr.read().decode("utf-8", errors="replace")
@@ -1169,18 +1253,41 @@ def _polish_fingerprint_extras(ctx: StageContext) -> tuple[str, ...]:
     )
 
 
-def _planned_effects(ctx: StageContext) -> tuple[EffectPlan, EffectLibrary]:
-    """The accents to composite, or none.
+def _planned_effects(
+    ctx: StageContext, timeline: Timeline
+) -> tuple[EffectPlan, EffectLibrary]:
+    """The accents to composite, on this edit's clock, or none.
 
     Effects are seasoning: a missing artifact (an older project, a pipeline run
     that stopped before the effects stage) and `effects.enabled: false` both mean
     no accents, and neither is an error. Delivery has never depended on them and
     must not start now.
+
+    The plan is the model's proposal against the running order it was shown. Two
+    things are laid over it here, in this order: the creator's own decisions, and
+    then the projection onto the edit that is actually being rendered. Projecting
+    last is what keeps a swapped sprite or a dragged position attached to its
+    shot when that shot has since moved.
     """
     library = load_library()
     if not ctx.config.effects.enabled or not ctx.store.exists("05d-effects"):
         return EffectPlan(), library
     plan = ctx.store.read("05d-effects", EffectPlan)
+    if not any(event.clip_ref for event in plan.events) and plan.events:
+        print(
+            "  note: 05d-effects predates per-shot anchors, so its accents are "
+            "placed by absolute time and will not follow a reordered shot; re-run "
+            "the effects stage to anchor them."
+        )
+    plan, orphaned = apply_effect_overrides(plan, read_overrides(ctx.store))
+    if orphaned:
+        print(
+            f"  note: {orphaned} creator decision(s) match no accent in the current "
+            "plan; work/05e-overrides.json still holds them."
+        )
+    plan, dropped = reproject_events(plan, timeline)
+    for note in dropped:
+        print(f"  note: dropped an accent — {note}")
     unknown = sorted(
         {event.effect_name for event in plan.events}
         - set(library.names())
@@ -1239,6 +1346,11 @@ def _discard_delivery_outputs(output_dir: Path, output: Path) -> None:
 
 POLISH_REQUIRES = (
     "01-manifest", "03-transcript", "05-timeline", "05a-storyplan", "05d-effects",
+    # The creator's own decisions. Declared so that turning one accent down, or
+    # dragging another, re-renders the delivery — the running order they may also
+    # have changed already arrives through "05-timeline", which `assemble` built
+    # from the very same file.
+    OVERRIDES_ARTIFACT,
     "06-draft",
 )
 
@@ -1347,7 +1459,7 @@ def polish(ctx: StageContext) -> FinalResult:
     # picture master: this is a JSON read and a directory listing, and the one way
     # it can fail — a plan naming a sprite the library no longer has — must not
     # cost a full render first.
-    effect_plan, library = _planned_effects(ctx)
+    effect_plan, library = _planned_effects(ctx, timeline)
 
     # Everything above is a probe, a listing and some arithmetic. Everything below
     # re-encodes gigabytes, so the contract is checked against what is knowable
@@ -1516,7 +1628,13 @@ def polish(ctx: StageContext) -> FinalResult:
         # with none is as valid as a delivery with eight.
         effect_lines = [
             f"{overlay.name} at {overlay.start:.2f}s for {overlay.duration:.2f}s "
-            f"({overlay.cell}, {overlay.animation})"
+            f"({overlay.cell}, {overlay.animation}, "
+            # The drawn height, read off the bitmap that was really composited,
+            # so a creator's resize shows up here as pixels rather than as a
+            # multiplier nobody can picture.
+            f"{overlay.image.shape[0]}px"
+            + (f", {overlay.rotation:.0f} deg" if overlay.rotation else "")
+            + ")"
             for overlay in effect_overlays
         ]
         report_path = ctx.output_dir / "production-report.json"
@@ -1560,6 +1678,11 @@ def polish(ctx: StageContext) -> FinalResult:
                         "at_seconds": event.at_seconds,
                         "position": event.screen_position,
                         "scale": event.scale,
+                        # The band the model chose and what the creator did to
+                        # it: a resize is a rendering decision somebody made, so
+                        # a reviewer can see it without opening the video.
+                        "scale_factor": round(clamp_scale_factor(event.scale_factor), 3),
+                        "rotation": round(normalise_rotation(event.rotation), 2),
                         "text": event.text,
                         "reason": event.reason,
                     }

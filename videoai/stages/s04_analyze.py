@@ -30,7 +30,7 @@ from videoai.logic.reel import (
     reel_seconds,
 )
 from videoai.logic.takes import detect_take_groups
-from videoai.providers.base import resolve_llm
+from videoai.providers.base import llm_cache_dir, resolve_llm
 
 INSTRUCTIONS = """You are editing a short YouTube video in which a child reviews a toy.
 
@@ -184,33 +184,76 @@ def _describe_inserts(
     """One batched model call describing every insert clip from its keyframes.
 
     The planner cannot otherwise see what a silent clip shows and has been
-    observed placing it in the wrong section. A missing or unparsable reply
-    degrades to an empty description per clip rather than failing the stage:
-    a worse placement is not the same failure as a broken pipeline.
+    observed placing it in the wrong section. So a failed call is retried once —
+    a CLI that was rate-limited or a socket that closed is not an answer — and a
+    second failure stops the stage. Swallowing it, which is what this used to do,
+    turned one transient error into every insert being placed by chronology alone,
+    with nothing in the artifact to say the descriptions were ever missing.
+
+    A clip the model simply did not mention still ends up with an empty
+    description: that is the model answering, and one unnamed shot is not a
+    reason to throw away the ones it did name.
     """
     if not inserts:
         return {}
     frames_by_clip = _insert_keyframes(ctx, manifest, inserts, ctx.config.analyze)
     if not frames_by_clip:
         return {}
-    provider = resolve_llm(ctx.config.llm_for("analyze"), ctx.config.analyze.llm_model)
+    provider = resolve_llm(
+        ctx.config.llm_for("analyze"),
+        ctx.config.analyze.llm_model,
+        cache_dir=llm_cache_dir(ctx.work_dir),
+    )
     prompt = build_insert_description_prompt(inserts, frames_by_clip, brief)
     all_frames = [frame for frames in frames_by_clip.values() for frame in frames]
-    try:
-        response = provider.complete_json(
-            prompt, all_frames, ctx.config.analyze.llm_timeout_seconds
-        )
-    except Exception:
-        return {}
-    raw = response.get("descriptions")
-    if not isinstance(raw, dict):
-        return {}
+    raw = _insert_descriptions_reply(ctx, provider, prompt, all_frames)
     descriptions: dict[str, str] = {}
     for insert in inserts:
         value = raw.get(insert.clip_id)
         if isinstance(value, str) and value.strip():
             descriptions[insert.clip_id] = value.strip()
     return descriptions
+
+
+INSERT_DESCRIPTION_ATTEMPTS = 2
+
+
+def _insert_descriptions_reply(
+    ctx: StageContext, provider: object, prompt: str, frames: list[Path]
+) -> dict:
+    """The `descriptions` object the model returned.
+
+    A call that raised is retried once and then stops the stage: a CLI that was
+    rate-limited, a socket that closed, a timeout — none of those is the model
+    saying anything about the footage, and treating them as "no descriptions"
+    is the pipeline quietly producing a worse edit than the one that was asked
+    for.
+
+    A reply that came back without the key is retried too, but it is the model
+    answering, and what it answered is recorded: every insert keeps an empty
+    description in `04-analysis`, which is visible in the artifact in a way a
+    swallowed exception never was.
+    """
+    for attempt in range(INSERT_DESCRIPTION_ATTEMPTS):
+        try:
+            response = provider.complete_json(
+                prompt, frames, ctx.config.analyze.llm_timeout_seconds
+            )
+        except Exception as error:  # noqa: BLE001 - re-raised below, not swallowed
+            if attempt + 1 < INSERT_DESCRIPTION_ATTEMPTS:
+                continue
+            raise RuntimeError(
+                f"could not describe the silent insert clips after "
+                f"{INSERT_DESCRIPTION_ATTEMPTS} attempts: {type(error).__name__}: "
+                f"{error}. Every insert would otherwise be placed by chronology "
+                "alone, with nothing recording that the descriptions went "
+                "missing. Set analyze.describe_inserts: false to plan without "
+                "them deliberately."
+            ) from error
+        raw = response.get("descriptions")
+        if isinstance(raw, dict):
+            return raw
+    return {}
 
 
 def _keyframes(
@@ -530,7 +573,11 @@ def analyze(ctx: StageContext) -> Analysis:
     ctx.store.write("03c-takes", takes, fingerprint="derived")
 
     brief = read_brief(ctx.project_dir)
-    provider = resolve_llm(ctx.config.llm_for("analyze"), ctx.config.analyze.llm_model)
+    provider = resolve_llm(
+        ctx.config.llm_for("analyze"),
+        ctx.config.analyze.llm_model,
+        cache_dir=llm_cache_dir(ctx.work_dir),
+    )
     prompt = build_analysis_prompt(pack_transcript(index), takes, quality, brief)
 
     # A model that can watch the footage is shown the spoken spans instead of

@@ -105,8 +105,39 @@ def test_no_media_resolution_is_sent(tmp_path, provider, monkeypatch):
     )
 
     provider.complete_json("p", [], 10, videos=[_clip(tmp_path)])
-    assert "generation_config" not in sent
     assert "media_resolution" not in json.dumps(sent)
+
+
+def test_sampling_is_pinned_so_one_reel_is_scored_the_same_way_twice(
+    tmp_path, provider, monkeypatch
+):
+    """Left alone the service samples at its own default, near 1.0: two runs
+    disagree about the same take, the timeline moves, and nothing in the diff
+    says why — which makes every other editorial change unreviewable. A seed as
+    well as temperature 0, because greedy decoding still has to break ties."""
+    sent: dict = {}
+    monkeypatch.setattr(
+        provider, "_generate", lambda body, timeout: (sent.update(body), "{}")[1]
+    )
+
+    provider.complete_json("score this", [], 10)
+
+    assert sent["generation_config"] == {"temperature": 0.0, "top_p": 1.0, "seed": 7}
+
+
+def test_the_sampling_controls_are_not_shared_between_calls(provider, monkeypatch):
+    """A body handed straight to json.dumps is easy to mutate by accident; the
+    next call must still be asked at temperature 0."""
+    bodies: list[dict] = []
+    monkeypatch.setattr(
+        provider, "_generate", lambda body, timeout: (bodies.append(body), "{}")[1]
+    )
+
+    provider.complete_json("first", [], 10)
+    bodies[0]["generation_config"]["temperature"] = 1.0
+    provider.complete_json("second", [], 10)
+
+    assert bodies[1]["generation_config"]["temperature"] == 0.0
 
 
 def test_the_answer_is_read_from_the_model_output_step(provider, monkeypatch):
@@ -134,6 +165,43 @@ def test_the_registry_knows_it():
     provider = resolve_llm("gemini_api", "gemini-3.1-flash-lite")
     assert provider.name == "gemini_api"
     assert provider.reads_video is True
+
+
+# --- Which model actually answered, and refusing to guess ---
+
+
+def test_a_claude_model_is_refused_instead_of_quietly_becoming_a_gemini_one():
+    """`llm_model: sonnet` is the shipped default, so the old startswith guard
+    failed on every run: a creator configured one model and a different one
+    scored their footage, with nothing anywhere recording the swap."""
+    with pytest.raises(ValueError, match="sonnet") as failure:
+        resolve_llm("gemini_api", "sonnet")
+
+    # The diagnostic has to name what to write instead, not just what is wrong.
+    assert "gemini-3.1-flash-lite" in str(failure.value)
+
+
+def test_a_model_can_be_named_with_the_provider_for_one_stage():
+    """One `analyze.llm_model` serves every stage, and a config that watches the
+    footage with Gemini while the cheap stages stay on Claude needs two."""
+    provider = resolve_llm("gemini_api:gemini-3.1-flash-lite", "sonnet")
+
+    assert provider.name == "gemini_api"
+    assert provider.model == "gemini-3.1-flash-lite"
+
+
+def test_the_resolved_model_is_readable_without_building_a_provider():
+    from videoai.providers.base import resolved_llm_model
+    from videoai.providers.llm_gemini_api import DEFAULT_MODEL
+
+    assert resolved_llm_model("gemini_api", "gemini-3.6-pro") == "gemini-3.6-pro"
+    assert resolved_llm_model("gemini_api", "") == DEFAULT_MODEL
+    assert resolved_llm_model("gemini_api:gemini-3.6-pro", "sonnet") == "gemini-3.6-pro"
+    assert resolved_llm_model("claude_cli", "") == "sonnet"
+    # Codex answers as whatever its authenticated profile picked, and the mock
+    # has no model at all: neither is something this repository can pin.
+    assert resolved_llm_model("codex_cli", "sonnet") == ""
+    assert resolved_llm_model("mock", "sonnet") == ""
 
 
 def _steps_reply() -> str:

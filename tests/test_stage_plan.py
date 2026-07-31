@@ -465,6 +465,142 @@ def test_no_rejection_file_withholds_nothing(tmp_path: Path, monkeypatch):
 # artifact-shape test above. ---
 
 
+# --- What the model watched has to reach the planner. The describe stage pays a
+# metered video model to look at every clip; ordering transcript lines while that
+# record sits unread is not "story order" ---
+
+
+def _clip_notes(*, summary: str, events: list[tuple[float, str]], clip_id: str = "clip-01"):
+    from videoai.core.models import ClipEvent, ClipNote, ClipNotes
+
+    return ClipNotes(notes=[ClipNote(
+        clip_id=clip_id, source_key=f"{clip_id}-key", duration=30.0, summary=summary,
+        events=[ClipEvent(at=at, what=what, where="center") for at, what in events],
+    )])
+
+
+def test_what_the_camera_recorded_reaches_the_plan_prompt(tmp_path: Path, monkeypatch):
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#001"]}],
+    }
+    ctx = _context(tmp_path, monkeypatch, payload)
+    ctx.store.write("04c-clip-notes", _clip_notes(
+        summary="He unwraps the toy on the kitchen table.",
+        events=[(12.4, "the lid comes off"), (18.2, "the first pop")],
+    ), fingerprint="notes")
+    monkeypatch.setattr(
+        "videoai.stages.s05_plan.avoid_mid_action_cuts",
+        lambda timeline, notes, transcript=None, locate=None: timeline,
+    )
+    seen = _captured_prompt(monkeypatch)
+
+    plan(ctx)
+
+    assert "He unwraps the toy on the kitchen table." in seen[0]
+    assert "the lid comes off" in seen[0]
+    assert "18.2s the first pop" in seen[0]
+
+
+def test_the_parsed_brief_reaches_the_planner_as_labelled_fields(
+    tmp_path: Path, monkeypatch
+):
+    """`arc` and `must_include` were prompt conventions honoured by goodwill: the
+    whole project.yaml went in as one blob and nothing said which parts of it the
+    pipeline had actually understood."""
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#001"]}],
+    }
+    ctx = _context(tmp_path, monkeypatch, payload)
+    (tmp_path / "project.yaml").write_text(
+        "toy_name: Refillable Blob\n"
+        "summary: Ten minutes of popping, cut to three.\n"
+        "arc:\n  - opens the box\n  - pops the pimples\n",
+        encoding="utf-8",
+    )
+    seen = _captured_prompt(monkeypatch)
+
+    plan(ctx)
+
+    assert "Subject: Refillable Blob" in seen[0]
+    assert "This video: Ten minutes of popping, cut to three." in seen[0]
+    assert "The arc the creator shot, in order:\n  - opens the box" in seen[0]
+
+
+def test_the_footage_notes_are_offered_as_context_and_not_as_a_menu():
+    from videoai.stages.s05_plan import INSTRUCTIONS
+
+    lowered = INSTRUCTIONS.lower()
+    assert "context, not a menu" in lowered
+    assert "cannot select a moment" in lowered
+
+
+def test_notes_about_footage_nobody_can_cut_to_are_withheld():
+    """A clip whose every phrase the creator excluded is footage the planner
+    cannot use; describing it invites a request for a shot that has no id."""
+    from videoai.stages.s05_plan import _footage_view
+
+    analysis = Analysis(provider="mock", segments=_two_segments())
+    view = _footage_view(
+        _clip_notes(summary="the bad clip", events=[(1.0, "nothing good")]),
+        analysis,
+        {"clip-01#001", "clip-01#002"},
+    )
+
+    assert view == ""
+
+
+def test_a_screen_position_is_not_part_of_the_story():
+    """`where` says which ninth of the frame a thing happened in. That decides
+    where an accent is drawn, not which line follows which."""
+    from videoai.stages.s05_plan import _footage_view
+
+    analysis = Analysis(provider="mock", segments=_two_segments())
+    view = _footage_view(
+        _clip_notes(summary="a summary", events=[(1.0, "the lid comes off")]),
+        analysis,
+        set(),
+    )
+
+    assert "the lid comes off" in view
+    assert "center" not in view
+
+
+def test_the_cutter_is_given_a_way_to_measure_the_moments_it_is_handed(
+    tmp_path: Path, monkeypatch
+):
+    """A clip note's time is a number a model wrote down, and the cutter turns it
+    into a clip duration. It must reach the footage before it reaches the
+    arithmetic."""
+    payload = {
+        "title": "T", "description": "D", "tags": [],
+        "sections": [{"name": "Hook", "goal": "x", "phrase_ids": ["clip-01#001"]}],
+    }
+    ctx = _context(tmp_path, monkeypatch, payload)
+    ctx.store.write("04c-clip-notes", _clip_notes(
+        summary="a summary", events=[(2.5, "the lid comes off")],
+    ), fingerprint="notes")
+    given: list[object] = []
+
+    def _record(timeline, notes, transcript=None, locate=None):
+        given.append(locate)
+        return timeline
+
+    monkeypatch.setattr("videoai.stages.s05_plan.avoid_mid_action_cuts", _record)
+    monkeypatch.setattr(
+        "videoai.stages.s05_plan.change_onset", lambda source, at: 2.6
+    )
+    monkeypatch.setattr(
+        "videoai.stages.s05_plan.resolve_media_path", lambda project, path: Path(path)
+    )
+
+    plan(ctx)
+
+    assert given and given[0] is not None
+    assert given[0]("clip-01", 2.5) == 2.6
+
+
 def test_prompt_instructs_model_that_the_video_needs_an_ending():
     lowered = INSTRUCTIONS.lower()
     assert "closing" in lowered or "close it out" in lowered

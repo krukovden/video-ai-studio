@@ -292,6 +292,60 @@ def test_transcription_fingerprint_ignores_disposable_proxy_path(tmp_path: Path)
     assert after == before
 
 
+# --- the creator's overrides: an input to assembly, never to a model ----------
+
+
+def test_a_reorder_reruns_assembly_and_no_model_call(tmp_path: Path):
+    """The whole reason overrides are their own artifact. Changing the running
+    order must reach the delivery without asking a model anything again — the
+    planner proposed against `05-proposal`, which a reorder does not touch."""
+    from videoai.core.models import ClipOverride, Overrides
+    from videoai.logic.decisions import OVERRIDES_ARTIFACT
+
+    ctx = _context(tmp_path, Config())
+    before = _fingerprints(tmp_path, Config())
+
+    ctx.store.write(
+        OVERRIDES_ARTIFACT,
+        Overrides(clips=[ClipOverride(ref="clip-01#002"), ClipOverride(ref="clip-01#001")]),
+        fingerprint="creator",
+    )
+    after = {
+        spec.id: _fingerprint(spec, ctx, "media-fp", "brief-fp")
+        for spec in REGISTRY.values()
+    }
+
+    changed = {stage_id for stage_id, value in before.items() if after[stage_id] != value}
+    assert changed == {"assemble", "polish"}
+
+
+def test_the_planner_s_own_call_is_not_an_input_to_the_creator_s_order(tmp_path: Path):
+    """`plan` produces the proposal and `assemble` produces the edit, so the model
+    call sits upstream of everything a creator can rearrange."""
+    assert REGISTRY["plan"].produces == "05-proposal"
+    assert REGISTRY["assemble"].produces == "05-timeline"
+    assert REGISTRY["assemble"].provider_key is None
+    assert REGISTRY["assemble"].prompt is None
+    # The accent planner reads the proposal too, for the same reason.
+    assert "05-proposal" in REGISTRY["effects"].requires
+    assert "05-timeline" not in REGISTRY["effects"].requires
+
+
+def test_a_requirement_nobody_produces_and_nobody_declared_is_refused():
+    """A typo in `requires` is silent: the missing artifact hashes as '' and the
+    stage stays cached across every change to the one it meant to name."""
+    from videoai.core.runner import ordered_stages
+
+    REGISTRY["typo"] = dataclasses.replace(
+        REGISTRY["polish"], id="typo", produces="99-typo", requires=("05-timelime",)
+    )
+    try:
+        with pytest.raises(ValueError, match="05-timelime"):
+            ordered_stages()
+    finally:
+        del REGISTRY["typo"]
+
+
 # --- the effects library's own fingerprint -----------------------------------
 
 

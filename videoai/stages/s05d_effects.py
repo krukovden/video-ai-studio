@@ -22,6 +22,7 @@ from pathlib import Path
 
 from videoai.core.models import (
     Analysis,
+    ClipNotes,
     EffectEvent,
     Observation,
     EffectPlan,
@@ -29,7 +30,7 @@ from videoai.core.models import (
     Timeline,
     Transcript,
 )
-from videoai.core.project import read_brief
+from videoai.core.project import brief_prompt, load_brief
 from videoai.core.registry import StageContext, stage
 from videoai.core.models import Manifest
 from videoai.core.project import resolve_media_path
@@ -344,11 +345,36 @@ def parse_events(
     return sorted(events, key=lambda event: event.at_seconds)
 
 
+def _described_cell(notes: ClipNotes | None, clip_id: str, offset: float) -> str:
+    """Where the model that WATCHED this clip said the nearest moment happened.
+
+    Thin evidence, and better than the alternative. `describe` is shown the
+    footage and asked for the location of the action itself; the effects model
+    has never seen a frame of it. So when the picture is measurably still — a
+    close-up holding on the toy, a reaction with no movement in it — this is a
+    real second opinion rather than a guess dressed up as one.
+    """
+    if notes is None:
+        return ""
+    for note in notes.notes:
+        if note.clip_id != clip_id:
+            continue
+        nearby = [
+            event
+            for event in note.events
+            if event.where and abs(event.at - offset) <= SNAP_SECONDS
+        ]
+        if nearby:
+            return min(nearby, key=lambda event: abs(event.at - offset)).where
+    return ""
+
+
 def place_on_motion(
     events: list[EffectEvent],
     timeline: Timeline,
     manifest: Manifest,
     resolve,
+    notes: ClipNotes | None = None,
 ) -> list[EffectEvent]:
     """Put each accent where the picture is actually moving at that moment.
 
@@ -358,25 +384,26 @@ def place_on_motion(
     of seven landed anywhere near the action; the rest sat over a door, an empty
     wall and a paper towel.
 
-    Where the picture changes is a subtraction between two frames. It is exact,
-    it costs nothing, and it belongs to the pipeline rather than to the model.
+    Three answers, in the order they deserve. Where the picture changes is a
+    subtraction between two frames: exact, free, and the pipeline's. Failing that
+    — a shot measurably holding still, where there is nothing to point at — the
+    clip notes may carry a position from a model that watched this footage. Only
+    when neither says anything does the guess stand.
 
-    A still shot keeps the model's guess: with nothing moving there is nothing to
-    point at, and picking a cell anyway would be the very thing this replaces.
+    Nothing here is wrapped in a broad `except`. Measuring is the entire purpose
+    of the step, so a shot whose media cannot be found or opened is a broken
+    project and says so; quietly keeping the guess instead is how seven of seven
+    accents ended up over a door, a wall and a paper towel.
     """
     placed: list[EffectEvent] = []
     for event in events:
         clip, offset = _clip_at(timeline, event.at_seconds)
-        cell = None
-        if clip is not None:
-            try:
-                info = manifest.by_id(clip.src)
-                source = resolve(Path(info.proxy_path or info.path))
-                cell = busiest_cell(source, offset)
-            except Exception:
-                # Unreadable media is a shot we cannot measure, not a reason to
-                # discard a plan the creator is about to review.
-                cell = None
+        if clip is None:
+            placed.append(event)
+            continue
+        info = manifest.by_id(clip.src)
+        source = resolve(Path(info.proxy_path or info.path))
+        cell = busiest_cell(source, offset) or _described_cell(notes, clip.src, offset)
         placed.append(
             event.model_copy(update={"screen_position": cell}) if cell else event
         )
@@ -393,6 +420,44 @@ def _clip_at(timeline: Timeline, at_seconds: float):
     return None, 0.0
 
 
+def anchor_to_clips(events: list[EffectEvent], timeline: Timeline) -> list[EffectEvent]:
+    """Re-key each accent from the edit's clock onto the shot it is actually about.
+
+    The model answers in absolute seconds because that is the clock it was shown,
+    and absolute seconds are true of exactly one running order. Recording which
+    clip that second fell inside, and how far into it, is what lets the same
+    accent survive the shot being moved or the ones before it being dropped —
+    `at_seconds` stays as a projection of the anchor and is recomputed wherever
+    the order changes.
+
+    An accent past the last frame has no clip under it; it keeps its absolute
+    time and nothing else, which is the pre-refs behaviour and the only honest
+    answer for a moment that is not in a shot.
+    """
+    spans: list[tuple[float, object]] = []
+    clock = 0.0
+    for clip in timeline.clips:
+        spans.append((clock, clip))
+        clock += clip.dur
+
+    anchored: list[EffectEvent] = []
+    for event in events:
+        for start, clip in spans:
+            if clip.ref and start <= event.at_seconds < start + clip.dur:
+                anchored.append(
+                    event.model_copy(
+                        update={
+                            "clip_ref": clip.ref,
+                            "at_in_clip": round(event.at_seconds - start, 3),
+                        }
+                    )
+                )
+                break
+        else:
+            anchored.append(event)
+    return anchored
+
+
 def _effects_fingerprint_extras(ctx: StageContext) -> tuple[str, ...]:
     """The library's vocabulary. Adding a sprite changes what may be chosen, so a
     cached plan made without it is stale. Only the manifest is hashed: this stage
@@ -407,7 +472,18 @@ def _effects_fingerprint_extras(ctx: StageContext) -> tuple[str, ...]:
     # asked for a moment, and a moment is a word, not a segment.
     # "01-manifest" names the media the placement step measures: the model says
     # which moment, and where on screen is worked out from the footage itself.
-    requires=("01-manifest", "03-transcript", "04-analysis", "05-timeline", "05a-storyplan"),
+    # "04c-clip-notes" is the fallback for a shot that measurably holds still: the
+    # model that watched it recorded where each moment happened, which is thinner
+    # evidence than a frame difference and better than a guess from a model that
+    # never saw the clip.
+    # "05-proposal" rather than the assembled "05-timeline": every accent is
+    # anchored to the shot it marks, so the creator's running order can change
+    # without this model call — the one that reads the whole edit — being asked
+    # the same question again for a differently ordered printout of it.
+    requires=(
+        "01-manifest", "03-transcript", "04-analysis", "04c-clip-notes",
+        "05-proposal", "05a-storyplan",
+    ),
     provider_key="llm",
     model=EffectPlan,
     uses_brief=True,
@@ -423,7 +499,7 @@ def effects(ctx: StageContext) -> EffectPlan:
         # to offer a model and no reason to spend a call finding that out.
         return EffectPlan(provider="", library=str(library.directory))
 
-    timeline = ctx.store.read("05-timeline", Timeline)
+    timeline = ctx.store.read("05-proposal", Timeline)
     analysis = ctx.store.read("04-analysis", Analysis)
     story = ctx.store.read("05a-storyplan", StoryPlan)
     transcript = ctx.store.read("03-transcript", Transcript)
@@ -432,22 +508,32 @@ def effects(ctx: StageContext) -> EffectPlan:
 
     provider = resolve_llm(ctx.config.llm_for("effects"), ctx.config.analyze.llm_model)
     prompt = build_effects_prompt(
-        library, timeline, transcript, analysis, story, read_brief(ctx.project_dir)
+        library, timeline, transcript, analysis, story,
+        brief_prompt(load_brief(ctx.project_dir)),
     )
     response = provider.complete_json(prompt, [], ctx.config.analyze.llm_timeout_seconds)
     events = parse_events(response, library, timeline.duration, settings.max_events)
-    # The model said which moments; the pipeline says where on screen.
+    # WHEN before WHERE, and the order matters. The model chose which moments
+    # deserve an accent; the clock is the pipeline's, so where the analysis
+    # actually watched the footage each accent is first pulled onto the moment
+    # that was seen rather than the time that was guessed from words.
+    events = snap_to_observed(events, analysis.observations, timeline)
+    # Only now is the frame measured, because it is measured at the time the
+    # accent will actually play. Placing first meant reading the busiest cell up
+    # to 0.6s away from where the accent ended up — and on the fast action these
+    # accents exist for, half a second is a different part of the frame.
     events = place_on_motion(
         events,
         timeline,
         ctx.store.read("01-manifest", Manifest),
         lambda path: resolve_media_path(ctx.project_dir, str(path)),
+        ctx.store.read("04c-clip-notes", ClipNotes)
+        if ctx.store.exists("04c-clip-notes")
+        else None,
     )
-    # The model chose which moments deserve an accent; the clock is the
-    # pipeline's. Where the analysis actually watched the footage, each accent
-    # is pulled onto the moment that was seen rather than the time that was
-    # guessed from words.
-    events = snap_to_observed(events, analysis.observations, timeline)
+    # Last, so the anchor records where the accent finally landed rather than
+    # where the model first guessed.
+    events = anchor_to_clips(events, timeline)
     plan = EffectPlan(
         provider=provider.name, library=str(library.directory), events=events
     )

@@ -79,6 +79,38 @@ def test_overriding_one_stage_invalidates_only_that_stage(tmp_path: Path):
     assert moved == {"analyze"}
 
 
+def test_a_stage_may_name_the_model_as_well_as_the_provider(tmp_path: Path):
+    """There is one `analyze.llm_model` and the providers are not one family: a
+    config that watches the footage with Gemini while the cheap stages stay on
+    the Claude CLI has to say which model each of them means."""
+    from videoai.providers.base import resolve_llm, resolved_llm_model
+
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "providers:\n  asr: parakeet\n  llm: claude_cli\n"
+        "llm_by_stage:\n  analyze: gemini_api:gemini-3.1-flash-lite\n"
+        "analyze:\n  llm_model: sonnet\n",
+        encoding="utf-8",
+    )
+    config = load_config(path)
+
+    analyst = resolve_llm(config.llm_for("analyze"), config.analyze.llm_model)
+    assert (analyst.name, analyst.model) == ("gemini_api", "gemini-3.1-flash-lite")
+    assert resolve_llm(config.llm_for("plan"), config.analyze.llm_model).model == "sonnet"
+    assert resolved_llm_model(config.llm_for("plan"), config.analyze.llm_model) == "sonnet"
+
+
+def test_pointing_a_stage_at_gemini_without_a_gemini_model_is_refused(tmp_path: Path):
+    """The shipped default is `llm_model: sonnet`, so this is what most people
+    hit first: it used to answer as gemini_api's own default and say nothing."""
+    from videoai.providers.base import resolve_llm
+
+    config = Config(llm_by_stage={"analyze": "gemini_api"})
+
+    with pytest.raises(ValueError, match="not a Gemini model"):
+        resolve_llm(config.llm_for("analyze"), config.analyze.llm_model)
+
+
 def test_every_llm_stage_can_be_named():
     """Whatever the pipeline grows, every model-calling stage stays swappable."""
     config = Config()

@@ -20,6 +20,12 @@ class ClipInfo(BaseModel):
     source_key: str = ""
     audio_path: str | None = None
     proxy_path: str | None = None
+    # Which encoder actually produced the proxy. Recorded because the choice is
+    # made by a live capability probe rather than by configuration: a busy media
+    # engine falls back to libx264 and the resulting pixels differ from
+    # VideoToolbox's, which moves every blur and motion score measured off them.
+    # A proxy is only reusable for a clip that names the same encoder.
+    proxy_encoder: str = ""
 
 
 class Manifest(BaseModel):
@@ -294,6 +300,12 @@ class StoryPlan(BaseModel):
 
 
 class TimelineClip(BaseModel):
+    # The phrase id or `insert:` reference this segment was built from. A clip's
+    # only stable name: `start` moves whenever anything before it is reordered or
+    # switched off, and an index moves for the same reason, so neither can carry
+    # a creator's decision across a re-plan. Empty only in artifacts written
+    # before refs existed, which is why every consumer treats it as optional.
+    ref: str = ""
     src: str
     offset: float
     dur: float
@@ -318,6 +330,22 @@ class Timeline(BaseModel):
     @property
     def duration(self) -> float:
         return sum(clip.dur for clip in self.clips)
+
+    def index_of(self, ref: str) -> int:
+        for index, clip in enumerate(self.clips):
+            if clip.ref and clip.ref == ref:
+                return index
+        raise KeyError(f"no timeline clip with ref: {ref}")
+
+    def start_of(self, ref: str) -> float:
+        """Where `ref` begins on the timeline's clock.
+
+        Computed by summing the durations before it rather than reading `start`,
+        so it stays correct on a timeline that has just been reordered and not
+        yet renumbered.
+        """
+        index = self.index_of(ref)
+        return sum(clip.dur for clip in self.clips[:index])
 
 
 class SegmentVisual(BaseModel):
@@ -355,14 +383,28 @@ class RejectedPhrases(BaseModel):
 
 
 class EffectEvent(BaseModel):
-    """One cartoon accent, placed on the timeline's clock by the story.
+    """One cartoon accent, anchored to the timeline clip it is about.
 
-    `at_seconds` is measured on the TIMELINE, not on the delivery: the model that
-    chose it was shown the edit, and the delivery adds an intro card and drifts by
-    a frame per cut. The compositor maps it forward through the measured segment
-    starts, exactly as it maps captions.
+    An accent belongs to a MOMENT IN A SHOT, not to a second of the edit. Those
+    were the same thing only for as long as the edit could not be rearranged.
+    Switch one clip off and every later clip slides several seconds earlier; an
+    accent keyed on the edit's clock then either falls outside its own tolerance
+    and is silently lost, or — worse — lands on whatever footage moved under it.
+    A badge chosen for "he spots the syringe" appearing over the box being opened
+    is not a badge in the wrong place, it is a badge that is now a lie.
+
+    So `clip_ref` plus `at_in_clip` is the anchor, and `at_seconds` is a cached
+    projection of it onto the current edit: derived, rewritten whenever the order
+    changes, and never the thing a decision is matched on. Artifacts written
+    before refs existed carry an empty `clip_ref`, and `at_seconds` is all those
+    have — consumers fall back to it and to nothing else.
     """
 
+    # The `TimelineClip.ref` this accent marks, and how far into that clip it
+    # sits. Both survive reordering and switching clips off, because neither
+    # mentions the edit's clock.
+    clip_ref: str = ""
+    at_in_clip: float = 0.0
     at_seconds: float
     effect_name: str
     screen_position: str
@@ -378,10 +420,31 @@ class EffectEvent(BaseModel):
     # record of what was originally proposed.
     x: float | None = None
     y: float | None = None
+    # Creator size and tilt, applied on top of the `scale` band the model chose
+    # and composed with whatever the animation is doing on that frame. A
+    # multiplier rather than a replacement so a resize survives a re-plan that
+    # moved the accent between bands, and degrees rather than radians because the
+    # only thing that ever writes them is a person dragging a handle.
+    scale_factor: float = 1.0
+    rotation: float = 0.0
     # Set by the creator on the approval page. An accent that was looked at and
     # turned down is kept rather than deleted, so the next run does not propose
     # it again and a decision is not lost by re-planning.
     keep: bool = True
+
+    @property
+    def anchor_key(self) -> str:
+        """This accent's identity for carrying a creator decision forward.
+
+        Scoped to the clip on purpose. Matching still tolerates the small drift a
+        re-plan introduces (`snap_to_observed` may move a moment by up to 0.6s),
+        but only ever *within one shot* — so the failure mode of a decision that
+        cannot be matched is losing it and saying so, never re-applying it to
+        different footage.
+        """
+        if not self.clip_ref:
+            return f"@{self.at_seconds:.2f}"
+        return f"{self.clip_ref}@{self.at_in_clip:.2f}"
 
 
 class EffectPlan(BaseModel):
@@ -391,6 +454,101 @@ class EffectPlan(BaseModel):
     provider: str = ""
     library: str = ""
     events: list[EffectEvent] = Field(default_factory=list)
+
+
+class ClipOverride(BaseModel):
+    """One timeline clip as the creator left it: in this position, on or off."""
+
+    ref: str
+    enabled: bool = True
+    # Why it was switched off, in the creator's words. Optional, and kept only so
+    # a later run can show what was decided rather than only that something was.
+    note: str = ""
+
+
+class EffectOverride(BaseModel):
+    """One accent as the creator left it.
+
+    Every field except the anchor is optional and means "unchanged": a creator
+    who only dragged a badge must not thereby freeze the sprite the planner chose
+    for it, and a re-plan that improves the sprite has to be allowed through.
+    """
+
+    clip_ref: str
+    at_in_clip: float
+    # A swapped sprite. Empty means the creator did not change it.
+    effect_name: str = ""
+    x: float | None = None
+    y: float | None = None
+    scale_factor: float | None = None
+    rotation: float | None = None
+    keep: bool = True
+
+
+class Overrides(BaseModel):
+    """What the creator decided on the approval page, as an INPUT to the edit.
+
+    This is deliberately its own artifact rather than an edit applied in place to
+    the plan. Creator intent and model output sharing one file is what forced the
+    CLI to recompute and forge a stage fingerprint so the runner would not treat
+    a human's work as stale — a person's decision had to impersonate a model's
+    reply to survive. Kept apart, each is authored by exactly one party: the
+    planner writes what it proposes, the creator writes what they want, and
+    assembly is a deterministic function of the two.
+
+    `clips` is the running order itself — position in this list is the position
+    in the edit — so reordering and switching a shot off are the same operation
+    on the same list, and neither costs a model call. An empty artifact means the
+    creator has not opened the page yet and the plan stands as proposed.
+    """
+
+    # The edit this was authored against. Not a lock: a decision outliving its
+    # plan is the entire point. It is recorded so a run can say *which* plan the
+    # creator was looking at when a decision no longer matches anything.
+    timeline_hash: str = ""
+    clips: list[ClipOverride] = Field(default_factory=list)
+    effects: list[EffectOverride] = Field(default_factory=list)
+
+    @property
+    def order(self) -> list[str]:
+        """The refs the creator kept, in the order they want them."""
+        return [clip.ref for clip in self.clips if clip.enabled]
+
+
+class Brief(BaseModel):
+    """The creator's brief, parsed into fields rather than pasted as a blob.
+
+    Every key here used to be a convention honoured only by a model's goodwill:
+    `project.yaml` was read as raw text and dropped into a prompt, so nothing
+    could check that the arc was followed, that a must-include moment survived,
+    or even that a key was spelled the way the example spells it. Parsing it
+    makes those answerable questions.
+
+    `raw` keeps the whole brief as text — including any keys this model does not
+    know about — so a creator who writes something the schema never anticipated
+    still has it reach the model.
+    """
+
+    title: str = ""
+    # What is being reviewed, and the creator's own description of it. The
+    # subject is the one thing every stage needs and no amount of footage
+    # analysis can supply: a model can see a small pink object being squeezed
+    # and cannot know it is a refillable pimple-popping toy.
+    subject: str = ""
+    subject_description: str = ""
+    # What this particular video is, in the creator's words.
+    summary: str = ""
+    arc: list[str] = Field(default_factory=list)
+    must_include: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    style: str = ""
+    language: str = ""
+    target_duration_seconds: float = 0.0
+    notes: str = ""
+    raw: str = ""
+
+    def is_empty(self) -> bool:
+        return not self.raw.strip()
 
 
 class DraftResult(BaseModel):

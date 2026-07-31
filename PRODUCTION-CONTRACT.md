@@ -33,17 +33,21 @@ Every production run follows this order:
 2. Technical quality analysis and multi-camera synchronization.
 3. Word-timed transcription.
 4. Editorial analysis, story plan, and visual safety check.
-5. Render a review draft from the exact current timeline.
-6. Obtain creator approval bound to timeline, draft, and effective config
+5. Assemble the timeline from the story plan and the creator's arrangement.
+   The plan stage proposes; assembly is deterministic Python and takes no
+   model call, so changing the running order or dropping a shot costs nothing
+   and cannot be undone by re-planning.
+6. Render a review draft from the exact current timeline.
+7. Obtain creator approval bound to timeline, draft, and effective config
    (`polish.require_approval`, which the `videoai produce` workflow uses).
-7. Delivery preflight: check the contract against the configured delivery height
+8. Delivery preflight: check the contract against the configured delivery height
    and the source's display aspect, the music library, the closing beat, and the
    free disk space — before a single frame is cut.
-8. Build delivery media from original sources through lossless intermediates.
-9. Apply intro, outro, section transitions, section titles, captions, music, and
-   speech ducking using finite, independently testable render passes.
-10. Decode the entire result, measure every required feature, and validate.
-11. Write the YouTube-ready package and a machine-readable production report.
+9. Build delivery media from original sources through lossless intermediates.
+10. Apply intro, outro, section transitions, section titles, captions, music, and
+    speech ducking using finite, independently testable render passes.
+11. Decode the entire result, measure every required feature, and validate.
+12. Write the YouTube-ready package and a machine-readable production report.
 
 ## Required delivery features
 
@@ -99,6 +103,7 @@ feature nobody can review.
 ```bash
 videoai produce PROJECT --config config.yaml
 open PROJECT/output/draft.mp4
+videoai edit PROJECT --config config.yaml      # optional: arrange it
 videoai approve PROJECT --config config.yaml
 videoai produce PROJECT --config config.yaml
 ```
@@ -106,3 +111,12 @@ videoai produce PROJECT --config config.yaml
 The first `produce` run stops after the review draft. The second refuses stale
 approval, renders the delivery, validates it, and creates `final.mp4` only after
 the production contract passes.
+
+`videoai edit` serves the arrangement page: the running order as a strip of
+shots to drag or switch off, and every accent on the frame it will land on, to
+swap, drag, resize or turn. Saving writes `work/05e-overrides.json`. That
+artifact is a creator input rather than a stage output — the party who authored
+a decision owns the file it lives in — so a change to it re-runs assembly and
+delivery and no model call, and re-planning cannot quietly discard it. Because
+approval is bound to the timeline, arranging after approving invalidates the
+approval: approve last.

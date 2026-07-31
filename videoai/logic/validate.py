@@ -70,6 +70,40 @@ def _geometry_violations(timeline: Timeline, known_clips: dict[str, ClipInfo]) -
     return violations
 
 
+def ref_violations(timeline: Timeline) -> list[str]:
+    """Every clip must carry a ref, and no two may carry the same one.
+
+    A ref is what a creator's decision holds on to across a re-plan: an accent
+    says which shot it marks, the running order says which shot goes third. Two
+    clips answering to one name makes every such lookup ambiguous, and one clip
+    answering to none cannot be spoken about at all.
+
+    A timeline where NO clip has a ref is left alone. That is an artifact written
+    before refs existed, and it still renders exactly as it always did — the
+    consumers fall back to absolute time. What is refused is the half-way state,
+    where some decisions can be carried and others silently cannot.
+    """
+    refs = [clip.ref for clip in timeline.clips]
+    if not any(refs):
+        return []
+    violations: list[str] = []
+    seen: set[str] = set()
+    for index, ref in enumerate(refs):
+        if not ref:
+            violations.append(
+                f"clip {index} ({timeline.clips[index].src}) has no ref, but other "
+                "clips in this timeline do; a decision about it could never be "
+                "carried across a re-plan"
+            )
+        elif ref in seen:
+            violations.append(
+                f"clip {index}: duplicate ref {ref!r}; every lookup by ref would be "
+                "ambiguous"
+            )
+        seen.add(ref)
+    return violations
+
+
 def _normalise(text: str) -> str:
     """Lowercase, drop punctuation, and collapse whitespace to single spaces.
 
@@ -142,5 +176,6 @@ def validate_timeline(
             if _normalise(clip.quote) not in _normalise(spoken):
                 violations.append(f"{label}: quote not found in segment audio range")
 
+    violations.extend(ref_violations(timeline))
     violations.extend(_geometry_violations(timeline, known_clips))
     return violations

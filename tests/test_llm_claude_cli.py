@@ -99,7 +99,7 @@ def test_analyze_stage_resolves_the_llm_with_the_configured_model(tmp_path, monk
 
     seen: list[tuple[str, str | None]] = []
 
-    def fake_resolve(name: str, model: str | None = None):
+    def fake_resolve(name: str, model: str | None = None, cache_dir=None):
         seen.append((name, model))
         return MockLLM()
 

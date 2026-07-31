@@ -17,7 +17,7 @@ offered):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from math import cos, pi, sin
 from pathlib import Path
@@ -47,6 +47,18 @@ SPRITE_SCALES = {"small": 0.14, "medium": 0.22, "large": 0.32}
 # A speech bubble is sized by its text instead, so its scale caps the width it may
 # grow to as a fraction of the frame's width.
 BUBBLE_WIDTH_FRACTIONS = {"small": 0.26, "medium": 0.36, "large": 0.48}
+
+# How far the creator's own multiplier may push an accent away from the band the
+# planner chose. The bounds are the two ways a resize handle turns into a
+# footgun rather than a matter of taste: half of the smallest band is 76 pixels
+# tall on a 1080 frame, which is the point below which nobody can tell what the
+# drawing is, and twice the largest is two thirds of the frame's height, which is
+# where an accent stops seasoning the shot and starts hiding it. The top of the
+# range is also still placeable: tilted 45 degrees, a sprite that big has a
+# bounding box about nine tenths of the frame high, so `place_sprite` can centre
+# it in the frame instead of cropping it.
+MIN_SCALE_FACTOR = 0.5
+MAX_SCALE_FACTOR = 2.0
 
 ANIMATIONS = (
     "pop-in", "pulse", "shake", "drift-up", "none",
@@ -391,6 +403,28 @@ def animation_transform(animation: str, progress: float) -> SpriteTransform:
     return SpriteTransform(alpha=alpha)
 
 
+def normalise_rotation(degrees: float) -> float:
+    """An angle folded into (-180, 180]. Nothing renders differently for it; it
+    keeps a report and a preview from quoting a badge as turned 735 degrees."""
+    turned = (degrees + 180.0) % 360.0 - 180.0
+    return 180.0 if turned == -180.0 else turned
+
+
+def apply_creator_rotation(transform: SpriteTransform, degrees: float) -> SpriteTransform:
+    """The creator's tilt added to whatever the animation is doing this frame.
+
+    An offset, never a replacement. Rotation is the entire content of shake and
+    swing and most of spin-in, so a tilt that overwrote it would silently delete
+    the motion for exactly the accents chosen for their motion: a badge turned 15
+    degrees still has to shake, around its new angle.
+    """
+    if not degrees:
+        return transform
+    return replace(
+        transform, rotation=normalise_rotation(transform.rotation + degrees)
+    )
+
+
 def _cell_parts(cell: str) -> tuple[str, str]:
     if cell == "center":
         return "middle", "center"
@@ -452,16 +486,56 @@ def place_sprite(
     return round(x), round(y)
 
 
-def sprite_target_height(scale: str, frame_height: int) -> int:
+def clamp_scale_factor(factor: float) -> float:
+    """The creator's multiplier, held inside the range an accent survives.
+
+    Silently clamped rather than refused: this number comes from dragging a
+    handle, and a delivery that fails because somebody dragged too far would be a
+    worse answer than one that stops growing.
+    """
+    return min(MAX_SCALE_FACTOR, max(MIN_SCALE_FACTOR, factor))
+
+
+def sprite_target_height(scale: str, frame_height: int, factor: float = 1.0) -> int:
     if scale not in SPRITE_SCALES:
         raise ValueError(f"unknown scale: {scale!r}")
-    return max(8, round(frame_height * SPRITE_SCALES[scale]))
+    return max(8, round(frame_height * SPRITE_SCALES[scale] * clamp_scale_factor(factor)))
 
 
-def bubble_max_width(scale: str, frame_width: int) -> int:
+def bubble_max_width(scale: str, frame_width: int, factor: float = 1.0) -> int:
     if scale not in BUBBLE_WIDTH_FRACTIONS:
         raise ValueError(f"unknown scale: {scale!r}")
-    return max(64, round(frame_width * BUBBLE_WIDTH_FRACTIONS[scale]))
+    return max(
+        64, round(frame_width * BUBBLE_WIDTH_FRACTIONS[scale] * clamp_scale_factor(factor))
+    )
+
+
+def sprite_render_key(
+    sprite: Sprite,
+    text: str,
+    scale: str,
+    scale_factor: float,
+    frame: tuple[int, int],
+) -> str:
+    """A digest of everything that decides an accent's resting pixels.
+
+    It names the rendered file and identifies it in the render's own cache, so
+    every argument here is one that changes the bitmap. `scale_factor` is the one
+    that fails quietly if it is forgotten: two accents differing only in the size
+    the creator dragged them to would share a file, and whichever rendered second
+    would be the size of both.
+
+    Rotation is deliberately absent. It is applied per frame on top of this
+    image, so two accents that differ only in tilt really are the same drawing
+    and should share the work.
+    """
+    return hash_parts(
+        sprite.name,
+        text,
+        scale,
+        f"{clamp_scale_factor(scale_factor):.4f}",
+        f"{frame[0]}x{frame[1]}",
+    )[:16]
 
 
 def nine_patch_resize(image, spec: NinePatch, size: tuple[int, int]):

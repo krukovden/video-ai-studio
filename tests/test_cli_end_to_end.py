@@ -334,7 +334,7 @@ def _executed_stages(output: str) -> set[str]:
 
 ALL_STAGE_IDS = {
     "ingest", "quality", "sync", "transcribe", "analyze", "describe", "plan",
-    "visual_check", "effects", "render_draft", "export_edit", "polish",
+    "assemble", "visual_check", "effects", "render_draft", "export_edit", "polish",
 }
 
 
@@ -395,8 +395,8 @@ def test_editing_brief_reruns_only_analyze_plan_and_render(tmp_path: Path, make_
     after_brief_edit = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
     assert after_brief_edit.exit_code == 0, after_brief_edit.output
     assert _executed_stages(after_brief_edit.output) == {
-        "analyze", "describe", "plan", "visual_check", "effects", "render_draft",
-        "export_edit", "polish",
+        "analyze", "describe", "plan", "assemble", "visual_check", "effects",
+        "render_draft", "export_edit", "polish",
     }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -529,7 +529,8 @@ def test_changing_plan_exclude_phrases_reruns_only_plan_and_render(
 
     assert after_exclusion.exit_code == 0, after_exclusion.output
     assert _executed_stages(after_exclusion.output) == {
-        "plan", "visual_check", "effects", "render_draft", "export_edit", "polish"
+        "plan", "assemble", "visual_check", "effects", "render_draft", "export_edit",
+        "polish",
     }
 
     unchanged_again = runner.invoke(app, ["run", str(project), "--config", str(config_path)])
@@ -869,3 +870,44 @@ def test_output_snapshots_false_disables_archiving(tmp_path: Path, make_clip, mo
     assert result.exit_code == 0, result.output
     assert "Snapshot:" not in result.output
     assert [p for p in (project / "output").iterdir() if p.is_dir()] == []
+
+
+# --- The edit page is part of the workflow, not a command nobody is told about ---
+
+
+def test_produce_names_the_edit_page_alongside_the_approval_it_asks_for(
+    tmp_path: Path, make_clip, monkeypatch,
+):
+    """It stops here to be told what the creator wants, and until now the only
+    thing it offered was yes. Reordering, dropping a shot and every accent
+    decision live behind a command `produce` never mentioned."""
+    project, config_path = _seed_snapshot_project(tmp_path, make_clip, monkeypatch)
+
+    result = runner.invoke(app, ["produce", str(project), "--config", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert f"videoai edit {project} --config {config_path}" in result.output
+    assert f"videoai approve {project} --config {config_path}" in result.output
+
+
+def test_the_edit_page_draws_the_edit_that_was_actually_assembled(
+    tmp_path: Path, make_clip, monkeypatch,
+):
+    project, config_path = _seed_snapshot_project(tmp_path, make_clip, monkeypatch)
+    assert runner.invoke(
+        app, ["run", str(project), "--config", str(config_path)]
+    ).exit_code == 0
+
+    result = runner.invoke(
+        app, ["edit", str(project), "--config", str(config_path), "--write"]
+    )
+
+    assert result.exit_code == 0, result.output
+    page = (project / "output" / "edit.html").read_text(encoding="utf-8")
+    timeline = json.loads((project / "work" / "05-timeline.json").read_text(encoding="utf-8"))
+    assert timeline["clips"]
+    for clip in timeline["clips"]:
+        assert clip["ref"] in page
+    # A frame per shot, embedded rather than linked: the page is opened off a
+    # disk, and these are frames of a child.
+    assert "data:image/jpeg;base64," in page

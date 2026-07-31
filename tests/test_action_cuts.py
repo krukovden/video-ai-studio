@@ -129,3 +129,83 @@ def test_with_no_safe_landing_the_cut_is_left_where_it_was():
         timeline, _notes((36.0, "a squeeze")), transcript=speech
     )
     assert fixed.clips[0].dur == 7.3
+
+
+# --- The model does not get to set a timestamp. A described moment is measured
+# against the footage before any of the arithmetic above touches it ---
+
+
+def test_the_measured_onset_is_what_moves_the_cut_not_the_reported_one():
+    timeline = _timeline((30.0, 6.2))                      # ends at 36.2
+    measured = avoid_mid_action_cuts(
+        timeline, _notes((36.0, "a squeeze")), locate=lambda clip_id, at: 35.6
+    )
+    # Pulled back clear of 35.6, the frame the picture really changed on, rather
+    # than of the 36.0 a model wrote down.
+    end = measured.clips[0].offset + measured.clips[0].dur
+    assert abs(end - (35.6 - 0.15)) < 1e-6
+
+
+def test_two_runs_that_report_the_same_action_differently_produce_one_edit():
+    """The whole reason for measuring: an LLM reporting 36.0 on one run and 36.3
+    on the next used to mean two clip durations, two timeline hashes and a full
+    re-render of an edit that nobody changed."""
+    timeline = _timeline((30.0, 6.2))
+
+    def locate(clip_id: str, at: float) -> float:
+        return 35.6
+
+    first = avoid_mid_action_cuts(timeline, _notes((36.0, "a squeeze")), locate=locate)
+    second = avoid_mid_action_cuts(timeline, _notes((36.3, "a squeeze")), locate=locate)
+
+    assert first.clips[0].dur == second.clips[0].dur
+
+
+def test_a_moment_nothing_was_measured_at_never_moves_a_cut():
+    """The picture did not change there. The only evidence for the moment was a
+    number, and a number must not decide where a segment ends."""
+    timeline = _timeline((30.0, 6.2))
+    fixed = avoid_mid_action_cuts(
+        timeline, _notes((36.0, "a squeeze")), locate=lambda clip_id, at: None
+    )
+    assert fixed.clips[0].dur == 6.2
+
+
+def test_a_described_moment_nowhere_near_a_cut_is_never_measured():
+    """Measuring is a video decode. A moment twenty seconds from every boundary
+    cannot move one, so it must not cost anything to have been described."""
+    timeline = _timeline((30.0, 6.2))
+    asked: list[float] = []
+
+    def locate(clip_id: str, at: float) -> float | None:
+        asked.append(at)
+        return at
+
+    avoid_mid_action_cuts(
+        timeline, _notes((12.0, "much earlier"), (36.0, "a squeeze")), locate=locate
+    )
+
+    assert asked == [36.0]
+
+
+def test_the_same_moment_is_measured_once_however_often_it_is_consulted():
+    timeline = _timeline((30.0, 6.2), (30.0, 6.2))
+    calls: list[tuple[str, float]] = []
+
+    def locate(clip_id: str, at: float) -> float | None:
+        calls.append((clip_id, at))
+        return at
+
+    avoid_mid_action_cuts(timeline, _notes((36.0, "a squeeze")), locate=locate)
+
+    assert calls == [("clip-01", 36.0)]
+
+
+def test_without_a_locator_a_reported_time_is_rounded_onto_the_measurement_grid():
+    """A caller with no access to the media cannot do better than collapse the
+    jitter of a model rephrasing itself; the grid is the one the measurement
+    itself resolves to."""
+    timeline = _timeline((30.0, 6.2))
+    coarse = avoid_mid_action_cuts(timeline, _notes((36.04, "a squeeze")))
+    exact = avoid_mid_action_cuts(timeline, _notes((36.0, "a squeeze")))
+    assert coarse.clips[0].dur == exact.clips[0].dur

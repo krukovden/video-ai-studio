@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from videoai.logic.effects import ANIMATIONS, animation_transform
+from videoai.logic.effects import (
+    ANIMATIONS,
+    SpriteTransform,
+    animation_transform,
+    apply_creator_rotation,
+    normalise_rotation,
+)
 
 
 @pytest.mark.parametrize("animation", ANIMATIONS)
@@ -79,3 +85,44 @@ def test_swing_crosses_upright_rather_than_leaning_one_way():
 
 def test_drift_up_rises_and_fades():
     assert animation_transform("drift-up", 0.9).dy < animation_transform("drift-up", 0.1).dy
+
+
+def test_a_creator_tilt_is_added_to_the_motion_rather_than_replacing_it():
+    """A badge turned 15 degrees and shaken must still shake, around 15 degrees.
+    Overwriting the angle would delete the motion of exactly the two animations
+    whose entire content is rotation."""
+    for step in range(41):
+        motion = animation_transform("shake", step / 40)
+        tilted = apply_creator_rotation(motion, 15.0)
+        assert tilted.rotation == pytest.approx(motion.rotation + 15.0), step
+
+    angles = [
+        apply_creator_rotation(animation_transform("shake", i / 40), 15.0).rotation
+        for i in range(41)
+    ]
+    assert max(angles) > 15.0 and min(angles) < 15.0
+
+
+@pytest.mark.parametrize("animation", ANIMATIONS)
+def test_a_tilt_changes_the_angle_and_nothing_else(animation: str):
+    motion = animation_transform(animation, 0.4)
+    tilted = apply_creator_rotation(motion, -20.0)
+
+    assert (tilted.scale_x, tilted.scale_y, tilted.dx, tilted.dy, tilted.alpha) == (
+        motion.scale_x, motion.scale_y, motion.dx, motion.dy, motion.alpha,
+    ), animation
+
+
+def test_no_tilt_leaves_the_motion_exactly_as_it_was():
+    motion = animation_transform("swing", 0.3)
+    assert apply_creator_rotation(motion, 0.0) is motion
+
+
+def test_a_tilt_that_wraps_past_half_a_turn_comes_back_the_short_way():
+    """Nothing renders differently for it; it stops a report or a preview quoting
+    a badge as turned 735 degrees."""
+    assert apply_creator_rotation(SpriteTransform(rotation=170.0), 30.0).rotation == (
+        pytest.approx(-160.0)
+    )
+    assert normalise_rotation(720.0 + 45.0) == pytest.approx(45.0)
+    assert normalise_rotation(-180.0) == pytest.approx(180.0)

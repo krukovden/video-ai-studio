@@ -31,16 +31,68 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()[:16]
 
 
-def source_key(path: Path) -> str:
-    """Short digest identifying a source file by path, size and mtime.
+# A megabyte of each end of the file. Enough to cover a container's header and
+# index and the first and last frames, which is where two different recordings
+# differ, and small enough to read off a 4K source without noticing.
+SAMPLE_BYTES = 1024 * 1024
 
-    Derived media (audio, proxies, keyframes) must be keyed by this rather than
-    by a positional `clip-NN` id: clip ids are assigned by sort order, so adding
-    a clip that sorts earlier renumbers everything and would otherwise hand one
-    clip's cached audio and proxy to a different source.
+
+def hash_file_ends(path: Path, sample: int = SAMPLE_BYTES) -> str:
+    """Digest of a file's size plus its first and last `sample` bytes.
+
+    `hash_file` is the honest answer and too slow to spend on every clip of every
+    run: the first real project is 44 minutes of 4K HEVC, and reading all of it
+    costs more than the ingest this is meant to make cacheable. Size plus both
+    ends catches everything that actually happens to source footage — another
+    take, a re-export, a re-encode, a truncated or still-copying transfer — since
+    all of those move the size or rewrite the header. A file edited only in the
+    middle and left byte-for-byte the same length would slip through; nothing
+    between a camera and an NLE produces one.
     """
-    stat = path.stat()
-    return hash_parts(str(path.resolve()), str(stat.st_size), str(int(stat.st_mtime)))
+    size = path.stat().st_size
+    digest = hashlib.sha256()
+    digest.update(str(size).encode("utf-8"))
+    with path.open("rb") as source:
+        digest.update(source.read(sample))
+        if size > sample:
+            # Start the tail after the head so a file just over one sample long
+            # does not have its overlap counted twice.
+            source.seek(max(sample, size - sample))
+            digest.update(source.read(sample))
+    return digest.hexdigest()[:16]
+
+
+def _project_relative_name(path: Path, root: Path | None) -> str:
+    """Where a source file sits inside the project, as a key may see it.
+
+    A caller that cannot name the project root gets the bare filename rather than
+    the absolute path. It still tells two unrelated sources apart, and it does not
+    put back the dependency on where the footage happens to be mounted today.
+    """
+    if root is not None:
+        try:
+            return path.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            pass
+    return path.name
+
+
+def source_key(path: Path, root: Path | None = None) -> str:
+    """Short digest identifying a source file by its content and its place in the project.
+
+    Derived media (audio, proxies, keyframes) and every metered model call are
+    keyed by this rather than by a positional `clip-NN` id: clip ids are assigned
+    by sort order, so adding a clip that sorts earlier renumbers everything and
+    would otherwise hand one clip's cached audio and proxy to a different source.
+
+    Content addressed rather than `mtime` addressed, and relative rather than
+    absolute, because both of the alternatives call the same footage new. An
+    rsync, a Time Machine restore or a cloud-sync round trip re-stamps every
+    modification time without touching a frame, and moving the project folder
+    changes every resolved path; either one would re-transcribe the whole shoot
+    and re-upload it to a model billed by the second.
+    """
+    return hash_parts(_project_relative_name(path, root), hash_file_ends(path))
 
 
 class ArtifactStore:

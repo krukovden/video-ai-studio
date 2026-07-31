@@ -88,6 +88,48 @@ def test_every_clip_appears_in_report(tmp_path: Path, make_clip):
     assert {c.clip_id for c in report.clips} == {c.clip_id for c in manifest.clips}
 
 
+def test_scores_are_rebuilt_when_the_proxy_came_from_another_encoder(tmp_path: Path):
+    """Every number here is measured off the proxy's pixels, and libx264 and
+    VideoToolbox do not produce the same ones. A manifest naming a different
+    encoder therefore describes footage these scores were never taken from."""
+    import videoai.stages  # noqa: F401  (imports register every stage)
+    from videoai.core.registry import REGISTRY
+    from videoai.core.runner import _fingerprint
+
+    ctx = _context(tmp_path)
+    clip = ClipInfo(
+        clip_id="clip-01",
+        path="video/a.mp4",
+        duration=2.0,
+        width=1920,
+        height=1080,
+        fps=30.0,
+        has_audio=True,
+        source_key="same-source",
+        proxy_path="work/media/a-proxy-720p-libx264.mp4",
+        proxy_encoder="libx264",
+    )
+    ctx.store.write("01-manifest", Manifest(clips=[clip]), fingerprint="fp")
+    before = _fingerprint(REGISTRY["quality"], ctx, "media-fp", "brief-fp")
+
+    ctx.store.write(
+        "01-manifest",
+        Manifest(
+            clips=[
+                clip.model_copy(
+                    update={
+                        "proxy_path": "work/media/a-proxy-720p-h264_videotoolbox.mp4",
+                        "proxy_encoder": "h264_videotoolbox",
+                    }
+                )
+            ]
+        ),
+        fingerprint="fp",
+    )
+
+    assert _fingerprint(REGISTRY["quality"], ctx, "media-fp", "brief-fp") != before
+
+
 def test_undecodable_proxy_is_marked_not_scored_not_raised(tmp_path: Path):
     ctx = _context(tmp_path)
     bad_proxy = ctx.work_dir / "garbage.mp4"

@@ -16,6 +16,26 @@ from videoai.config import Config
 from videoai.core.store import ArtifactStore
 
 
+# The creator's running order and per-accent decisions: an artifact a person
+# writes and no stage ever rewrites. A stage may `require` it, which feeds its
+# content into that stage's fingerprint — so editing it re-runs the stages that
+# read it — without the dependency graph looking for a stage that produces it.
+#
+# Declaring it is what ended the forgery. While the creator's decisions lived
+# inside a model's artifact, a person's edit looked to the runner exactly like a
+# stale reply, and the CLI had to recompute and store the fingerprint the stage
+# WOULD have written so the work would survive the next run. An input authored by
+# one party and never rewritten by another needs no such disguise.
+CREATOR_ARTIFACTS: tuple[str, ...] = ("05e-overrides",)
+
+# Artifacts a stage writes alongside its declared output: the story plan the
+# planner also produces, and the ids the visual gate refused. Requiring one feeds
+# its content into a fingerprint the same way, and it deliberately does not make
+# the writing stage a dependency — `05c-rejected` flows backwards, from the gate
+# to the planner it re-runs.
+SIDE_ARTIFACTS: tuple[str, ...] = ("05a-storyplan", "05c-rejected")
+
+
 @dataclass(frozen=True)
 class StageContext:
     project_dir: Path

@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 from videoai.config import Config
-from videoai.core.registry import REGISTRY, StageContext, StageSpec
+from videoai.core.registry import (
+    CREATOR_ARTIFACTS,
+    REGISTRY,
+    SIDE_ARTIFACTS,
+    StageContext,
+    StageSpec,
+)
 from videoai.core.store import hash_parts
 
 
@@ -19,6 +25,19 @@ class StageFailure(RuntimeError):
 def _ordered_stages() -> list[StageSpec]:
     """Topological order: a stage runs after every stage producing its inputs."""
     produced_by = {spec.produces: spec.id for spec in REGISTRY.values()}
+    # A requirement nobody produces is a declared creator input, a declared side
+    # artifact, or a typo — and a typo here is silent: the missing content hashes
+    # as '' and the stage stays cached across every change to the artifact it
+    # meant to name.
+    declared = set(CREATOR_ARTIFACTS) | set(SIDE_ARTIFACTS)
+    for spec in REGISTRY.values():
+        for name in spec.requires:
+            if name not in produced_by and name not in declared:
+                raise ValueError(
+                    f"stage '{spec.id}' requires '{name}', which no stage produces "
+                    "and which registry.py does not declare as a creator input or a "
+                    "side artifact"
+                )
     ordered: list[StageSpec] = []
     placed: set[str] = set()
     pending = list(REGISTRY.values())
@@ -81,9 +100,18 @@ def _fingerprint(
             # The provider's own fixed instruction is as much a part of the prompt
             # as `spec.prompt` is; Codex's preamble is prefixed to every prompt it
             # sends, so editing it has to invalidate the analysis it produced.
-            from videoai.providers.base import llm_system_preamble
+            from videoai.providers.base import llm_system_preamble, resolved_llm_model
 
             parts.append(f"system:{hash_parts(llm_system_preamble(provider))}")
+            # The provider name is an alias, not a model: "gemini_api" answers as
+            # whatever its DEFAULT_MODEL points at, and one model's judgement of a
+            # take is not another's. Resolved without constructing a provider, so
+            # fingerprinting still starts no CLI and opens no socket.
+            # `analyze.llm_model` is the pipeline-wide setting every model-calling
+            # stage hands to its provider.
+            parts.append(
+                f"model:{resolved_llm_model(provider, ctx.config.analyze.llm_model)}"
+            )
     for key in spec.config_keys:
         parts.append(f"{key}={config_value(ctx.config, key)!r}")
     if spec.prompt is not None:

@@ -13,10 +13,19 @@ edit the creator already approved.
 
 Only the OUT point moves. Pulling an IN point earlier would drag in the tail of
 whatever came before, which is a different kind of wrong.
+
+The times in those notes are numbers a model wrote down, and everything below
+turns one into a clip duration — so on the face of it this is a model setting a
+timestamp, which the production contract does not allow. It is not, as long as
+the caller passes a `locate`: no model time then reaches the arithmetic, because
+each one is first put back onto the frame where the picture measurably changed.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 from videoai.core.models import ClipNotes, Timeline, TimelineClip, Transcript
+from videoai.logic.motion import ONSET_SEARCH_SECONDS, ONSET_STEP_SECONDS
 
 # How soon after an action starts a cut still counts as interrupting it. Beyond
 # this the action has had time to read and ending is a choice rather than an
@@ -33,6 +42,38 @@ MIN_SEGMENT_SECONDS = 0.8
 
 # Clear of the action rather than exactly on its first frame.
 BEFORE_MARGIN = 0.15
+
+# Takes (clip id, the second a model reported) and answers with the second the
+# picture there was measured to change, or None when it was measured not to.
+Locator = Callable[[str, float], float | None]
+
+
+def _snapper(locate: Locator | None):
+    """Every model timestamp, replaced by something measured — and remembered.
+
+    A described moment that `locate` cannot find in the picture does not move a
+    cut: the only evidence for it was a number, and a number is exactly what must
+    not decide where a segment ends. Answers are cached because measuring is a
+    video decode and the same moment is consulted from both sides of a cut.
+
+    With no locator at all — a caller that has no access to the media — the time
+    is rounded onto the grid the measurement itself resolves to, so both paths
+    agree about what counts as one moment. That collapses a model rephrasing
+    18.14 as 18.1 and nothing wider: 18.1 and 18.4 are still two different cuts,
+    which is why every caller that can measure does.
+    """
+    seen: dict[tuple[str, float], float | None] = {}
+
+    def snap(clip_id: str, at: float) -> float | None:
+        if locate is None:
+            return round(round(at / ONSET_STEP_SECONDS) * ONSET_STEP_SECONDS, 3)
+        key = (clip_id, at)
+        if key not in seen:
+            measured = locate(clip_id, at)
+            seen[key] = None if measured is None else round(measured, 3)
+        return seen[key]
+
+    return snap
 
 
 def _events_for(notes: ClipNotes, clip_id: str) -> list[float]:
@@ -64,14 +105,30 @@ def _mend(
     starts: list[float],
     limit: float | None,
     words: list[tuple[float, float]],
+    snap,
 ) -> float:
     """The out point for this segment: unchanged, or moved clear of an action.
 
     Returns the new duration.
     """
     end = clip.offset + clip.dur
+    # Only the described moments that could possibly move THIS cut are measured:
+    # snapping is a video decode, and a moment ten seconds away cannot reach the
+    # arithmetic below. The window is the one used further down, widened by how
+    # far a measurement is allowed to move a moment.
+    nearby = sorted(
+        at
+        for at in (
+            snap(clip.src, moment)
+            for moment in starts
+            if end - INTERRUPT_WINDOW - ONSET_SEARCH_SECONDS
+            < moment
+            < end + ACTION_SECONDS + ONSET_SEARCH_SECONDS
+        )
+        if at is not None
+    )
     interrupted = [
-        at for at in starts if end - INTERRUPT_WINDOW < at < end
+        at for at in nearby if end - INTERRUPT_WINDOW < at < end
     ]
     if not interrupted:
         return clip.dur
@@ -83,7 +140,7 @@ def _mend(
     before = action - BEFORE_MARGIN - clip.offset
     # Option two: run on until it has finished — the next described moment, or a
     # default if it is the last thing in the clip.
-    following = [at for at in starts if at > action]
+    following = [at for at in nearby if at > action]
     finish = min(following[0], action + ACTION_SECONDS) if following else action + ACTION_SECONDS
     after = finish - clip.offset
 
@@ -110,16 +167,24 @@ def _mend(
 
 
 def avoid_mid_action_cuts(
-    timeline: Timeline, notes: ClipNotes, transcript: Transcript | None = None
+    timeline: Timeline,
+    notes: ClipNotes,
+    transcript: Transcript | None = None,
+    locate: Locator | None = None,
 ) -> Timeline:
     """The same edit, with no cut landing inside an action that just began.
 
     `transcript` is what keeps this honest: a boundary moved off an action must
     still fall in silence, because cutting mid-word is a rule the edit already
-    has and already checks.
+    has and already checks. `locate` is what keeps it deterministic: it puts each
+    described moment back onto the frame where the picture measurably changed, so
+    a re-run in which the model rephrases the same action never re-renders the
+    video. A caller holding the media should always pass one.
     """
     if not notes.notes or not timeline.clips:
         return timeline
+
+    snap = _snapper(locate)
 
     spoken: dict[str, list[tuple[float, float]]] = {}
     for clip_transcript in (transcript.clips if transcript else []):
@@ -132,7 +197,13 @@ def avoid_mid_action_cuts(
     for clip in timeline.clips:
         starts = _events_for(notes, clip.src)
         duration = (
-            _mend(clip, starts, _source_duration(notes, clip.src), spoken.get(clip.src, []))
+            _mend(
+                clip,
+                starts,
+                _source_duration(notes, clip.src),
+                spoken.get(clip.src, []),
+                snap,
+            )
             if starts
             else clip.dur
         )

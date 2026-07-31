@@ -17,13 +17,18 @@ SYSTEM_PROMPT = (
     "nothing else: no prose, no markdown fences."
 )
 
+# What answers when nothing is configured. A module constant because the
+# fingerprint has to name the model that actually scored the footage, and it is
+# read without constructing a provider (see `base.resolved_llm_model`).
+DEFAULT_MODEL = "sonnet"
+
 
 class ClaudeCliLLM:
     name = "claude_cli"
     # Stills only: no CLI here can hand a model a video file.
     reads_video = False
 
-    def __init__(self, model: str = "sonnet") -> None:
+    def __init__(self, model: str = DEFAULT_MODEL) -> None:
         self.model = model
 
     def complete_json(

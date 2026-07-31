@@ -254,14 +254,29 @@ def extract_audio(src: Path, dst: Path) -> None:
     )
 
 
-def make_proxy(src: Path, dst: Path, height: int) -> None:
-    """Small proxy for analysis and draft renders.
+def proxy_encoder() -> str:
+    """The encoder `make_proxy` would use right now.
+
+    Exposed because the choice is a live capability probe rather than a setting,
+    so the caller cannot know it from the config and has to be told: a proxy is
+    only reusable for the encoder that made it, and only the caller names the
+    file it will be cached under.
+    """
+    return "h264_videotoolbox" if videotoolbox_available() else "libx264"
+
+
+def make_proxy(src: Path, dst: Path, height: int, encoder: str | None = None) -> str:
+    """Small proxy for analysis and draft renders. Returns the encoder used.
 
     Sources are 4K HEVC, so decode and encode go through VideoToolbox when the
     build supports it; software encoding is minutes per clip instead of seconds.
+    Which one answered comes back to the caller because the two do not produce
+    the same picture, and everything measured off a proxy — s02's blur score
+    above all — moves with it.
     """
+    chosen = encoder or proxy_encoder()
     scale = f"scale=-2:{height}"
-    if videotoolbox_available():
+    if chosen == "h264_videotoolbox":
         args = [
             "-hwaccel", "videotoolbox", "-i", str(src),
             "-vf", scale,
@@ -276,6 +291,7 @@ def make_proxy(src: Path, dst: Path, height: int) -> None:
             "-c:a", "aac", "-b:a", "128k",
         ]
     _run_ffmpeg_to(args, dst)
+    return chosen
 
 
 def extract_frame(src: Path, at: float, dst: Path, height: int = 360) -> None:

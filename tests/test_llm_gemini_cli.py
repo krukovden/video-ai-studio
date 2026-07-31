@@ -129,3 +129,10 @@ def test_the_registry_knows_it():
     provider = resolve_llm("gemini_cli", "gemini-3.6-flash")
     assert provider.name == "gemini_cli"
     assert provider.model == "gemini-3.6-flash"
+
+
+def test_a_claude_model_is_refused_rather_than_dropped_for_the_cli_default():
+    """Passing no model let the CLI pick, which is a different model answering
+    than the one the creator configured — and nothing said so."""
+    with pytest.raises(ValueError, match="not a Gemini model"):
+        resolve_llm("gemini_cli", "sonnet")

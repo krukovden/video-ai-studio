@@ -1,10 +1,12 @@
+import os
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from videoai.core.store import ArtifactStore, hash_parts, source_key
+from videoai.core.store import ArtifactStore, hash_file_ends, hash_parts, source_key
 
 
 class Sample(BaseModel):
@@ -111,6 +113,97 @@ def test_source_key_changes_with_size_and_stays_stable_otherwise(tmp_path: Path)
 def _copy(source: Path, target: Path) -> Path:
     target.write_bytes(source.read_bytes())
     return target
+
+
+# --- derived media has to be cacheable by the source's identity, and neither
+# `mtime` nor an absolute path is one: both call the same footage new ---
+
+
+def test_source_key_survives_a_transfer_that_only_restamps_mtime(tmp_path: Path):
+    """An rsync, a Time Machine restore and a cloud-sync round trip all put the
+    same bytes back under a new modification time. Keying on that re-transcribed
+    the shoot and re-uploaded it to a model billed by the second."""
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"frames" * 4096)
+    before = source_key(path, tmp_path)
+
+    os.utime(path, (1_600_000_000, 1_600_000_000))
+
+    assert source_key(path, tmp_path) == before
+
+
+def test_source_key_survives_moving_the_project_folder(tmp_path: Path):
+    first_home = tmp_path / "Desktop" / "toy-review"
+    (first_home / "video").mkdir(parents=True)
+    (first_home / "video" / "a.mp4").write_bytes(b"frames" * 4096)
+    before = source_key(first_home / "video" / "a.mp4", first_home)
+
+    second_home = tmp_path / "Archive" / "2026" / "toy-review"
+    second_home.parent.mkdir(parents=True)
+    shutil.move(str(first_home), str(second_home))
+
+    assert source_key(second_home / "video" / "a.mp4", second_home) == before
+
+
+def test_source_key_notices_a_re_export_of_the_same_length(tmp_path: Path):
+    """Same name, same size, same second: the take was re-exported. The old
+    path/size/mtime key could not see this at all."""
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"take-one" + bytes(4096))
+    before = source_key(path, tmp_path)
+
+    path.write_bytes(b"take-two" + bytes(4096))
+
+    assert source_key(path, tmp_path) != before
+
+
+def test_two_cameras_may_hold_the_same_filename(tmp_path: Path):
+    """Two cards from a two-camera shoot both start at C0001.MP4, and the second
+    camera's clip is not the first camera's proxy."""
+    project = tmp_path / "project"
+    for camera in ("cam-a", "cam-b"):
+        (project / "video" / camera).mkdir(parents=True)
+        (project / "video" / camera / "C0001.MP4").write_bytes(b"identical bytes")
+
+    keys = {
+        source_key(project / "video" / camera / "C0001.MP4", project)
+        for camera in ("cam-a", "cam-b")
+    }
+
+    assert len(keys) == 2
+
+
+def test_hash_file_ends_notices_either_end_and_the_length(tmp_path: Path):
+    path = tmp_path / "clip.mp4"
+    body = bytearray(512)
+    path.write_bytes(bytes(body))
+    plain = hash_file_ends(path, sample=16)
+
+    head = bytearray(body)
+    head[0] = 1
+    path.write_bytes(bytes(head))
+    assert hash_file_ends(path, sample=16) != plain
+
+    tail = bytearray(body)
+    tail[-1] = 1
+    path.write_bytes(bytes(tail))
+    assert hash_file_ends(path, sample=16) != plain
+
+    path.write_bytes(bytes(body) + b"\x00")
+    assert hash_file_ends(path, sample=16) != plain
+
+
+def test_hash_file_ends_reads_a_file_shorter_than_one_sample(tmp_path: Path):
+    """The head and the tail overlap completely here; the digest must still be
+    stable and still tell two short files apart."""
+    short = tmp_path / "short.mp4"
+    short.write_bytes(b"tiny")
+
+    assert hash_file_ends(short, sample=16) == hash_file_ends(short, sample=16)
+
+    other = tmp_path / "other.mp4"
+    other.write_bytes(b"tin!")
+    assert hash_file_ends(other, sample=16) != hash_file_ends(short, sample=16)
 
 
 def test_float_round_trip_fidelity(tmp_path: Path):

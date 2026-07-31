@@ -96,9 +96,9 @@ sprites:
   expresses: something burst, popped or landed hard, right now
   anchor: center
   default_seconds: 0.9
-  animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  animation: zoom-punch
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_sparkles
   file: badge_sparkles.png
   tags:
@@ -111,35 +111,35 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pulse
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_party
   file: badge_party.png
   tags:
   - celebrate
   - finished
-  - success
+  - milestone
   - done
-  - win
-  expresses: a finished build or a moment worth celebrating
+  - built
+  expresses: a build finished, or a milestone reached
   anchor: center
   default_seconds: 1.4
   animation: drift-up
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_confetti
   file: badge_confetti.png
   tags:
-  - celebrate
-  - party
-  - success
+  - sign-off
   - ending
-  expresses: a cheerful sign-off or a small triumph
+  - goodbye
+  - party
+  expresses: the cheerful sign-off at the very end
   anchor: center
   default_seconds: 1.4
   animation: drift-up
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_splash
   file: badge_splash.png
   tags:
@@ -151,9 +151,9 @@ sprites:
   expresses: liquid squirting, splashing or being squeezed out
   anchor: center
   default_seconds: 0.9
-  animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  animation: squash
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_fire
   file: badge_fire.png
   tags:
@@ -165,21 +165,21 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pulse
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_star
   file: badge_star.png
   tags:
   - great
-  - favourite
-  - best
   - highlight
-  expresses: the best moment of a section, or a clear favourite
+  - standout
+  - moment
+  expresses: the standout moment of this section
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_eyes
   file: badge_eyes.png
   tags:
@@ -188,38 +188,38 @@ sprites:
   - attention
   - closer
   - notice
-  expresses: look closely at this — attention on the thing itself
+  expresses: look at this — attention on the thing itself
   anchor: center
   default_seconds: 0.9
   animation: pulse
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_shock
   file: badge_shock.png
   tags:
   - shock
-  - surprise
   - scared
   - sudden
+  - aaah
   expresses: a genuine shock or a startled reaction
   anchor: center
   default_seconds: 0.9
-  animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  animation: shake
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_mindblown
   file: badge_mindblown.png
   tags:
-  - amazed
-  - wow
-  - unexpected
   - disbelief
-  expresses: amazement — something worked far better than expected
+  - no way
+  - unexpected
+  - wow
+  expresses: disbelief that it actually worked
   anchor: center
   default_seconds: 0.9
-  animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  animation: zoom-punch
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_laugh
   file: badge_laugh.png
   tags:
@@ -231,59 +231,59 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_love
   file: badge_love.png
   tags:
   - love
   - delight
-  - favourite
   - adore
+  - want one
   expresses: delight — the presenter clearly loves this
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_clap
   file: badge_clap.png
   tags:
-  - well done
   - applause
-  - achievement
+  - well done
+  - bravo
   expresses: an achievement worth applauding
   anchor: center
   default_seconds: 0.9
   animation: shake
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_thumbsup
   file: badge_thumbsup.png
   tags:
   - approve
-  - good
-  - verdict
   - recommend
-  expresses: approval, or a positive verdict
+  - verdict
+  - buy it
+  expresses: a clear positive verdict on the whole thing
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_question
   file: badge_question.png
   tags:
   - curious
-  - unsure
-  - what
+  - what is it
   - mystery
-  expresses: curiosity or genuine uncertainty about what happens next
+  - guess
+  expresses: an open question the video has not answered yet
   anchor: center
   default_seconds: 0.9
   animation: shake
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_yuck
   file: badge_yuck.png
   tags:
@@ -295,36 +295,35 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_target
   file: badge_target.png
   tags:
   - accurate
-  - hit
   - aim
   - nailed it
   - precise
+  - on target
   expresses: hitting exactly what was aimed at
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_brick
   file: badge_brick.png
   tags:
-  - build
   - blocks
   - lego
-  - assemble
-  - piece
-  expresses: building or assembling something out of parts
+  - stack
+  - click together
+  expresses: stacking or clicking blocks together
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_gear
   file: badge_gear.png
   tags:
@@ -335,23 +334,23 @@ sprites:
   expresses: the mechanism itself — how the thing actually works
   anchor: center
   default_seconds: 0.9
-  animation: pulse
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  animation: spin-in
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_tools
   file: badge_tools.png
   tags:
   - fix
-  - build
-  - tools
   - assembly
+  - tools
   - repair
+  - screwdriver
   expresses: building, fixing or assembling with tools
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_package
   file: badge_package.png
   tags:
@@ -364,8 +363,8 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_gift
   file: badge_gift.png
   tags:
@@ -377,8 +376,8 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_paint
   file: badge_paint.png
   tags:
@@ -391,8 +390,8 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_rainbow
   file: badge_rainbow.png
   tags:
@@ -404,22 +403,22 @@ sprites:
   anchor: center
   default_seconds: 1.2
   animation: drift-up
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_bolt
   file: badge_bolt.png
   tags:
   - power
   - energy
-  - fast
   - zap
-  - sudden
-  expresses: sudden power or speed
+  - switch on
+  - electric
+  expresses: a jolt of power — the thing switching on or firing up
   anchor: center
   default_seconds: 0.9
   animation: shake
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_rocket
   file: badge_rocket.png
   tags:
@@ -428,17 +427,16 @@ sprites:
   - takeoff
   - speed
   - go
-  expresses: something taking off or going very fast
+  expresses: something taking off or travelling very fast
   anchor: center
   default_seconds: 1.2
   animation: drift-up
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_timer
   file: badge_timer.png
   tags:
   - time
-  - wait
   - how long
   - speed run
   - countdown
@@ -446,21 +444,21 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pulse
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_trophy
   file: badge_trophy.png
   tags:
   - win
-  - best
   - champion
+  - beat it
   - achievement
-  expresses: the win — the thing finally worked, or came first
+  expresses: the win — the thing beat the challenge it was set
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_perfect
   file: badge_perfect.png
   tags:
@@ -472,8 +470,8 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_tick
   file: badge_tick.png
   tags:
@@ -486,8 +484,8 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_cross
   file: badge_cross.png
   tags:
@@ -500,47 +498,47 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_ok
   file: badge_ok.png
   tags:
   - nice
-  - good
   - neat
-  - well done
-  expresses: neatly done, a small approving beat
+  - tidy
+  - in passing
+  expresses: a small 'that is neat' said in passing
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_crown
   file: badge_crown.png
   tags:
   - best
-  - favourite
-  - top
+  - top pick
   - winner
-  expresses: the favourite of the whole video
+  - overall
+  expresses: the overall pick of everything in the video
   anchor: center
-  default_seconds: 0.9
-  animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  default_seconds: 1.2
+  animation: bounce
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_thinking
   file: badge_thinking.png
   tags:
   - thinking
-  - unsure
   - considering
   - hmm
+  - not convinced
   expresses: weighing something up, or not yet convinced
   anchor: center
   default_seconds: 0.9
   animation: pulse
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_surprise
   file: badge_surprise.png
   tags:
@@ -552,8 +550,8 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_awkward
   file: badge_awkward.png
   tags:
@@ -561,38 +559,38 @@ sprites:
   - close call
   - awkward
   - nearly
-  expresses: an awkward moment or a near miss, taken in good humour
+  expresses: a near miss or awkward moment, taken in good humour
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_starstruck
   file: badge_starstruck.png
   tags:
   - impressed
   - amazing
-  - wow
-  - love it
-  expresses: genuinely impressed by what just happened
+  - beautiful
+  - admire
+  expresses: star-struck admiration for how good it looks
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_cheer
   file: badge_cheer.png
   tags:
-  - celebrate
-  - 'yes'
-  - hooray
   - relief
-  expresses: a small cheer — relief or triumph
+  - at last
+  - hooray
+  - it worked
+  expresses: relief that it finally worked
   anchor: center
   default_seconds: 1.2
   animation: drift-up
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_wave
   file: badge_wave.png
   tags:
@@ -604,9 +602,9 @@ sprites:
   expresses: a hello at the start or a goodbye at the end
   anchor: center
   default_seconds: 1.2
-  animation: shake
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  animation: swing
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_cool
   file: badge_cool.png
   tags:
@@ -618,8 +616,8 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_gun
   file: badge_gun.png
   tags:
@@ -627,40 +625,39 @@ sprites:
   - shoot
   - toy gun
   - water pistol
-  - fire
+  - squirt
   expresses: a toy blaster or water pistol being used
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_glasses
   file: badge_glasses.png
   tags:
-  - glasses
-  - look
-  - inspect
-  - read
-  - detail
-  expresses: looking closely at detail, or putting glasses on
+  - small print
+  - label
+  - spec
+  - read it
+  expresses: the small print — a label or a spec being read
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_sunglasses
   file: badge_sunglasses.png
   tags:
-  - cool
   - style
-  - confident
   - shades
-  expresses: style, or a deliberately cool moment
+  - looks good
+  - swagger
+  expresses: style, or a deliberately cool-looking object
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_smile
   file: badge_smile.png
   tags:
@@ -673,96 +670,325 @@ sprites:
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_grin
   file: badge_grin.png
   tags:
   - grin
-  - pleased
   - cheeky
+  - mischief
   - delighted
   expresses: a wide, slightly cheeky grin
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_blush
   file: badge_blush.png
   tags:
   - shy
-  - pleased
+  - quiet
   - warm
   - sweet
   expresses: quiet pleasure, or a shy moment
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_cry
   file: badge_cry.png
   tags:
   - sad
-  - cry
   - disappointed
   - aww
-  expresses: disappointment, or a sad beat played gently
+  - shame
+  expresses: disappointment, played gently
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_sob
   file: badge_sob.png
   tags:
   - sob
-  - very sad
   - gutted
   - dramatic
-  expresses: dramatic, over-the-top upset — the funny kind
+  - devastated
+  expresses: over-the-top upset — the funny kind
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_pleading
   file: badge_pleading.png
   tags:
   - please
+  - want
   - hopeful
   - aww
-  - want
-  expresses: hoping for something, or asking nicely
+  expresses: wanting something badly, or asking nicely
   anchor: center
   default_seconds: 0.9
   animation: pop-in
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_heart
   file: badge_heart.png
   tags:
   - love
-  - favourite
-  - adore
+  - affection
+  - sweet
   - heart
-  expresses: plain affection for the thing on screen
+  expresses: warmth towards the thing itself, with no face involved
   anchor: center
   default_seconds: 0.9
   animation: pulse
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
 - name: badge_pray
   file: badge_pray.png
   tags:
-  - please
   - fingers crossed
   - hope
-  - thanks
-  expresses: hoping it works, or a thank-you
+  - moment of truth
+  expresses: fingers crossed, right before the moment of truth
   anchor: center
   default_seconds: 0.9
   animation: pulse
-  attribution: Emoji graphics by Twemoji (https://github.com/jdecked/twemoji), licensed
-    CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_spin
+  file: badge_spin.png
+  tags:
+  - spin
+  - whirl
+  - rotate
+  - top
+  - twirl
+  expresses: something spinning or whirling on the spot
+  anchor: center
+  default_seconds: 0.9
+  animation: spin-in
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_snail
+  file: badge_snail.png
+  tags:
+  - slow
+  - crawl
+  - sluggish
+  - takes ages
+  expresses: far slower than expected — a crawl
+  anchor: center
+  default_seconds: 1.2
+  animation: swing
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_music
+  file: badge_music.png
+  tags:
+  - sound
+  - noise
+  - tune
+  - beep
+  - plays music
+  expresses: the noise or tune the thing itself makes
+  anchor: center
+  default_seconds: 1.2
+  animation: bounce
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_thumbsdown
+  file: badge_thumbsdown.png
+  tags:
+  - reject
+  - not worth it
+  - avoid
+  - poor
+  expresses: a negative verdict, given plainly
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_warning
+  file: badge_warning.png
+  tags:
+  - careful
+  - caution
+  - watch out
+  - risk
+  - sharp
+  expresses: a caution worth flagging before somebody copies this
+  anchor: center
+  default_seconds: 0.9
+  animation: shake
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_rofl
+  file: badge_rofl.png
+  tags:
+  - hilarious
+  - howling
+  - helpless
+  - cannot stop
+  expresses: helpless laughter — funnier than anyone expected
+  anchor: center
+  default_seconds: 1.2
+  animation: swing
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_angry
+  file: badge_angry.png
+  tags:
+  - annoyed
+  - frustrating
+  - fiddly
+  - grr
+  expresses: frustration — this part is infuriating to deal with
+  anchor: center
+  default_seconds: 0.9
+  animation: shake
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_strong
+  file: badge_strong.png
+  tags:
+  - tough
+  - strong
+  - durable
+  - survived
+  - sturdy
+  expresses: strength or toughness being tested
+  anchor: center
+  default_seconds: 0.9
+  animation: squash
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_scissors
+  file: badge_scissors.png
+  tags:
+  - cut
+  - open it
+  - snip
+  - packaging
+  - free it
+  expresses: cutting something open or cutting a part free
+  anchor: center
+  default_seconds: 0.9
+  animation: shake
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_puzzle
+  file: badge_puzzle.png
+  tags:
+  - fits
+  - slots in
+  - last piece
+  - jigsaw
+  expresses: a piece finally fitting where it belongs
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_magnet
+  file: badge_magnet.png
+  tags:
+  - magnetic
+  - snaps together
+  - sticks
+  - attract
+  expresses: parts snapping together magnetically
+  anchor: center
+  default_seconds: 0.9
+  animation: zoom-punch
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_battery
+  file: badge_battery.png
+  tags:
+  - batteries
+  - power
+  - charge
+  - aa
+  - runs out
+  expresses: 'batteries: needed, going in, or running out'
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_bulb
+  file: badge_bulb.png
+  tags:
+  - idea
+  - it clicks
+  - realise
+  - tip
+  - trick
+  expresses: an idea, or the moment something clicks
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_ruler
+  file: badge_ruler.png
+  tags:
+  - size
+  - how big
+  - measure
+  - dimensions
+  - scale
+  expresses: how big the thing actually is
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_scale
+  file: badge_scale.png
+  tags:
+  - compare
+  - versus
+  - side by side
+  - which one
+  expresses: two things compared against each other
+  anchor: center
+  default_seconds: 0.9
+  animation: pop-in
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_price
+  file: badge_price.png
+  tags:
+  - price
+  - cost
+  - worth it
+  - value
+  - cheap
+  expresses: what it costs, and whether that is fair
+  anchor: center
+  default_seconds: 0.9
+  animation: bounce
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).
+- name: badge_zzz
+  file: badge_zzz.png
+  tags:
+  - boring
+  - dull
+  - nothing happening
+  - slow bit
+  expresses: the dull stretch, signposted honestly
+  anchor: center
+  default_seconds: 1.2
+  animation: drift-up
+  attribution: Emoji graphics from Microsoft Fluent Emoji (https://github.com/microsoft/fluentui-emoji),
+    Copyright (c) Microsoft Corporation, used under the MIT licence (https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE).

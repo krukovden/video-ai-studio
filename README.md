@@ -118,9 +118,20 @@ Running the pipeline creates two more folders next to the brief:
 ```bash
 uv run videoai produce projects/my-review --config config.yaml
 open projects/my-review/output/draft.mp4
+uv run videoai edit projects/my-review --config config.yaml     # optional
 uv run videoai approve projects/my-review --config config.yaml
 uv run videoai produce projects/my-review --config config.yaml
 ```
+
+`videoai edit` is where you disagree with the edit. It serves a page holding the
+running order as a strip of shots — drag one to move it, untick one to take it
+out — and, under each shot, every cartoon accent drawn on the frame it will
+actually land on, to swap, drag, resize or turn. Saving writes
+`work/05e-overrides.json` and nothing else; the next run assembles the edit you
+arranged. Rearranging costs no model call and re-planning cannot undo it, which
+is the whole reason the creator's decisions live in their own artifact rather
+than being patched into the planner's. Approval binds to the timeline, so
+arrange first and approve last.
 
 `produce` is the normal creator command. On its first run it executes the
 provider-independent pipeline only through the review draft and tells you how
@@ -517,13 +528,15 @@ creator approves the exact current timeline:
 
 ```bash
 open projects/my-review/output/draft.mp4
+uv run videoai edit projects/my-review --config config.yaml
 uv run videoai approve projects/my-review --config config.yaml
 uv run videoai produce projects/my-review --config config.yaml
 ```
 
 Approval is stored in `work/06-approval.json` with hashes for the timeline,
 draft file, and effective config. Any change to one of them requires a fresh
-review.
+review — including an arrangement saved from the edit page, which is a change to
+the timeline by definition.
 
 Reads `01-manifest`, `05-timeline`, `05a-storyplan`, `05d-effects`, `06-draft`.
 An absent `05d-effects` (an older project) or `effects.enabled: false` means no

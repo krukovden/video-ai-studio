@@ -1,4 +1,15 @@
-"""s05 plan: the model picks and orders phrases; geometry and validation are ours."""
+"""s05 plan: the model picks and orders phrases; geometry and validation are ours.
+
+Two stages live here, and the seam between them is the point. `plan` is the model
+call: it proposes an edit and writes it as `05-proposal`. `assemble` is
+arithmetic: it lays the creator's `05e-overrides` over that proposal and writes
+`05-timeline`, the edit everything downstream renders, approves and delivers.
+
+Splitting them is what lets a creator reorder the video without paying for a
+single model call. While one artifact held both authorships, moving a shot meant
+rewriting the planner's own output, which the runner could only read as a stale
+reply to be re-planned over the top of.
+"""
 from __future__ import annotations
 
 from videoai.core.models import (
@@ -12,12 +23,14 @@ from videoai.core.models import (
     Timeline,
     Transcript,
 )
-from videoai.core.project import read_brief
+from videoai.core.project import brief_prompt, load_brief, resolve_media_path
 from videoai.core.registry import StageContext, stage
+from videoai.logic.decisions import OVERRIDES_ARTIFACT, read_overrides
 from videoai.logic.inserts import INSERT_PREFIX, insert_ref_clip_id, is_insert_ref, resolve_insert_ref
 from videoai.logic.action_cuts import avoid_mid_action_cuts
-from videoai.logic.timeline import build_timeline
-from videoai.logic.validate import validate_timeline
+from videoai.logic.motion import change_onset
+from videoai.logic.timeline import apply_clip_overrides, build_timeline
+from videoai.logic.validate import ref_violations, validate_timeline
 from videoai.providers.base import resolve_llm
 
 INSTRUCTIONS = """You are assembling a short YouTube video from a child's toy review.
@@ -67,6 +80,22 @@ Rules:
   the list below entirely. If a moment you would expect to see is missing, that
   is why: do not try to reconstruct it from neighbouring phrases or invent a
   replacement for it.
+
+What the footage contains:
+- Before the phrase list you are given a note on each source clip: a couple of
+  sentences on what the camera recorded, and the moments an editor would care
+  about with their times inside that clip. Somebody watched every clip in full to
+  write these, so they say what actually happens on screen — which the phrase
+  text cannot.
+- They are CONTEXT, not a menu. A phrase id begins with the id of the clip it was
+  spoken in, so a clip's note tells you what was going on in the shot a phrase
+  came from: whether the line about filling the toy was said over the filling or
+  ten minutes later, which take actually shows the pop, what the child is looking
+  at while they talk. Use it to choose between phrases that read alike and to put
+  them in an order that matches what happened.
+- You cannot select a moment out of these notes. The edit is built from phrase
+  ids and inserts and nothing else can be cut to, so a moment with no phrase and
+  no insert over it is a thing you know about, not a thing you can use.
 
 Silent visual inserts:
 - Some clips carry no narration at all. They are listed separately below, under
@@ -168,6 +197,46 @@ def _inserts_view(analysis: Analysis, sync: SyncMap, excluded: set[str]) -> str:
     return "\n".join(lines)
 
 
+def _footage_view(notes: ClipNotes, analysis: Analysis, excluded: set[str]) -> str:
+    """What the camera actually recorded in each clip that is still on offer.
+
+    This is what the describe stage was paid for, and until now the planner never
+    saw a word of it: it built "story order" by ordering transcript lines, while
+    the record of what happens on screen was read only by the cutter that nudges
+    a boundary. A creator works the other way round — understand each clip, then
+    build the story out of it — and this section is what makes that possible.
+
+    Restricted to clips that still have something selectable in them. A summary of
+    footage every phrase of which has been excluded is an invitation to ask for a
+    shot that cannot be cut to.
+
+    `ClipEvent.where` is deliberately left out. It says which ninth of the frame a
+    thing happened in, which decides where an accent is drawn and has no bearing
+    on which line follows which; the effects stage is where it earns its keep.
+    """
+    offered = {
+        segment.clip_id
+        for segment in analysis.segments
+        if segment.phrase_id not in excluded
+    } | {
+        insert.clip_id
+        for insert in analysis.inserts
+        if f"{INSERT_PREFIX}{insert.clip_id}" not in excluded
+    }
+
+    lines: list[str] = []
+    for note in notes.notes:
+        if note.clip_id not in offered or not (note.summary or note.events):
+            continue
+        lines.append(f"{note.clip_id} ({note.duration:.0f}s): {note.summary}".rstrip())
+        if note.events:
+            moments = "; ".join(
+                f"{event.at:.1f}s {event.what}" for event in note.events
+            )
+            lines.append(f"  moments: {moments}")
+    return "\n".join(lines)
+
+
 def _rejected_ids(ctx: StageContext) -> set[str]:
     """Ids the visual gate refused on a previous round, if it has ever run.
 
@@ -179,15 +248,41 @@ def _rejected_ids(ctx: StageContext) -> set[str]:
     return set(ctx.store.read("05c-rejected", RejectedPhrases).phrase_ids)
 
 
+def _measured_moment(ctx: StageContext, manifest: Manifest):
+    """A locator for `avoid_mid_action_cuts`: the described moment, measured.
+
+    A clip note's `at` is a second a model wrote while watching at roughly a frame
+    a second, and the cutter turns it into a segment duration. Left as written it
+    is a model deciding a timestamp — the same reported action coming back a
+    quarter of a second later on the next run would change the edit's hash and
+    re-render the whole delivery. Measured against the proxy it is stable.
+
+    Errors are not caught. A described clip whose media cannot be found is a
+    broken project, and `resolve_media_path` already says where it looked.
+    """
+    def locate(clip_id: str, at: float) -> float | None:
+        info = manifest.by_id(clip_id)
+        return change_onset(
+            resolve_media_path(ctx.project_dir, info.proxy_path or info.path), at
+        )
+
+    return locate
+
+
 @stage(
     id="plan",
-    produces="05-timeline",
+    # The planner's PROPOSAL, not the edit. `assemble` below turns one into the
+    # other; keeping them apart is what stops a creator's reorder invalidating a
+    # model call that would answer exactly the same thing again.
+    produces="05-proposal",
     # "05c-rejected" is written by the downstream visual gate and is deliberately
     # not any stage's declared output: listing it here feeds its content into this
     # stage's fingerprint — so a fresh rejection re-plans — without making the
     # dependency graph circular.
-    # "04c-clip-notes" is the description of what each clip contains: listed so a
-    # re-description re-plans, because where the cuts fall depends on it.
+    # "04c-clip-notes" is what a model watching every clip saw in it. It is in the
+    # prompt — the story is built out of phrases, but which phrase belongs where
+    # depends on what the shot it came from was doing — and it is what the cutter
+    # dodges an action with. A re-description therefore re-plans.
     requires=(
         "01-manifest", "01b-sync", "03-transcript", "04-analysis", "04c-clip-notes",
         "05c-rejected",
@@ -209,16 +304,28 @@ def plan(ctx: StageContext) -> Timeline:
     transcript = ctx.store.read("03-transcript", Transcript)
     analysis = ctx.store.read("04-analysis", Analysis)
 
-    brief = read_brief(ctx.project_dir)
+    brief = brief_prompt(load_brief(ctx.project_dir))
+    notes = (
+        ctx.store.read("04c-clip-notes", ClipNotes)
+        if ctx.store.exists("04c-clip-notes")
+        else ClipNotes()
+    )
     # A visually rejected id is withheld exactly like an excluded one: hidden from
     # the prompt, and refused if it comes back anyway.
     excluded = set(ctx.config.plan.exclude_phrases) | _rejected_ids(ctx)
 
+    footage_view = _footage_view(notes, analysis, excluded)
     inserts_view = _inserts_view(analysis, sync_map, excluded)
     provider = resolve_llm(ctx.config.llm_for("plan"), ctx.config.analyze.llm_model)
     prompt = "\n\n".join([
         INSTRUCTIONS,
         f"Creator brief:\n{brief}" if brief.strip() else "",
+        (
+            "What the footage contains, one entry per source clip (a phrase id "
+            f"starts with the id of the clip it was said in):\n{footage_view}"
+            if footage_view
+            else ""
+        ),
         f"Phrases:\n{_segments_view(analysis, excluded)}",
         (
             "Silent visual inserts (no narration on them at all - just what the "
@@ -289,12 +396,52 @@ def plan(ctx: StageContext) -> Timeline:
     # footage has been described, move any cut that lands inside an action that
     # has only just begun — the shot ending while a hand is halfway into a glove
     # is the edit losing interest exactly where the viewer did not.
-    if ctx.store.exists("04c-clip-notes"):
+    if notes.notes:
         timeline = avoid_mid_action_cuts(
-            timeline, ctx.store.read("04c-clip-notes", ClipNotes), transcript
+            timeline, notes, transcript, _measured_moment(ctx, manifest)
         )
 
     violations = validate_timeline(timeline, manifest, transcript)
     if violations:
         raise ValueError("timeline validation failed:\n" + "\n".join(violations))
+    return timeline
+
+
+@stage(
+    id="assemble",
+    produces="05-timeline",
+    # No provider and no prompt: this stage decides nothing editorial. It reads a
+    # proposal and a list of the creator's decisions and does arithmetic, which is
+    # why a change to either can invalidate the delivery without re-running a
+    # model. "05e-overrides" is a creator artifact — nothing produces it, and its
+    # absence means the plan stands as proposed.
+    requires=("05-proposal", OVERRIDES_ARTIFACT),
+    model=Timeline,
+)
+def assemble(ctx: StageContext) -> Timeline:
+    proposal = ctx.store.read("05-proposal", Timeline)
+    overrides = read_overrides(ctx.store)
+    timeline, notes = apply_clip_overrides(proposal, overrides)
+    for note in notes:
+        print(f"  note: {note}")
+    if len(timeline.clips) != len(proposal.clips):
+        print(
+            f"  the creator's edit is {len(timeline.clips)} of the "
+            f"{len(proposal.clips)} shots the planner proposed"
+        )
+    if proposal.clips and not timeline.clips:
+        raise ValueError(
+            "the creator's overrides switch off every shot in the plan; there is no "
+            "edit left to render"
+        )
+
+    # Only the rules this stage can break. Whether a cut lands inside a word is
+    # settled against the transcript by `plan`, and no reordering can change it —
+    # but `05e-overrides` is hand-editable, and an order naming one ref twice
+    # would put the same shot in the edit twice under one name.
+    violations = ref_violations(timeline)
+    if violations:
+        raise ValueError(
+            "the assembled edit failed validation:\n" + "\n".join(violations)
+        )
     return timeline

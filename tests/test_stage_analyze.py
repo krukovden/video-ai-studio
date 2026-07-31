@@ -708,3 +708,90 @@ def test_prompt_instructs_model_to_reject_operator_instructions():
     assert "camera" in lowered or "filming" in lowered
     assert "garbled" in lowered or "mangled" in lowered or "mangles" in lowered
     assert "delete" in lowered
+
+
+# --- A transient error must not cost every insert its description in silence ---
+
+
+class _FailingDescriber:
+    """A provider that scores phrases normally and fails the description call."""
+
+    name = "flaky"
+    reads_video = False
+
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.description_calls = 0
+
+    def complete_json(self, prompt, images, timeout, videos=None) -> dict:
+        if "silent visual insert clips" not in prompt:
+            return {"segments": _segments_payload_for_clip_01()}
+        self.description_calls += 1
+        if self.description_calls <= self.failures:
+            raise RuntimeError("claude CLI failed: rate limited")
+        return {"descriptions": {"clip-10": "Squeezing the toy until it pops."}}
+
+
+def _with_provider(ctx: StageContext, monkeypatch, provider: object) -> None:
+    import videoai.stages.s04_analyze as s04
+
+    monkeypatch.setattr(s04, "resolve_llm", lambda *args, **kwargs: provider)
+
+
+def test_a_transient_description_failure_is_retried_once(
+    tmp_path: Path, monkeypatch, make_clip
+):
+    clip_path = make_clip("insert.mp4", seconds=6.0)
+    ctx = _context(tmp_path, monkeypatch, {})
+    _seed_with_a_describable_insert(ctx, clip_path, duration=6.0)
+    provider = _FailingDescriber(failures=1)
+    _with_provider(ctx, monkeypatch, provider)
+
+    result = analyze(ctx)
+
+    assert provider.description_calls == 2
+    insert = next(i for i in result.inserts if i.clip_id == "clip-10")
+    assert insert.description == "Squeezing the toy until it pops."
+
+
+def test_a_description_call_that_keeps_failing_fails_the_stage(
+    tmp_path: Path, monkeypatch, make_clip
+):
+    """Swallowing it left every silent clip placed by chronology alone, with
+    nothing in the artifact recording that the descriptions went missing."""
+    clip_path = make_clip("insert.mp4", seconds=6.0)
+    ctx = _context(tmp_path, monkeypatch, {})
+    _seed_with_a_describable_insert(ctx, clip_path, duration=6.0)
+    provider = _FailingDescriber(failures=2)
+    _with_provider(ctx, monkeypatch, provider)
+
+    with pytest.raises(RuntimeError, match="could not describe the silent insert clips"):
+        analyze(ctx)
+
+    assert provider.description_calls == 2
+
+
+def test_a_reply_without_a_descriptions_object_is_asked_again(
+    tmp_path: Path, monkeypatch, make_clip
+):
+    """A model answering under the wrong key gets a second chance, and if it
+    answers the same way twice the inserts keep an empty description: that is
+    the model having answered, and the artifact records what it did not say."""
+    clip_path = make_clip("insert.mp4", seconds=6.0)
+    ctx = _context(tmp_path, monkeypatch, {})
+    _seed_with_a_describable_insert(ctx, clip_path, duration=6.0)
+
+    class _WrongShape(_FailingDescriber):
+        def complete_json(self, prompt, images, timeout, videos=None) -> dict:
+            if "silent visual insert clips" not in prompt:
+                return {"segments": _segments_payload_for_clip_01()}
+            self.description_calls += 1
+            return {"clip-10": "not under the key that was asked for"}
+
+    provider = _WrongShape(failures=0)
+    _with_provider(ctx, monkeypatch, provider)
+
+    result = analyze(ctx)
+
+    assert provider.description_calls == 2
+    assert next(i for i in result.inserts if i.clip_id == "clip-10").description == ""

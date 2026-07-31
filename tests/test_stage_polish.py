@@ -164,13 +164,19 @@ def _seed(
                  height=240, fps=30.0, has_audio=True,
                  proxy_path=str(proxy or source)),
     ]), fingerprint="fp")
-    ctx.store.write("05-timeline", Timeline(fps=30.0, width=320, height=240, clips=[
+    timeline = Timeline(fps=30.0, width=320, height=240, clips=[
         TimelineClip(
+            ref=f"clip-01#{index:03d}",
             src="clip-01", offset=clip_seconds * index, dur=clip_seconds,
             start=clip_seconds * index, beat=beat,
         )
         for index, beat in enumerate(beats)
-    ]), fingerprint="fp")
+    ])
+    # The proposal and the edit are the same until a creator says otherwise, but
+    # they are separate artifacts: a test that seeded only one would not notice a
+    # stage reading the wrong one.
+    ctx.store.write("05-proposal", timeline, fingerprint="fp")
+    ctx.store.write("05-timeline", timeline, fingerprint="fp")
     ctx.store.write("05a-storyplan", StoryPlan(title=title), fingerprint="fp")
     words = [
         Word(
@@ -855,6 +861,84 @@ def test_a_failure_after_the_srt_write_leaves_no_delivery_output(project, monkey
     assert not (ctx.output_dir / "final.srt").exists()
     assert not (ctx.output_dir / "final.mp4").exists()
     assert not (ctx.output_dir / "production-report.json").exists()
+
+
+# --- the creator's running order --------------------------------------------
+
+
+def _reorder(ctx: StageContext, refs: list[str], off: list[str] = ()) -> None:
+    """Put `refs` in that order through the creator's own artifact and reassemble.
+
+    The whole path, not a hand-written timeline: `assemble` is what turns the
+    planner's proposal into the edit, and the point of the test is that polish
+    delivers what assemble produced.
+    """
+    from videoai.core.models import ClipOverride, Overrides
+    from videoai.logic.decisions import OVERRIDES_ARTIFACT
+    from videoai.stages.s05_plan import assemble
+
+    ctx.store.write(
+        OVERRIDES_ARTIFACT,
+        Overrides(clips=[
+            *(ClipOverride(ref=ref) for ref in refs),
+            *(ClipOverride(ref=ref, enabled=False) for ref in off),
+        ]),
+        fingerprint="creator",
+    )
+    ctx.store.write("05-timeline", assemble(ctx), fingerprint="fp")
+
+
+def test_a_reordered_edit_is_delivered_in_the_creator_s_order(project, tmp_path: Path):
+    """Section titles, transitions, captions and the closing beat are all derived
+    from clip order, so all of them have to be recomputed rather than carried."""
+    ctx, _ = project(["Hook", "Filling", CLOSING_BEAT])
+    _reorder(ctx, ["clip-01#001", "clip-01#000", "clip-01#002"])
+    _render(ctx)
+
+    result = polish(ctx)
+
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    beats = [clip.beat for clip in ctx.store.read("05-timeline", Timeline).clips]
+    assert beats == ["Filling", "Hook", CLOSING_BEAT]
+    # One title per beat change, and the first clip never gets one.
+    assert report["features"]["section_titles"] == len(beats) - 1
+    assert report["features"]["closing_beat"] is True
+    assert report["features"]["transitions"] > 0
+
+
+def test_disabling_the_sign_off_is_caught_by_the_contract(project):
+    """A reorder may legitimately change everything derived from clip order —
+    including whether the video still ends. Switching the last shot off must not
+    quietly deliver a video with no closing beat."""
+    ctx, _ = project(["Hook", "Filling", CLOSING_BEAT])
+    _reorder(ctx, ["clip-01#000", "clip-01#001"], off=["clip-01#002"])
+
+    with pytest.raises(RuntimeError, match="closing story beat"):
+        polish(ctx)
+
+
+def test_an_accent_is_delivered_over_the_shot_it_was_planned_for(project, tmp_path: Path):
+    """The middle shot moves to the front; its accent goes with it. Matching on
+    absolute time would have left the badge over whatever slid underneath."""
+    from videoai.core.models import EffectEvent, EffectPlan
+
+    ctx, _ = project(["Hook", "Filling", CLOSING_BEAT])
+    ctx.store.write("05d-effects", EffectPlan(library="", events=[
+        EffectEvent(clip_ref="clip-01#001", at_in_clip=1.0, at_seconds=4.0,
+                    effect_name="comic_starburst", screen_position="center",
+                    scale="small", seconds=0.8, reason="the syringe goes in"),
+    ]), fingerprint="fp")
+    _reorder(ctx, ["clip-01#001", "clip-01#000", "clip-01#002"])
+    _render(ctx)
+
+    result = polish(ctx)
+
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    assert report["effects"]["applied"] == 1
+    # The shot now opens the video, so the accent is a second into the edit
+    # rather than four.
+    assert report["effects"]["events"][0]["at_seconds"] == pytest.approx(1.0, abs=0.05)
+    assert result.effects[0].startswith("comic_starburst at ")
 
 
 # --- degradation is never called final --------------------------------------
