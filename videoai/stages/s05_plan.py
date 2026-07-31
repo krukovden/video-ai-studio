@@ -291,7 +291,7 @@ def plan(ctx: StageContext) -> Timeline:
     # is the edit losing interest exactly where the viewer did not.
     if ctx.store.exists("04c-clip-notes"):
         timeline = avoid_mid_action_cuts(
-            timeline, ctx.store.read("04c-clip-notes", ClipNotes)
+            timeline, ctx.store.read("04c-clip-notes", ClipNotes), transcript
         )
 
     violations = validate_timeline(timeline, manifest, transcript)

@@ -88,3 +88,44 @@ def test_every_segment_keeps_its_place_in_the_running_order():
     fixed = avoid_mid_action_cuts(timeline, _notes((36.0, "a squeeze")))
     assert fixed.clips[1].start == fixed.clips[0].dur
     assert fixed.clips[0].start == 0.0
+
+
+def _transcript(*words: tuple[float, float, str]):
+    from videoai.core.models import ClipTranscript, Transcript, Word
+
+    return Transcript(provider="t", clips=[ClipTranscript(
+        clip_id="clip-01",
+        words=[Word(text=text, start=start, end=end) for start, end, text in words],
+    )])
+
+
+def test_a_moved_cut_never_lands_inside_a_spoken_word():
+    """The edit already forbids cutting mid-word. Dodging an action must not
+    walk straight into that: both rules are real."""
+    timeline = _timeline((30.0, 7.3))                     # ends at 37.3
+    speech = _transcript((36.9, 38.2, "and"), (38.6, 39.0, "then"))
+    fixed = avoid_mid_action_cuts(
+        timeline, _notes((36.0, "a squeeze")), transcript=speech
+    )
+    end = fixed.clips[0].offset + fixed.clips[0].dur
+    assert not (36.9 < end < 38.2), f"cut landed inside 'and' at {end}"
+
+
+def test_it_still_dodges_the_action_when_speech_allows():
+    timeline = _timeline((30.0, 7.3))
+    speech = _transcript((20.0, 21.0, "earlier"))          # nothing near the cut
+    fixed = avoid_mid_action_cuts(
+        timeline, _notes((36.0, "a squeeze")), transcript=speech
+    )
+    end = fixed.clips[0].offset + fixed.clips[0].dur
+    assert end <= 36.0 or end >= 37.5
+
+
+def test_with_no_safe_landing_the_cut_is_left_where_it_was():
+    """Better an imperfect cut than an invalid one."""
+    timeline = _timeline((30.0, 7.3))
+    speech = _transcript((34.0, 39.5, "unbroken"))         # speech covers every option
+    fixed = avoid_mid_action_cuts(
+        timeline, _notes((36.0, "a squeeze")), transcript=speech
+    )
+    assert fixed.clips[0].dur == 7.3

@@ -23,6 +23,10 @@ from pathlib import Path
 from videoai.core.models import EffectPlan
 from videoai.core.store import ArtifactStore
 
+# How far a moment may drift and still be the same one. The plan is re-read from
+# the same timeline, so an accent lands within a few frames of where it was.
+SAME_MOMENT_SECONDS = 1.0
+
 
 @dataclass(frozen=True)
 class ApplyResult:
@@ -32,16 +36,31 @@ class ApplyResult:
     dropped: int
     moved: int
     swapped: int
+    # Decisions whose moment is no longer in the plan. Reported rather than
+    # quietly dropped onto whatever happened to be nearby.
+    unmatched: int = 0
 
     def summary(self) -> str:
-        return (
+        text = (
             f"{self.kept} kept, {self.dropped} dropped, "
             f"{self.moved} moved, {self.swapped} swapped"
         )
+        if self.unmatched:
+            text += f", {self.unmatched} with no matching moment"
+        return text
 
 
-def apply_decisions(store: ArtifactStore, document: dict) -> ApplyResult:
+def apply_decisions(
+    store: ArtifactStore, document: dict, stage_fingerprint: str | None = None
+) -> ApplyResult:
     """Write the creator's choices into the effect plan.
+
+    `stage_fingerprint` is what stops the work being undone. An artifact stored
+    under a made-up fingerprint looks stale to the runner, which re-plans the
+    stage and discards the very decisions just applied — twice this destroyed a
+    creator's placements minutes after they made them. Storing the fingerprint
+    the stage would itself have written says, truthfully, that this plan is
+    current and needs no redoing.
 
     A dropped accent is marked rather than deleted. A decision that vanishes is
     one the next re-plan will cheerfully make again, and the record of what was
@@ -52,15 +71,44 @@ def apply_decisions(store: ArtifactStore, document: dict) -> ApplyResult:
     reset the other six.
     """
     plan = store.read("05d-effects", EffectPlan)
-    by_index = {
-        int(item["index"]): item
-        for item in document.get("events", [])
-        if isinstance(item, dict) and "index" in item
-    }
+    choices = [item for item in document.get("events", []) if isinstance(item, dict)]
+
+    # Matched by MOMENT, not by position. Indices are only meaningful against the
+    # exact plan the page was drawn from, and a plan that has been re-made since
+    # slides every decision one place along: a badge picked for "he spots the
+    # syringe" lands on the box opening, every name still matches, and nothing
+    # looks wrong. Timed decisions are matched on the second they were made
+    # about; older files without times fall back to the index they carry.
+    spent: set[int] = set()
+
+    def pick(index: int, event) -> dict | None:
+        best, best_distance = None, SAME_MOMENT_SECONDS
+        for position, choice in enumerate(choices):
+            if position in spent or "at" not in choice:
+                continue
+            # A swap reports the new name, so match on where it came from.
+            origin = str(choice.get("from_name") or choice.get("effect_name") or "")
+            if origin and origin != event.effect_name:
+                continue
+            distance = abs(float(choice["at"]) - event.at_seconds)
+            if distance <= best_distance:
+                best, best_distance = position, distance
+        if best is not None:
+            spent.add(best)
+            return choices[best]
+        untimed = [
+            position for position, choice in enumerate(choices)
+            if position not in spent and "at" not in choice
+            and int(choice.get("index", -1)) == index
+        ]
+        if untimed:
+            spent.add(untimed[0])
+            return choices[untimed[0]]
+        return None
 
     updated, dropped, moved, swapped = [], 0, 0, 0
     for index, event in enumerate(plan.events):
-        choice = by_index.get(index)
+        choice = pick(index, event)
         if choice is None:
             updated.append(event)
             continue
@@ -80,13 +128,14 @@ def apply_decisions(store: ArtifactStore, document: dict) -> ApplyResult:
     store.write(
         "05d-effects",
         plan.model_copy(update={"events": updated}),
-        fingerprint="creator-approved",
+        fingerprint=stage_fingerprint or "creator-approved",
     )
     return ApplyResult(
         kept=sum(1 for event in updated if event.keep),
         dropped=dropped,
         moved=moved,
         swapped=swapped,
+        unmatched=len(choices) - len(spent),
     )
 
 

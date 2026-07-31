@@ -425,6 +425,10 @@ function decisions() {
     version: 1,
     events: state.map(s => ({
       index: s.index,
+      // The moment this decision is about. Indices only mean anything against
+      // the exact plan this page was drawn from; the time survives a re-plan.
+      at: s.at,
+      from_name: s.name0,
       keep: s.keep,
       effect_name: s.name,
       // The sprite's CENTRE, which is what a person aims at when dragging.

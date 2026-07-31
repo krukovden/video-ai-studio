@@ -32,6 +32,10 @@ class ApprovalSession:
 
     project_dir: Path
     page_html: str
+    # The fingerprint the effects stage would write for this project as it
+    # stands. Stored with the decisions so the runner sees a current plan rather
+    # than a stale one it should re-plan over the top of.
+    stage_fingerprint: str = ""
     token: str = field(default_factory=lambda: secrets.token_urlsafe(16))
     saves: list[ApplyResult] = field(default_factory=list)
     on_save: object = None
@@ -43,7 +47,7 @@ class ApprovalSession:
     def record(self, document: dict) -> ApplyResult:
         store = ArtifactStore(self.work_dir)
         save_decisions_copy(self.work_dir, document)
-        result = apply_decisions(store, document)
+        result = apply_decisions(store, document, self.stage_fingerprint or None)
         self.saves.append(result)
         if callable(self.on_save):
             self.on_save(result)

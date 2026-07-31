@@ -463,12 +463,34 @@ def preview_effects(
     typer.echo("Edits there stay in the browser — use 'videoai approve-effects' to save them.")
 
 
+def _effects_fingerprint(project: Path, config_path: Path) -> str:
+    """The fingerprint the effects stage would store for this project right now.
+
+    Written alongside applied decisions so the runner treats the creator's plan
+    as current. Without it the stage looks stale, re-plans, and throws the
+    decisions away — which is exactly what happened, twice.
+    """
+    from videoai.core.registry import REGISTRY
+    from videoai.core.runner import _fingerprint
+
+    work_dir = project / "work"
+    ctx = StageContext(
+        project_dir=project, input_dir=project, work_dir=work_dir,
+        output_dir=project / "output", config=load_config(config_path),
+        store=ArtifactStore(work_dir),
+    )
+    return _fingerprint(
+        REGISTRY["effects"], ctx, _media_fingerprint(project), _brief_fingerprint(project)
+    )
+
+
 @app.command("apply-effects")
 def apply_effects(
     project: Path = typer.Argument(..., help="Project to apply the decisions to"),
     decisions: Path = typer.Option(
         ..., "--decisions", help="effects-decisions.json downloaded from the preview page"
     ),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Config file"),
 ) -> None:
     """Write the creator's decisions from the approval page into the effect plan.
 
@@ -483,7 +505,11 @@ def apply_effects(
     store = ArtifactStore(project / "work")
     if not store.exists("05d-effects"):
         raise typer.BadParameter("this project has no effect plan to apply decisions to")
-    result = apply_decisions(store, _json.loads(decisions.read_text(encoding="utf-8")))
+    result = apply_decisions(
+        store,
+        _json.loads(decisions.read_text(encoding="utf-8")),
+        _effects_fingerprint(project, config_path),
+    )
     typer.echo("Applied: " + result.summary() + ".")
     typer.echo("Re-run the delivery to render them: videoai produce " + str(project))
 
@@ -508,7 +534,10 @@ def approve_effects(
     if page is None:
         return
 
-    session = ApprovalSession(project_dir=project, page_html="")
+    session = ApprovalSession(
+        project_dir=project, page_html="",
+        stage_fingerprint=_effects_fingerprint(project, config_path),
+    )
     session.page_html = _build_preview(
         project, config_path, save_url="/save", token=session.token
     )

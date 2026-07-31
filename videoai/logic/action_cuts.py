@@ -16,7 +16,7 @@ whatever came before, which is a different kind of wrong.
 """
 from __future__ import annotations
 
-from videoai.core.models import ClipNotes, Timeline, TimelineClip
+from videoai.core.models import ClipNotes, Timeline, TimelineClip, Transcript
 
 # How soon after an action starts a cut still counts as interrupting it. Beyond
 # this the action has had time to read and ending is a choice rather than an
@@ -49,7 +49,22 @@ def _source_duration(notes: ClipNotes, clip_id: str) -> float | None:
     return None
 
 
-def _mend(clip: TimelineClip, starts: list[float], limit: float | None) -> float:
+def _inside_a_word(at: float, words: list[tuple[float, float]]) -> bool:
+    """Whether a cut here would land mid-syllable.
+
+    The edit already forbids this and validates it, so dodging an action must
+    not walk straight into it: both rules are real, and a plan that trades one
+    for the other is refused before it renders.
+    """
+    return any(start + 1e-3 < at < end - 1e-3 for start, end in words)
+
+
+def _mend(
+    clip: TimelineClip,
+    starts: list[float],
+    limit: float | None,
+    words: list[tuple[float, float]],
+) -> float:
     """The out point for this segment: unchanged, or moved clear of an action.
 
     Returns the new duration.
@@ -75,8 +90,10 @@ def _mend(clip: TimelineClip, starts: list[float], limit: float | None) -> float
     if limit is not None:
         after = min(after, limit - clip.offset)
 
-    can_shorten = before >= MIN_SEGMENT_SECONDS
-    can_lengthen = after > clip.dur
+    can_shorten = before >= MIN_SEGMENT_SECONDS and not _inside_a_word(
+        clip.offset + before, words
+    )
+    can_lengthen = after > clip.dur and not _inside_a_word(clip.offset + after, words)
 
     if can_shorten and can_lengthen:
         # Whichever disturbs the approved edit less.
@@ -85,23 +102,39 @@ def _mend(clip: TimelineClip, starts: list[float], limit: float | None) -> float
         return before
     if can_lengthen:
         return after
-    # Neither is available: a very short segment at the very end of its source.
-    # Cutting through the action is the least-bad answer, and saying nothing
-    # about it would be worse than leaving it.
+    # Neither landing is available — the segment is too short to trim, it is at
+    # the end of its source, or speech covers every alternative. Cutting through
+    # the action is then the least-bad answer: an imperfect cut beats one the
+    # edit would refuse.
     return clip.dur
 
 
-def avoid_mid_action_cuts(timeline: Timeline, notes: ClipNotes) -> Timeline:
-    """The same edit, with no cut landing inside an action that just began."""
+def avoid_mid_action_cuts(
+    timeline: Timeline, notes: ClipNotes, transcript: Transcript | None = None
+) -> Timeline:
+    """The same edit, with no cut landing inside an action that just began.
+
+    `transcript` is what keeps this honest: a boundary moved off an action must
+    still fall in silence, because cutting mid-word is a rule the edit already
+    has and already checks.
+    """
     if not notes.notes or not timeline.clips:
         return timeline
+
+    spoken: dict[str, list[tuple[float, float]]] = {}
+    for clip_transcript in (transcript.clips if transcript else []):
+        spoken[clip_transcript.clip_id] = [
+            (word.start, word.end) for word in clip_transcript.words
+        ]
 
     mended: list[TimelineClip] = []
     start = 0.0
     for clip in timeline.clips:
         starts = _events_for(notes, clip.src)
         duration = (
-            _mend(clip, starts, _source_duration(notes, clip.src)) if starts else clip.dur
+            _mend(clip, starts, _source_duration(notes, clip.src), spoken.get(clip.src, []))
+            if starts
+            else clip.dur
         )
         duration = max(MIN_SEGMENT_SECONDS, round(duration, 3))
         mended.append(clip.model_copy(update={"dur": duration, "start": round(start, 3)}))
