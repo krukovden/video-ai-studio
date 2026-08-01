@@ -98,6 +98,38 @@ feature nobody can review.
 - Editing `production-contract.yaml` re-runs delivery: the resolved file's content
   is hashed into the polish stage's fingerprint.
 
+## Project memory
+
+This repository holds code and these rules. It does not hold the record of
+what has been built, why, or what was removed. That record is one page:
+
+  https://linear.app/krukov-idea-hub/document/00-hub-read-this-before-any-work-ff6da6b66b8b
+
+It is the hub: a registry of every feature with its code path and its issue,
+a table of every removed feature with the reason and its replacement, and
+links to the architecture, contract, caching and history documents. Reach it
+through the Linear MCP server, or open the URL.
+
+**Before implementing any feature, read that page and search it for the
+capability.** If it is there, open the linked issue and start from that work
+instead of from zero — the feature may already exist, or may have been built
+once and removed for a reason that still holds. If it is not there, nothing
+exists and you are starting from scratch.
+
+**After implementing any feature, register it on that page**: one line with
+its name, what it does, its code path and its issue. An unregistered feature
+is invisible to the next session on the next machine, and it will be rebuilt.
+
+**When removing a feature, record why it was removed and what replaced it** —
+in the hub's removed table, and in full in `08 · Tried & Rejected`. A removal
+without a reason is an invitation to reintroduce it.
+
+Check the remote before trusting a local checkout. A stale clone makes the
+hub disagree with the code for reasons that have nothing to do with either.
+
+File the issue before the code, and when the work lands, record what actually
+happened, including approaches attempted and abandoned along the way.
+
 ## Standard creator workflow
 
 ```bash
