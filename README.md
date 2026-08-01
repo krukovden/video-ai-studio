@@ -115,12 +115,45 @@ Running the pipeline creates two more folders next to the brief:
 
 ## Running it
 
-```bash
-uv run videoai produce projects/my-review --config config.yaml
-open projects/my-review/output/draft.mp4
-uv run videoai edit projects/my-review --config config.yaml     # optional
-uv run videoai approve projects/my-review --config config.yaml
-uv run videoai produce projects/my-review --config config.yaml
+### Scenario 1: Human Developer First Time Setup & Start
+
+1. **Verify environment & dependencies (1-step setup):**
+   ```bash
+   uv run videoai doctor --fix
+   ```
+   *Auto-checks macOS Apple Silicon, Python 3.13, `ffmpeg`, `uv`, `cairo`, and auto-creates `.env` file.*
+   *If system tools are missing, install them via Homebrew:*
+   ```bash
+   brew install ffmpeg uv cairo
+   ```
+
+2. **Start production on a project folder:**
+   ```bash
+   uv run videoai produce projects/my-review
+   ```
+   *If the project folder or video files are missing, `videoai produce` automatically creates `projects/my-review/video/` and `description/brief.md` and guides you on where to place raw `.MOV`/`.mp4` clips.*
+
+3. **Interactive storyboard review & final render:**
+   ```bash
+   open projects/my-review/output/draft.mp4
+   uv run videoai edit projects/my-review                      # Adjust running order & cartoon badges
+   uv run videoai approve projects/my-review                   # Approve timeline
+   uv run videoai produce projects/my-review                   # Render contract-validated final.mp4
+   ```
+
+---
+
+### Scenario 2: Starting with an AI Agent / LLM
+
+When using an AI Coding Agent (Copilot CLI, Claude Code, Cursor, Codex, etc.), hand it this prompt:
+
+```text
+You are working in VideoAI Studio repository. Please follow these steps:
+1. Run `videoai doctor --fix` to validate system dependencies (ffmpeg, uv, cairo) and auto-prepare .env file.
+2. Check if the project folder exists and has raw video clips in <project>/video/ (or <project>/).
+3. Ensure <project>/description/brief.md exists or create it.
+4. Run `videoai produce <project>` to build the review draft.
+5. Provide the user with the link to open output/draft.mp4 or launch `videoai edit <project>` for interactive storyboard approval.
 ```
 
 `videoai edit` is where you disagree with the edit. It serves a page holding the

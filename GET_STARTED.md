@@ -4,57 +4,71 @@ Welcome to **VideoAI Studio** — an automated end-to-end pipeline for turning r
 
 ---
 
-## ⚡ Quick Start Checklist (For Users & AI Agents)
+## 🛠️ Scenario 1: First-Time Setup & Production (Human Developer)
 
-When downloading or setting up this project for the first time, follow these steps or instruct your Coding Agent / Copilot CLI to run them:
-
-### Step 1: Install System Tools (Homebrew)
-
+### Step 1: Clone Repository & Install System Dependencies
 ```bash
+git clone https://github.com/krukovden/video-ai-studio.git
+cd video-ai-studio
+
+# Install system dependencies via Homebrew
 brew install ffmpeg uv cairo
 ```
 
-### Step 2: Set Up Python Virtual Environment
-
+### Step 2: Validate Environment & Auto-Prepare `.env` File
+Run the built-in system doctor:
 ```bash
-# Create Python 3.13 virtual environment
-uv venv --python 3.13
-
-# Activate virtual environment
-source .venv/bin/activate
-
-# Sync all dependencies
-uv sync
+uv run videoai doctor --fix
 ```
 
----
-
-## 🩺 Automated Environment Health Check
-
-To verify that your machine is configured correctly, run the built-in system doctor:
-
-```bash
-videoai doctor --fix
-```
-
-The doctor command validates:
-- [x] **Operating System:** macOS Apple Silicon (arm64) for GPU-accelerated local ASR (`parakeet-mlx`).
-- [x] **Python Version:** Python >= 3.13.
+The doctor command automatically checks:
+- [x] **Operating System:** macOS Apple Silicon (`arm64`) for GPU-accelerated local ASR (`parakeet-mlx`).
+- [x] **Python Version:** Python >= 3.13 (`uv` handles Python installation).
 - [x] **CLI Tools:** `ffmpeg`, `uv`, `git`, and optional LLM CLIs (`claude`, `codex`).
 - [x] **Rasterization Library:** `cairosvg` / `cairo`.
 - [x] **Environment File:** Auto-creates `.env` from `.env.example` if missing.
+
+### Step 3: Run Your First Video Production
+```bash
+uv run videoai produce projects/my-review
+```
+*If `projects/my-review` is empty or missing, `videoai produce` will automatically create `projects/my-review/video/` and `description/brief.md` and give clear guidance on where to copy your raw video clips (`.MOV`, `.mp4`).*
+
+### Step 4: Interactive Storyboard & Final Delivery
+```bash
+# 1. Review draft video
+open projects/my-review/output/draft.mp4
+
+# 2. Open interactive web editor to adjust running order, disable shots, drag/scale/rotate badges
+uv run videoai edit projects/my-review
+
+# 3. Approve timeline and render final video
+uv run videoai approve projects/my-review
+uv run videoai produce projects/my-review
+```
+
+Your contract-validated final video is ready at `projects/my-review/output/final.mp4`!
+
+---
+
+## 🤖 Scenario 2: Starting with an AI Agent / LLM (Copilot CLI, Claude, Cursor, Codex)
+
+When starting a session with an AI Coding Agent, provide this prompt:
+
+```text
+You are working in VideoAI Studio repository. Please follow these onboarding steps:
+1. Run `videoai doctor --fix` to validate system dependencies (ffmpeg, uv, cairo) and auto-prepare .env file.
+2. Check if the project folder exists and has raw video clips in <project>/video/ (or <project>/).
+3. Ensure <project>/description/brief.md exists or create it.
+4. Run `videoai produce <project>` to build the review draft.
+5. Provide the user with the link to open output/draft.mp4 or launch `videoai edit <project>` for interactive storyboard approval.
+```
 
 ---
 
 ## 🔑 Setting Up Secrets & `.env` File
 
-Running `videoai doctor --fix` automatically generates a `.env` file from `.env.example`:
-
-```bash
-cp .env.example .env
-```
-
-### `.env` File Template:
+Running `videoai doctor --fix` automatically generates `.env` from `.env.example`:
 
 ```env
 # Optional: OpenAI API Key (if using direct OpenAI API)
@@ -71,38 +85,12 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 ---
 
-## 🎬 Running Your First Video Production
+## 💡 Troubleshooting & Guidance
 
-### 1. Generate Review Draft
+| Issue | Cause | Solution |
+| :--- | :--- | :--- |
+| `Missing system tool: ffmpeg` | `ffmpeg` is not installed | Run `brew install ffmpeg` |
+| `No video files found in project` | Raw `.MOV`/`.mp4` clips are missing | Place raw videos inside `<project>/video/` or `<project>/` |
+| `cairosvg missing` | Homebrew `cairo` library missing | Run `brew install cairo && uv sync` |
+| `Python < 3.13` | Environment Python version too old | Run `uv venv --python 3.13 && uv sync` |
 
-```bash
-videoai produce <path/to/project_folder> --config config.yaml
-```
-
-### 2. Interactive Storyboard & Badge Editing
-
-To review video shots, toggle clips on/off, drag badges, scale/rotate badges, or swap cartoon sprites:
-
-```bash
-videoai edit <path/to/project_folder> --config config.yaml
-```
-
-Click **Save** on the interactive web page. Your storyboard decisions will be saved directly to `description/Animation Details/animation_details.json`.
-
-### 3. Render Final Contract-Validated Video
-
-```bash
-videoai produce <path/to/project_folder> --config config.yaml
-```
-
-The completed delivery video will be saved at `<path/to/project_folder>/output/final.mp4`.
-
----
-
-## 🧪 Verification & Testing
-
-Verify that all unit tests pass on your machine:
-
-```bash
-pytest
-```
