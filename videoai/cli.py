@@ -109,6 +109,58 @@ def _brief_fingerprint(project_dir: Path) -> str:
     return hash_parts(*parts)
 
 
+def _validate_and_prepare_project(project: Path) -> tuple[Path, dict[str, list[Path]]]:
+    """Validate system tools, project folder structure, video clips, and description files.
+
+    If system tools are missing, or if video clips or brief files are missing,
+    provide clear interactive guidance to the user on what is missing and where to add it.
+    """
+    import shutil
+
+    # 1. System tool check (e.g. ffmpeg)
+    if not shutil.which("ffmpeg"):
+        typer.echo("⚠️  Missing system tool: ffmpeg is required.")
+        typer.echo("   Install it using: brew install ffmpeg\n")
+
+    # 2. Check if project directory exists or create it
+    if not project.exists():
+        project.mkdir(parents=True, exist_ok=True)
+        video_dir = project / "video"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        desc_dir = project / "description"
+        desc_dir.mkdir(parents=True, exist_ok=True)
+        brief_file = desc_dir / "brief.md"
+        brief_file.write_text("# Video Brief\nDescribe what this video review is about.\n", encoding="utf-8")
+        typer.echo(f"📁 Created new project structure at: {project.resolve()}")
+        typer.echo(f"   ├── video/\n   └── description/brief.md\n")
+
+    clip_dir = resolve_clip_dir(project)
+    cameras = list_camera_clips(clip_dir)
+
+    # 3. Check for video clips
+    if not any(sources for sources in cameras.values()):
+        target_video_dir = project / "video"
+        target_video_dir.mkdir(parents=True, exist_ok=True)
+        typer.echo(f"⚠️  No raw video clips found in '{project}'!")
+        typer.echo(f"   Please add your raw video files (.MOV, .mp4) into:")
+        typer.echo(f"     👉 {target_video_dir.resolve()}/ (or directly in {project.resolve()}/)")
+        typer.echo(f"   Then run the command again:\n     videoai produce {project}\n")
+        raise typer.BadParameter(f"No video files found in {project}. Please add video files and try again.")
+
+    # 4. Check for brief / description file and create template if empty
+    from videoai.core.project import load_brief
+    brief = load_brief(project)
+    if brief.is_empty():
+        desc_dir = project / "description"
+        desc_dir.mkdir(parents=True, exist_ok=True)
+        brief_file = desc_dir / "brief.md"
+        if not brief_file.exists():
+            brief_file.write_text("# Video Brief\nDescribe what this video review is about.\n", encoding="utf-8")
+            typer.echo(f"💡 Note: Created template brief at {brief_file.relative_to(project)}")
+
+    return clip_dir, cameras
+
+
 @app.command()
 def run(
     project: Path = typer.Argument(..., help="Project directory holding input/, video/, or a flat folder of clips"),
@@ -123,14 +175,7 @@ def run(
     ),
 ) -> None:
     """Run the pipeline over a project folder."""
-    clip_dir = resolve_clip_dir(project)
-    cameras = list_camera_clips(clip_dir)
-    if not any(sources for sources in cameras.values()):
-        raise typer.BadParameter(
-            f"no video files found in {clip_dir} "
-            "(clips may live in input/, in video/, in per-camera subfolders of either, "
-            "or directly in the project folder)"
-        )
+    clip_dir, cameras = _validate_and_prepare_project(project)
 
     work_dir = project / "work"
     output_dir = project / "output"
@@ -275,10 +320,7 @@ def produce(
     ),
 ) -> None:
     """Build a review draft, then a contract-validated final after approval."""
-    clip_dir = resolve_clip_dir(project)
-    cameras = list_camera_clips(clip_dir)
-    if not any(cameras.values()):
-        raise typer.BadParameter(f"no video files found in {clip_dir}")
+    clip_dir, cameras = _validate_and_prepare_project(project)
     work_dir = project / "work"
     output_dir = project / "output"
     work_dir.mkdir(parents=True, exist_ok=True)
