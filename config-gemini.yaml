@@ -56,7 +56,7 @@ polish:
   music_gain_db: -22.0
   music_duck_db: -12.0
   transition_frames: 8
-  music_dir: /Users/denyskriukov/Documents/TestDocAI/VideoAI/assets/Music
+  music_dir: assets/Music
   output_height: 1080
   output_crf: 18
   hardware_encode: true
