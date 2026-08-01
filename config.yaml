@@ -6,10 +6,8 @@ providers:
   # claude_cli | codex_cli | gemini_cli | gemini_api | mock
   llm: claude_cli
 
-# Paid-pipeline configuration uses Gemini API for video analysis and footage description
-llm_by_stage:
-  analyze: gemini_api
-  describe: gemini_api
+# Main branch configuration uses local / CLI subscription model (claude_cli/codex_cli)
+llm_by_stage: {}
 
 describe:
   enabled: true
