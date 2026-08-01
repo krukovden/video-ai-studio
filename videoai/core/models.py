@@ -589,6 +589,14 @@ class FinalResult(BaseModel):
     render_seconds: float = 0.0
     intro: bool = False
     intro_title: str = ""
+    # The branded clip the delivery opened with, before the generated title card,
+    # and how long it measured after being conformed to the delivery frame. Empty
+    # and zero when `polish.intro_clip` is unset, which is the default: a delivery
+    # that opens on the title card alone is the delivery this pipeline has always
+    # produced. Recorded because the clip is neither shoot footage nor a proxy, so
+    # nothing else in this record would mention that it shipped.
+    intro_clip: str = ""
+    intro_clip_seconds: float = 0.0
     title_count: int = 0
     transition_count: int = 0
     caption_count: int = 0

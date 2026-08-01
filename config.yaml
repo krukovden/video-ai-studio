@@ -102,6 +102,13 @@ polish:
   enabled: true
   require_approval: true  # watch draft.mp4, then run: videoai approve <project>
   intro_seconds: 2.5      # the title card, faded into the first segment
+  # A finished clip to open the delivery with, ahead of that title card — the
+  # channel's own branded intro. It is conformed to the delivery frame, rate and
+  # audio layout before it is joined, and its measured length shifts every
+  # caption, section title and accent with it. Empty means the title card alone.
+  # Committed to the repo (see .gitignore) so a clone can produce the same
+  # delivery — preflight refuses a run whose intro_clip is missing.
+  intro_clip: assets/artem-intro-opus.mp4
   outro_seconds: 2.5
   outro_text: "Thanks for watching!"
   title_seconds: 2.0      # how long a section's beat-named lower third stays up

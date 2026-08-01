@@ -102,14 +102,23 @@ def preflight(
     closing_beat: bool,
     estimated_bytes: int,
     available_bytes: int,
+    intro_clip_problem: str | None = None,
 ) -> None:
     """Refuse a delivery that cannot satisfy the contract, before any cutting.
 
     Everything checked here is knowable from one source probe, the timeline and a
     directory listing. The alternative is discovering that the contract wants
     1080p from a 4:3 source, or that the disk is full, after a 4K render.
+
+    `intro_clip_problem` is already-measured: whether `polish.intro_clip` names a
+    readable video is a fact about the filesystem, not about the contract, so the
+    caller establishes it and this function only refuses to build on it. It is
+    reported here rather than at the point of use so that an intro that is not
+    there costs a probe instead of a full segment pass.
     """
     failures: list[str] = []
+    if intro_clip_problem:
+        failures.append(intro_clip_problem)
     required_output = contract.get("required_output") or {}
     width, height = frame
     wanted_width = required_output.get("width")

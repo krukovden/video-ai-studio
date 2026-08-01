@@ -150,6 +150,17 @@ class PolishSettings(BaseModel):
     # requires another review.
     require_approval: bool = False
     intro_seconds: float = 2.5
+    # A finished clip — the channel's own branded intro — played at the very start
+    # of the delivery, before the generated title card. Relative paths are tried
+    # as given and then under the project directory, the same way a source file
+    # is. Empty means no clip: the delivery opens on the title card exactly as it
+    # did before this setting existed.
+    #
+    # The clip is conformed to the delivery frame, fps and audio layout before it
+    # is concatenated, and its measured duration is added to the offset every
+    # caption, section title and cartoon accent is placed on — so setting it
+    # moves the whole graphics layer with the picture rather than desyncing it.
+    intro_clip: str = ""
     outro_seconds: float = 2.5
     outro_text: str = "Thanks for watching!"
     title_seconds: float = 2.0

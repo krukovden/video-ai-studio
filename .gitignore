@@ -25,6 +25,12 @@ assets/*
 # committed pipeline input, not media. The effects stage may only offer what the
 # manifest lists, so a clone without it would plan no effects at all.
 !assets/effects/
+# The same reasoning, and the same test: is a clone without this file able to
+# produce the delivery this repository describes? The branded intro opens every
+# finished video, `config.yaml` names it, and preflight refuses a delivery whose
+# `polish.intro_clip` is missing — so a clone without it cannot. 5.7 MB, one
+# file, and it changes about as often as the channel's name does.
+!assets/artem-intro-opus.mp4
 
 # macOS
 .DS_Store

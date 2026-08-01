@@ -43,6 +43,7 @@ from videoai.stages.s06_render_draft import (
 )
 from videoai.stages.s08_polish import (
     _Caption,
+    _conform_intro_clip,
     _cut_delivery_segment,
     clamp_caption_ends,
     delivery_frame,
@@ -939,6 +940,296 @@ def test_an_accent_is_delivered_over_the_shot_it_was_planned_for(project, tmp_pa
     # rather than four.
     assert report["effects"]["events"][0]["at_seconds"] == pytest.approx(1.0, abs=0.05)
     assert result.effects[0].startswith("comic_starburst at ")
+
+
+# --- the branded intro clip -------------------------------------------------
+
+
+def _make_branded_clip(
+    path: Path, seconds: float = 1.5, size: str = "320x240", rate: int = 30,
+    colour: str = "white", tone_hz: int = 880, channels: int = 1,
+    sample_rate: int = 44100,
+) -> Path:
+    """A stand-in for the channel's own intro: a flat bright frame and a tone.
+
+    Flat and bright on purpose. The generated title card is a dark gradient, so a
+    single luma sample says which of the two the delivery actually opens with —
+    without depending on anything the card happens to draw.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "lavfi", "-i", f"color=c={colour}:s={size}:r={rate}:d={seconds}",
+        "-f", "lavfi", "-i",
+        f"sine=frequency={tone_hz}:sample_rate={sample_rate}:duration={seconds}",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", str(channels),
+        "-shortest", str(path),
+    ], check=True)
+    return path
+
+
+def _with_intro_clip(ctx: StageContext, clip: Path | str) -> StageContext:
+    """The same project, delivered behind `clip`."""
+    from dataclasses import replace
+
+    return replace(
+        ctx,
+        config=ctx.config.model_copy(
+            update={"polish": ctx.config.polish.model_copy(
+                update={"intro_clip": str(clip)}
+            )}
+        ),
+    )
+
+
+def _graphics_calls(monkeypatch) -> list[dict]:
+    """Record what each graphics-track render was asked to draw, and when.
+
+    Section titles and cartoon accents are not timestamped anywhere in the
+    delivered package, so this is where their delivery-time placement can be read:
+    the overlays handed to the renderer are exactly the ones composited over the
+    picture.
+    """
+    from videoai.stages import s08_polish
+
+    calls: list[dict] = []
+    real = s08_polish._render_graphics_track
+
+    def spy(path, frame, fps, duration, captions, titles, work_dir, effects=()):
+        calls.append({
+            "duration": duration,
+            "titles": [overlay.start for overlay in titles],
+            "effects": [overlay.start for overlay in effects],
+        })
+        return real(path, frame, fps, duration, captions, titles, work_dir, effects)
+
+    monkeypatch.setattr(s08_polish, "_render_graphics_track", spy)
+    return calls
+
+
+def _cue_starts(srt: Path) -> list[float]:
+    stamps = re.findall(
+        r"(\d\d):(\d\d):(\d\d),(\d\d\d) -->", srt.read_text(encoding="utf-8")
+    )
+    return [
+        int(hours) * 3600 + int(minutes) * 60 + int(whole) + int(milli) / 1000
+        for hours, minutes, whole, milli in stamps
+    ]
+
+
+def _seed_accent(ctx: StageContext) -> None:
+    from videoai.core.models import EffectEvent, EffectPlan
+
+    ctx.store.write("05d-effects", EffectPlan(library="", events=[
+        EffectEvent(clip_ref="clip-01#001", at_in_clip=1.0, at_seconds=4.0,
+                    effect_name="comic_starburst", screen_position="center",
+                    scale="small", seconds=0.8, reason="the syringe goes in"),
+    ]), fingerprint="fp")
+
+
+def test_no_intro_clip_delivers_exactly_what_it_did_before(project):
+    """The default. `polish.intro_clip` empty has to mean the title card alone:
+    no extra part in the picture master, and nothing added to the report."""
+    ctx, draft = project(["Hook", CLOSING_BEAT])
+
+    result = polish(ctx)
+
+    assert result.intro_clip == ""
+    assert result.intro_clip_seconds == 0.0
+    assert not (ctx.work_dir / "delivery" / "intro-clip.mp4").exists()
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    assert "intro_clip" not in report["quality"]
+    grown = probe(Path(result.path)).duration - draft.duration
+    assert 4.4 < grown < 5.6, f"grew by {grown:.2f}s, expected the 2.5s+2.5s cards"
+
+
+def test_the_branded_clip_opens_the_delivery_and_lengthens_it_by_its_own_duration(
+    project, tmp_path: Path
+):
+    """The clip plays first, ahead of the generated title card, and the delivery
+    is longer than the same delivery without it by exactly the clip's length."""
+    ctx, _ = project(["Hook", CLOSING_BEAT], intro_seconds=1.2, outro_seconds=0.6,
+                     title_seconds=0.5)
+
+    plain = probe(Path(polish(ctx).path)).duration
+
+    clip = _make_branded_clip(tmp_path / "brand.mp4", seconds=1.5)
+    result = polish(_with_intro_clip(ctx, clip))
+
+    branded = probe(Path(result.path))
+    assert result.intro_clip == str(clip)
+    assert result.intro_clip_seconds == pytest.approx(1.5, abs=0.05)
+    assert branded.duration - plain == pytest.approx(
+        result.intro_clip_seconds, abs=0.1
+    ), f"{branded.duration:.2f}s against {plain:.2f}s without the clip"
+    # Half a second in is inside the clip; the title card follows it, and its own
+    # fade from black is over by then.
+    inside_clip = _mean_brightness(Path(result.path), 0.5)
+    inside_card = _mean_brightness(Path(result.path), result.intro_clip_seconds + 0.6)
+    assert inside_clip > 200, f"the delivery does not open on the clip ({inside_clip:.0f})"
+    assert inside_clip > inside_card + 60, (
+        f"clip {inside_clip:.0f} against card {inside_card:.0f}: the title card is "
+        "still first"
+    )
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    # The intro is neither an original nor a proxy, so `source: originals` cannot
+    # speak for it and the report has to name it separately.
+    assert report["quality"]["source"] == "originals"
+    assert report["quality"]["intro_clip"] == {
+        "path": str(clip.resolve()),
+        "duration": pytest.approx(result.intro_clip_seconds, abs=0.001),
+        "shoot_footage": False,
+    }
+    assert any("branded intro" in note for note in result.notes)
+
+
+def test_a_branded_intro_moves_every_caption_title_and_accent_with_it(
+    project, tmp_path: Path, monkeypatch
+):
+    """The failure this feature can have that nobody notices: the clip is added to
+    the picture and not to the offset every overlay is placed on, so the whole
+    graphics layer runs early by the clip's length — and the result still plays,
+    still decodes and still passes the contract.
+
+    Measured as a difference: the same project delivered with and without the
+    clip, cue for cue, title for title, accent for accent.
+    """
+    ctx, _ = project(["Hook", "Filling", CLOSING_BEAT], intro_seconds=1.2,
+                     outro_seconds=0.6, title_seconds=0.5)
+    _seed_accent(ctx)
+    calls = _graphics_calls(monkeypatch)
+
+    polish(ctx)
+    plain_cues = _cue_starts(ctx.output_dir / "final.srt")
+
+    clip = _make_branded_clip(tmp_path / "brand.mp4", seconds=1.5)
+    result = polish(_with_intro_clip(ctx, clip))
+    branded_cues = _cue_starts(ctx.output_dir / "final.srt")
+
+    shift = result.intro_clip_seconds
+    assert shift == pytest.approx(1.5, abs=0.05)
+    plain_graphics, branded_graphics = calls
+    assert plain_cues and plain_graphics["titles"] and plain_graphics["effects"]
+    assert branded_cues == pytest.approx([cue + shift for cue in plain_cues], abs=0.01)
+    assert branded_graphics["titles"] == pytest.approx(
+        [start + shift for start in plain_graphics["titles"]], abs=0.01
+    )
+    assert branded_graphics["effects"] == pytest.approx(
+        [start + shift for start in plain_graphics["effects"]], abs=0.01
+    )
+    # The alpha track has to cover the longer picture too, or the last accent of a
+    # long video would fall off the end of it.
+    assert branded_graphics["duration"] == pytest.approx(
+        plain_graphics["duration"] + shift, abs=0.1
+    )
+
+
+def test_a_clip_that_disagrees_on_geometry_rate_and_channels_is_conformed(
+    project, tmp_path: Path
+):
+    """The picture master is a raw stream copy, which does not check that its
+    parts agree. A 640x480 25 fps stereo clip in front of a 320x240 30 fps mono
+    delivery has to come out as one homogeneous file that decodes end to end —
+    and through a lossless intermediate, so the delivery encode stays the only
+    lossy generation."""
+    ctx, _ = project(["Hook", CLOSING_BEAT], intro_seconds=0.6, outro_seconds=0.6,
+                     title_seconds=0.5)
+    clip = _make_branded_clip(
+        tmp_path / "brand.mp4", seconds=2.0, size="640x480", rate=25,
+        channels=2, sample_rate=48000,
+    )
+
+    result = polish(_with_intro_clip(ctx, clip))
+
+    assert result.fully_decoded is True
+    streams = _probe_streams(Path(result.path))
+    video = [stream for stream in streams if stream["codec_type"] == "video"]
+    audio = [stream for stream in streams if stream["codec_type"] == "audio"]
+    assert len(video) == len(audio) == 1
+    assert (int(video[0]["width"]), int(video[0]["height"])) == (320, 240)
+    assert int(audio[0]["sample_rate"]) == DRAFT_AUDIO_SAMPLE_RATE
+    assert int(audio[0]["channels"]) == DRAFT_AUDIO_CHANNELS
+    report = json.loads(Path(result.production_report).read_text(encoding="utf-8"))
+    assert report["quality"]["lossy_video_generations"] == 1
+    # 6s of segments, the two cards and the clip.
+    assert probe(Path(result.path)).duration == pytest.approx(9.2, abs=0.3)
+
+
+def test_a_missing_intro_clip_is_refused_before_any_cutting_and_names_it(
+    project, tmp_path: Path
+):
+    """In seconds and by name, not after the segments have been cut."""
+    missing = tmp_path / "assets" / "artem-intro-opus.mp4"
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+
+    with pytest.raises(RuntimeError) as failure:
+        polish(_with_intro_clip(ctx, missing))
+
+    message = str(failure.value)
+    assert "preflight failed" in message
+    assert "polish.intro_clip" in message
+    assert str(missing) in message
+    assert _delivery_segments(ctx) == [], "preflight ran after the cutting started"
+    assert not (ctx.output_dir / "final.mp4").exists()
+
+
+def test_an_unreadable_intro_clip_is_refused_before_any_cutting_and_names_it(
+    project, tmp_path: Path
+):
+    """A file that is there but is not video. The concat would have accepted it
+    as a part and produced a delivery nobody could play."""
+    broken = tmp_path / "not-really-a-video.mp4"
+    broken.write_text("this is not an mp4\n", encoding="utf-8")
+    ctx, _ = project(["Hook", CLOSING_BEAT])
+
+    with pytest.raises(RuntimeError) as failure:
+        polish(_with_intro_clip(ctx, broken))
+
+    message = str(failure.value)
+    assert "preflight failed" in message
+    assert str(broken) in message
+    assert _delivery_segments(ctx) == []
+
+
+def test_a_silent_branded_clip_is_conformed_with_a_silent_track(
+    tmp_path: Path, make_silent_clip
+):
+    """A logo sting with no sound is ordinary artwork. Concatenated as it is, it
+    would leave the picture master with less audio than picture from its first
+    second, so the conform has to synthesise the silence — the same way a muted
+    camera's segment does."""
+    clip = make_silent_clip("brand-silent.mp4", seconds=1.0, size="640x360")
+    conformed = tmp_path / "conformed.mp4"
+    lossless: list[bool] = []
+
+    _conform_intro_clip(
+        clip, 1.0, (320, 240), 30.0, 0.03, probe(clip).has_audio, conformed,
+        lossless_sink=lossless,
+    )
+
+    assert lossless == [True], "the intermediate must not be a lossy generation"
+    streams = _probe_streams(conformed)
+    video = next(stream for stream in streams if stream["codec_type"] == "video")
+    audio = next(stream for stream in streams if stream["codec_type"] == "audio")
+    # 16:9 inside a 4:3 delivery frame: scaled down, then padded, never cropped.
+    assert (int(video["width"]), int(video["height"])) == (320, 240)
+    assert video["r_frame_rate"] == "30/1"
+    assert int(audio["sample_rate"]) == DRAFT_AUDIO_SAMPLE_RATE
+    assert int(audio["channels"]) == DRAFT_AUDIO_CHANNELS
+    assert probe(conformed).duration == pytest.approx(1.0, abs=0.05)
+
+
+def test_an_intro_clip_is_found_relative_to_the_project(project, tmp_path: Path):
+    """`assets/artem-intro-opus.mp4` in a config is a path relative to the project,
+    not to whatever directory the CLI happened to be run from."""
+    clip = _make_branded_clip(tmp_path / "assets" / "brand.mp4", seconds=1.0)
+    ctx, _ = project(["Hook", CLOSING_BEAT], intro_seconds=0.6, outro_seconds=0.6,
+                     title_seconds=0.5)
+
+    result = polish(_with_intro_clip(ctx, Path("assets") / clip.name))
+
+    assert Path(result.intro_clip).resolve() == clip.resolve()
+    assert result.intro_clip_seconds == pytest.approx(1.0, abs=0.05)
 
 
 # --- degradation is never called final --------------------------------------

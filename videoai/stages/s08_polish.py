@@ -509,6 +509,64 @@ def _source_path(project_dir: Path, raw_path: str, clip_id: str) -> Path:
     )
 
 
+def resolve_intro_clip(project_dir: Path, configured: str) -> Path | None:
+    """The branded intro clip on disk, or None when the path does not resolve.
+
+    Tried as recorded and then under the project folder — the same fallback the
+    draft and the source files use, so a config written for `videoai produce .`
+    keeps working when the same project is addressed by an absolute path.
+    """
+    recorded = Path(configured.strip()).expanduser()
+    candidates = (
+        [recorded] if recorded.is_absolute() else [recorded, project_dir / recorded]
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def measure_intro_clip(
+    project_dir: Path, configured: str
+) -> tuple[Path | None, float, str | None]:
+    """Locate and probe the branded intro clip: `(path, seconds, problem)`.
+
+    Nothing here decodes a frame, so the answer costs a probe and can be had
+    before any cutting starts. A clip that is missing or that ffprobe cannot read
+    comes back as a `problem` string naming `polish.intro_clip` and the path
+    rather than as an exception, because preflight reports every reason a
+    delivery cannot be built at once — discovering the intro is unreadable one
+    failure at a time is how a creator ends up running preflight four times.
+    """
+    if not (configured or "").strip():
+        return None, 0.0, None
+    clip = resolve_intro_clip(project_dir, configured)
+    if clip is None:
+        recorded = Path(configured.strip()).expanduser()
+        looked = ", ".join(
+            str(candidate)
+            for candidate in (
+                [recorded] if recorded.is_absolute() else [recorded, project_dir / recorded]
+            )
+        )
+        return None, 0.0, (
+            f"polish.intro_clip names a file that is not there: {configured} "
+            f"(looked in {looked}); point it at the branded intro or clear the "
+            "setting to open on the title card alone"
+        )
+    try:
+        measured = probe(clip)
+    except RuntimeError as error:
+        return None, 0.0, (
+            f"polish.intro_clip {clip} cannot be read as video: {error}"
+        )
+    if measured.duration <= 0:
+        return None, 0.0, (
+            f"polish.intro_clip {clip} has no duration ({measured.duration}s)"
+        )
+    return clip, measured.duration, None
+
+
 def delivery_frame(source: ProbeResult, output_height: int) -> tuple[int, int]:
     """The finished frame: `output_height` tall, at the source's display aspect.
 
@@ -705,6 +763,72 @@ def _cut_delivery_segment(
             dst,
         )
     return emitted
+
+
+def _conform_intro_clip(
+    source: Path,
+    duration: float,
+    frame: tuple[int, int],
+    fps: float,
+    audio_fade: float,
+    has_audio: bool,
+    dst: Path,
+    lossless_sink: list[bool] | None = None,
+) -> None:
+    """Re-cut the branded intro to the delivery's own geometry, rate and audio.
+
+    The picture master is assembled with a raw stream copy, which does not check
+    that its parts agree: a clip at another resolution, frame rate or channel
+    count concatenates into a file that plays as garbage rather than into an
+    error. So the clip goes through exactly the conforming a source segment goes
+    through — scaled inside the delivery frame and padded, forced to the delivery
+    fps, square pixels, AAC at the draft's sample rate and channel count — and out
+    to a lossless intermediate, so the delivery encode remains the only lossy
+    generation the picture ever sees.
+
+    No fade is drawn over the picture: the clip is finished artwork and its own
+    open and close are what the channel decided on. The audio gets the same short
+    edge fade every other segment gets, which is what keeps the join into the
+    title card from clicking.
+    """
+    width, height = frame
+    filters = [
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+        f"fps={fps}",
+        "format=yuv420p",
+        "setsar=1",
+    ]
+    common = [
+        "-t", f"{duration:.3f}", "-filter:v", ",".join(filters),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "0",
+        "-c:a", DRAFT_AUDIO_CODEC, "-b:a", DRAFT_AUDIO_BITRATE,
+        "-ar", str(DRAFT_AUDIO_SAMPLE_RATE), "-ac", str(DRAFT_AUDIO_CHANNELS),
+        "-avoid_negative_ts", "make_zero",
+    ]
+    if lossless_sink is not None:
+        lossless_sink.append(_is_lossless_x264_encode(common))
+    if has_audio:
+        _run_ffmpeg_to(
+            [
+                "-i", str(source), *common,
+                "-af", _audio_filter_chain(audio_fade, duration, 0.0),
+            ],
+            dst,
+        )
+    else:
+        # A silent branded intro is ordinary — a logo sting with no sound bed —
+        # and a video-only part in the concat list would leave the picture master
+        # with a shorter audio stream than picture from its very first second.
+        _run_ffmpeg_to(
+            [
+                "-i", str(source),
+                "-f", "lavfi", "-i", SILENT_AUDIO_SOURCE,
+                "-map", "0:v:0", "-map", "1:a:0",
+                *common,
+            ],
+            dst,
+        )
 
 
 def _concat_copy(parts: list[Path], work_dir: Path, dst: Path) -> None:
@@ -1372,6 +1496,9 @@ POLISH_REQUIRES = (
         "effects.enabled",
         "polish.require_approval",
         "polish.intro_seconds",
+        # Changing which clip opens the delivery changes the picture and moves
+        # every caption, title and accent with it, so it re-renders.
+        "polish.intro_clip",
         "polish.outro_seconds",
         "polish.outro_text",
         "polish.title_seconds",
@@ -1461,12 +1588,20 @@ def polish(ctx: StageContext) -> FinalResult:
     # cost a full render first.
     effect_plan, library = _planned_effects(ctx, timeline)
 
+    # The branded intro, located and probed before anything is cut: a clip that is
+    # not there must cost a probe rather than a 4K render, and its duration is
+    # part of how much scratch space the delivery is about to need.
+    intro_clip, intro_clip_seconds, intro_clip_problem = measure_intro_clip(
+        ctx.project_dir, settings.intro_clip
+    )
+
     # Everything above is a probe, a listing and some arithmetic. Everything below
     # re-encodes gigabytes, so the contract is checked against what is knowable
     # now: an unsatisfiable delivery has to fail in seconds.
     timeline_seconds = (
         sum(clip.dur for clip in timeline.clips)
         + max(0.0, settings.intro_seconds)
+        + intro_clip_seconds
         + max(0.0, settings.outro_seconds)
     )
     preflight(
@@ -1478,6 +1613,7 @@ def polish(ctx: StageContext) -> FinalResult:
         closing_beat=has_closing_beat(timeline),
         estimated_bytes=estimated_delivery_bytes(frame, fps, timeline_seconds),
         available_bytes=free_bytes(ctx.work_dir),
+        intro_clip_problem=intro_clip_problem,
     )
     track = _select_music(music_dir, tracks, settings, ctx.project_dir)
 
@@ -1541,11 +1677,35 @@ def polish(ctx: StageContext) -> FinalResult:
         lossless_sink=lossless_encodes,
     )
 
+    # The branded clip, conformed and placed ahead of the title card. Its own
+    # duration is measured off the conformed file rather than taken from the
+    # source probe: the conform lands on a whole number of delivery frames, and a
+    # frame of error here is a frame of error on every caption after it.
+    branded_seconds = 0.0
+    parts = [intro_path, *segments, outro_path]
+    if intro_clip is not None:
+        branded_path = work_dir / "intro-clip.mp4"
+        _conform_intro_clip(
+            intro_clip, intro_clip_seconds, frame, fps,
+            ctx.config.render.audio_fade_seconds,
+            probe(intro_clip).has_audio,
+            branded_path,
+            lossless_sink=lossless_encodes,
+        )
+        branded_seconds = probe(branded_path).duration
+        parts.insert(0, branded_path)
+
     picture = work_dir / "picture-master.mp4"
-    _concat_copy([intro_path, *segments, outro_path], work_dir, picture)
+    _concat_copy(parts, work_dir, picture)
     total = probe(picture).duration
 
-    intro_offset = probe(intro_path).duration
+    # Everything drawn over the picture — captions, section titles, cartoon
+    # accents — is placed on delivery time by adding this one offset to a segment
+    # start. Both things in front of the first segment therefore belong in it: a
+    # branded intro whose length was left out would slide the entire graphics
+    # layer earlier by exactly that length, and the result would still play,
+    # still decode and still pass the contract.
+    intro_offset = branded_seconds + probe(intro_path).duration
     captions = clamp_caption_ends(
         build_captions(
             timeline, transcript, starts, [], 0.0, intro_offset,
@@ -1696,6 +1856,20 @@ def polish(ctx: StageContext) -> FinalResult:
                 "lossy_video_generations": lossy_video_generations,
             },
         }
+        if intro_clip is not None:
+            # `quality.source: originals` is computed as "no segment was cut from
+            # a known proxy", and a branded intro is neither shoot footage nor a
+            # proxy — so it would pass that check in silence while the report read
+            # as though every frame came from the shoot. It is named here, with the
+            # length it really contributed, so the report says what shipped. The
+            # key is absent rather than null when no clip was configured: a
+            # delivery with no branded intro is the delivery this pipeline has
+            # always produced, and its report stays what it was.
+            report["quality"]["intro_clip"] = {
+                "path": str(intro_clip.resolve()),
+                "duration": round(branded_seconds, 3),
+                "shoot_footage": False,
+            }
         if not decoded:
             report["status"] = "failed"
             report["decode_error"] = decode_error
@@ -1713,6 +1887,8 @@ def polish(ctx: StageContext) -> FinalResult:
         render_seconds=elapsed,
         intro=True,
         intro_title=story.title.strip(),
+        intro_clip=str(intro_clip) if intro_clip is not None else "",
+        intro_clip_seconds=round(branded_seconds, 3),
         title_count=len(title_overlays),
         transition_count=emitted_transitions,
         caption_count=len(captions) if settings.captions_enabled else 0,
@@ -1729,6 +1905,16 @@ def polish(ctx: StageContext) -> FinalResult:
         notes=[
             "delivery used finite multi-pass rendering",
             "source segments and picture master are lossless x264",
+            *(
+                [
+                    f"opened with the branded intro {intro_clip} "
+                    f"({branded_seconds:.2f}s, conformed to {width}x{height} at "
+                    f"{fps:g} fps); it is not shoot footage, and every caption, "
+                    "title and accent is offset by it"
+                ]
+                if intro_clip is not None
+                else []
+            ),
             "final.mp4 is the only lossy video generation",
             f"music bed measured {duck.attenuation_db:.1f} dB down under speech "
             f"(requested {abs(settings.music_duck_db):.1f} dB; sidechain threshold "
