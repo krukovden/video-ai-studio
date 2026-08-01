@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from videoai.config import Config, load_config
+from videoai.config import Config, DescribeSettings, load_config
 
 
 def test_load_config_returns_defaults_when_file_missing(tmp_path: Path):
@@ -102,3 +103,72 @@ def test_load_config_overrides_output_snapshots(tmp_path: Path):
     path.write_text("output_snapshots: false\n", encoding="utf-8")
     config = load_config(path)
     assert config.output_snapshots is False
+
+
+# --------------------------------------------------------------------------- #
+# free / paid: one codebase, one switch
+# --------------------------------------------------------------------------- #
+
+
+def test_a_free_run_keeps_every_stage_on_the_default_provider():
+    config = Config(mode="free")
+
+    assert config.llm_for("analyze") == "claude_cli"
+    assert config.llm_for("describe") == "claude_cli"
+    assert config.llm_for("plan") == "claude_cli"
+
+
+def test_a_paid_run_moves_only_the_stages_worth_paying_for():
+    """Watching the footage is worth a metered call. Naming a section title is
+    not, so `plan` and `effects` stay where they are."""
+    config = Config(mode="paid")
+
+    assert config.llm_for("analyze") == "gemini_api"
+    assert config.llm_for("describe") == "gemini_api"
+    assert config.llm_for("plan") == "claude_cli"
+    assert config.llm_for("effects") == "claude_cli"
+
+
+def test_an_explicit_pin_beats_the_mode_in_both_directions():
+    """A mode is a statement about the run; pinning a stage is a statement about
+    that stage, and the more specific one wins."""
+    cheap = Config(mode="paid", llm_by_stage={"analyze": "claude_cli"})
+    assert cheap.llm_for("analyze") == "claude_cli"
+
+    dear = Config(mode="free", llm_by_stage={"analyze": "gemini_api"})
+    assert dear.llm_for("analyze") == "gemini_api"
+
+
+def test_the_mode_decides_whether_describe_has_anything_that_can_watch():
+    """Describing a clip means watching it. Whether the stage does anything is
+    settled by the provider its mode resolves to, not by a second switch — the
+    stage itself skips a provider that cannot watch, and refuses only one that
+    was pinned deliberately."""
+    enabled = DescribeSettings(enabled=True)
+
+    assert Config(mode="free", describe=enabled).llm_for("describe") == "claude_cli"
+    assert Config(mode="paid", describe=enabled).llm_for("describe") == "gemini_api"
+
+
+def test_an_unknown_mode_is_refused_by_name():
+    with pytest.raises(ValidationError, match="unknown mode: 'cheap'"):
+        Config(mode="cheap")
+
+
+def test_load_config_reads_the_mode_and_what_paid_means(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "mode: paid\npaid:\n  llm: gemini_api\n  stages: [analyze]\n", encoding="utf-8"
+    )
+
+    config = load_config(path)
+
+    assert config.mode == "paid"
+    assert config.llm_for("analyze") == "gemini_api"
+    # `describe` was not listed, so the mode leaves it alone.
+    assert config.llm_for("describe") == "claude_cli"
+
+
+def test_load_config_defaults_to_free(tmp_path: Path):
+    """Constructing a config without saying must cost nothing."""
+    assert load_config(tmp_path / "nope.yaml").mode == "free"

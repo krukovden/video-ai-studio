@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PROVIDER_KEYS = ("asr", "llm")
+# The two pipelines this repository ships, as one codebase with one switch.
+MODES = ("free", "paid")
 
 
 class TranscribeSettings(BaseModel):
@@ -68,6 +70,26 @@ class DescribeSettings(BaseModel):
     # pipeline's default provider cannot: switching it on without also pointing
     # `describe` at such a provider is an error rather than a quiet no-op.
     enabled: bool = False
+
+
+class PaidSettings(BaseModel):
+    """What `mode: paid` actually buys, as data rather than as a second config.
+
+    The whole difference between the two pipelines is which provider a couple of
+    stages call. Keeping that here means the free and paid runs share one file,
+    one set of tunables and one set of comments — two config files drift, and
+    the drift is invisible until a run behaves differently for a reason nobody
+    can point at.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # The metered provider. Today `gemini_api` is the only one that is given the
+    # footage itself; replacing it later is this line.
+    llm: str = "gemini_api"
+    # The stages worth paying for. Watching the footage is; naming a section
+    # title is not.
+    stages: tuple[str, ...] = ("analyze", "describe")
 
 
 class RenderSettings(BaseModel):
@@ -183,10 +205,41 @@ class Config(BaseModel):
     # at every step: watching the footage is worth a metered call, naming a
     # section title is not. Keyed by stage id, e.g. {"analyze": "gemini_api"}.
     llm_by_stage: dict[str, str] = Field(default_factory=dict)
+    # Which pipeline this run is. There is one codebase and one config; this is
+    # the switch a creator, a script or an agent flips, and it is the only thing
+    # that has to change between the two.
+    #
+    #   free — every editorial call goes to the subscription-backed CLI. $0, no
+    #          API key, and the analyst is given a transcript and stills.
+    #   paid — the stages that are worth paying to have *watch the footage* go
+    #          to a metered API instead. Everything else is identical.
+    #
+    # Defaults to free so that constructing a Config without saying costs
+    # nothing. The shipped config.yaml chooses.
+    mode: str = "free"
+    paid: PaidSettings = PaidSettings()
 
     def llm_for(self, stage_id: str) -> str:
-        """The provider this stage should call: its override, or the default."""
-        return self.llm_by_stage.get(stage_id) or self.providers.get("llm", "")
+        """The provider this stage should call.
+
+        Precedence, most explicit first: a `llm_by_stage` entry naming this
+        stage, then the paid mode's provider if this is one of the stages it
+        covers, then the pipeline default. An explicit override therefore still
+        wins in paid mode — pinning one stage is a statement about that stage,
+        and a mode is a statement about the run.
+        """
+        override = self.llm_by_stage.get(stage_id)
+        if override:
+            return override
+        if self.mode == "paid" and stage_id in self.paid.stages:
+            return self.paid.llm
+        return self.providers.get("llm", "")
+
+    @model_validator(mode="after")
+    def _check_mode(self) -> "Config":
+        if self.mode not in MODES:
+            raise ValueError(f"unknown mode: {self.mode!r}; known modes are " + ", ".join(MODES))
+        return self
 
     @model_validator(mode="after")
     def _check_provider_keys(self) -> "Config":
@@ -242,4 +295,6 @@ def load_config(path: Path | None = None) -> Config:
         polish=PolishSettings(**(raw.get("polish") or {})),
         output_snapshots=raw.get("output_snapshots", defaults.output_snapshots),
         llm_by_stage=raw.get("llm_by_stage") or {},
+        mode=raw.get("mode", defaults.mode),
+        paid=PaidSettings(**(raw.get("paid") or {})),
     )

@@ -59,7 +59,50 @@ You are working in VideoAI Studio repository. Follow these steps:
   * `cairo` — rasterizes vector SVG badges with transparency.
 * **LLM Subscriptions / API Keys:**
   * Subscription CLI (Default): Claude Code CLI (`claude`) or Codex CLI (`codex`).
-  * Optional API Key: `GEMINI_API_KEY` in `.env` for Gemini multimodal video analysis.
+  * `GEMINI_API_KEY` in `.env` — required by `--mode paid`, unused by `--mode free`.
+
+---
+
+## 🎚️ Free or paid: one pipeline, one switch
+
+There is one codebase and one `config.yaml`. `mode` chooses which pipeline a run
+is, and `--mode` overrides it for a single run — which is how a script or an
+agent chooses without editing a file:
+
+```bash
+uv run videoai produce projects/my-review --mode free    # $0, no API key
+uv run videoai produce projects/my-review --mode paid    # the analyst watches
+```
+
+| | `free` | `paid` |
+|---|---|---|
+| `analyze`, `describe` | subscription CLI | `gemini_api`, given the footage |
+| `plan`, `visual_check`, `effects` | subscription CLI | subscription CLI |
+| Transcription, render, delivery | identical | identical |
+| Cost per video | $0 | a metered call on the spoken spans only |
+| Needs `GEMINI_API_KEY` | no | yes — checked **before** anything expensive runs |
+
+**What the money buys** is not a better writer, it is a viewer. Every free
+provider is handed a transcript and one still per phrase, which is enough to
+judge what was *said* and structurally blind to how it was *delivered* — comic
+timing, a reaction building, a moment held exactly as long as it should be. Only
+the paid mode's provider is given the video itself, and only a **reel of the
+spoken spans**: on a 29-minute shoot that is about 10 minutes submitted, not 29.
+
+`describe` — watching every clip once and keeping what it saw — needs a provider
+that can watch, so a free run treats it as a no-op rather than an error.
+
+What `paid` means is data, not code:
+
+```yaml
+paid:
+  llm: gemini_api            # replacing this later is one line
+  stages: [analyze, describe]
+```
+
+Pinning a stage in `llm_by_stage` is more specific than a mode and wins over it,
+in either direction. Switching modes re-runs only the stages whose provider
+actually changed — the provider each stage will call is part of its fingerprint.
 
 ---
 

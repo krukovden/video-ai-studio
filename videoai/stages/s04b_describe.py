@@ -219,11 +219,22 @@ def describe(ctx: StageContext) -> ClipNotes:
         cache_dir=llm_cache_dir(ctx.work_dir),
     )
     if not getattr(provider, "reads_video", False):
-        raise RuntimeError(
-            f"describe needs a provider that can watch video; '{provider.name}' is "
-            "given stills only. Point it at one in llm_by_stage, or set "
-            "describe.enabled: false."
-        )
+        # Pinned deliberately: the creator named this provider for this stage, so
+        # a provider that cannot watch is their mistake and has to be said out
+        # loud rather than absorbed.
+        if "describe" in ctx.config.llm_by_stage:
+            raise RuntimeError(
+                f"describe is pinned to '{provider.name}', which is given stills "
+                "only. Point it at a provider that can watch video, or set "
+                "describe.enabled: false."
+            )
+        # Not pinned: the run's mode simply provides nothing that can watch, which
+        # is what a free run is. Describing is the paid pipeline's job, so this is
+        # a no-op and not a failure — `describe.enabled: true` in the shipped
+        # config is a statement about a paid run, not a demand that a free one do
+        # the impossible.
+        _write_markdown(ctx, cached)
+        return cached
 
     brief = read_brief(ctx.project_dir)
     fresh: list[ClipNote] = []

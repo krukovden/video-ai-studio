@@ -25,6 +25,45 @@ from videoai.stages.s08_polish import approval_is_current
 app = typer.Typer(add_completion=False, help="Automated video pipeline.")
 
 
+MODE_HELP = (
+    "Which pipeline to run: 'free' keeps every editorial call on the "
+    "subscription CLI, 'paid' hands the footage to a metered API for the stages "
+    "that benefit from watching it. Overrides config.yaml for this run."
+)
+
+
+def _config_for_run(config_path: Path, mode: str | None):
+    """Load the config and apply a `--mode` override, refusing a paid run that
+    cannot possibly work.
+
+    The key is checked here rather than where the call is made: `analyze` runs
+    after ingest, proxy building and transcription, so a missing key discovered
+    there costs the creator every expensive minute of them first.
+    """
+    from videoai.config import MODES
+
+    loaded = load_config(config_path)
+    if mode is not None:
+        if mode not in MODES:
+            raise typer.BadParameter(f"unknown mode: {mode!r}; known modes are " + ", ".join(MODES))
+        loaded = loaded.model_copy(update={"mode": mode})
+
+    if loaded.mode == "paid":
+        import os
+
+        paid_stages = [
+            stage for stage in loaded.paid.stages if loaded.llm_for(stage) == loaded.paid.llm
+        ]
+        if paid_stages and loaded.paid.llm.startswith("gemini") and not os.getenv("GEMINI_API_KEY"):
+            raise typer.BadParameter(
+                "mode is 'paid' but GEMINI_API_KEY is not set, so "
+                + ", ".join(paid_stages)
+                + " would fail after the expensive stages had already run. Create a key at "
+                "https://aistudio.google.com/apikey and put it in .env, or run with --mode free."
+            )
+    return loaded
+
+
 def _report_stage_failure(
     failure: StageFailure,
     project: Path,
@@ -141,11 +180,21 @@ def _validate_and_prepare_project(project: Path) -> tuple[Path, dict[str, list[P
     if not any(sources for sources in cameras.values()):
         target_video_dir = project / "video"
         target_video_dir.mkdir(parents=True, exist_ok=True)
+        # Name every layout the pipeline accepts, not just the one this command
+        # created. Someone reading this message is by definition someone whose
+        # folder the pipeline did not recognise, so "add video files" answers a
+        # question they did not ask; where to put them is the question.
         typer.echo(f"⚠️  No raw video clips found in '{project}'!")
-        typer.echo(f"   Please add your raw video files (.MOV, .mp4) into:")
-        typer.echo(f"     👉 {target_video_dir.resolve()}/ (or directly in {project.resolve()}/)")
+        typer.echo("   Please add your raw video files (.MOV, .mp4) into any of:")
+        typer.echo(f"     👉 {target_video_dir.resolve()}/   (just created for you)")
+        typer.echo("        input/                        (either name works)")
+        typer.echo("        video/cam-a/, input/cam-b/    (per-camera subfolders)")
+        typer.echo(f"        {project.resolve()}/   (loose in the project folder)")
         typer.echo(f"   Then run the command again:\n     videoai produce {project}\n")
-        raise typer.BadParameter(f"No video files found in {project}. Please add video files and try again.")
+        raise typer.BadParameter(
+            f"No video files found in {project}. Clips may live in input/, in video/, "
+            "in per-camera subfolders of either, or directly in the project folder."
+        )
 
     # 4. Check for brief / description file and create template if empty
     from videoai.core.project import load_brief
@@ -173,6 +222,7 @@ def run(
         help="When the visual check rejects segments, re-plan without them and check "
              "again, at most this many times",
     ),
+    mode: str | None = typer.Option(None, "--mode", help=MODE_HELP),
 ) -> None:
     """Run the pipeline over a project folder."""
     clip_dir, cameras = _validate_and_prepare_project(project)
@@ -187,7 +237,7 @@ def run(
         input_dir=project,
         work_dir=work_dir,
         output_dir=output_dir,
-        config=load_config(config_path),
+        config=_config_for_run(config_path, mode),
         store=ArtifactStore(work_dir),
     )
 
@@ -318,6 +368,7 @@ def produce(
         False, "--edit",
         help="When the draft needs approving, open the edit page instead of just naming it",
     ),
+    mode: str | None = typer.Option(None, "--mode", help=MODE_HELP),
 ) -> None:
     """Build a review draft, then a contract-validated final after approval."""
     clip_dir, cameras = _validate_and_prepare_project(project)
@@ -325,7 +376,7 @@ def produce(
     output_dir = project / "output"
     work_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
-    loaded = load_config(config_path)
+    loaded = _config_for_run(config_path, mode)
     ctx = StageContext(
         project_dir=project,
         input_dir=project,

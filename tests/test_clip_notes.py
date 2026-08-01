@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from videoai.core.models import ClipEvent, ClipNote, ClipNotes
 from videoai.logic.clip_notes import (
     clips_needing_description,
@@ -229,3 +231,44 @@ def test_notes_about_footage_that_left_the_project_are_kept(tmp_path, monkeypatc
 
     assert len(provider.watched) == 2  # nothing was re-watched
     assert len(notes.notes) == 2
+
+
+class _StillsOnlyLLM:
+    """What every free-mode provider is: given a transcript and a few frames."""
+
+    name = "claude_cli"
+    reads_video = False
+
+    def complete_json(self, prompt, images, timeout, videos=None) -> dict:
+        raise AssertionError("a provider that cannot watch must never be called")
+
+
+def test_a_free_run_skips_describing_instead_of_failing(tmp_path, monkeypatch):
+    """`describe.enabled: true` is a statement about the paid pipeline. A free
+    run has no provider that can watch footage, so the stage does nothing —
+    failing there would make the shipped config unusable without an API key."""
+    ctx = _describe_context(tmp_path, ("a.mp4",))
+
+    notes = _run_describe(ctx, monkeypatch, _StillsOnlyLLM())
+
+    assert notes.notes == []
+
+
+def test_a_provider_pinned_by_hand_that_cannot_watch_is_refused_by_name(
+    tmp_path, monkeypatch
+):
+    """Pinning names a provider for this stage deliberately. If it cannot watch,
+    that is the creator's mistake and has to be said out loud rather than
+    absorbed into silence."""
+    ctx = _describe_context(tmp_path, ("a.mp4",))
+    ctx = ctx.__class__(
+        project_dir=ctx.project_dir,
+        input_dir=ctx.input_dir,
+        work_dir=ctx.work_dir,
+        output_dir=ctx.output_dir,
+        config=ctx.config.model_copy(update={"llm_by_stage": {"describe": "claude_cli"}}),
+        store=ctx.store,
+    )
+
+    with pytest.raises(RuntimeError, match=r"describe is pinned to 'claude_cli'"):
+        _run_describe(ctx, monkeypatch, _StillsOnlyLLM())

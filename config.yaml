@@ -1,15 +1,42 @@
+# Which pipeline this run is. One codebase, one config, one switch — override it
+# for a single run with `--mode free` or `--mode paid`, which is how a script or
+# an agent chooses without editing this file.
+#
+#   free  every editorial call goes to the subscription-backed CLI. $0 per video,
+#         no API key. The analyst reads a transcript and a still per phrase, so
+#         it judges what was SAID; `describe` has nothing to watch and is a
+#         no-op.
+#   paid  `analyze` and `describe` are handed the footage itself through a
+#         metered API, which is what lets them judge DELIVERY — comic timing, a
+#         reaction building, a moment held exactly as long as it should be.
+#         Needs GEMINI_API_KEY. Everything else is byte-for-byte the same run.
+#
+# Switching re-runs only the stages whose provider actually changed: the provider
+# each stage will call is part of that stage's fingerprint.
+mode: paid
+
+paid:
+  llm: gemini_api            # the only provider today that is given video
+  stages: [analyze, describe]
+
 # Provider selection. Switching a value re-runs only the affected stages
 # (fingerprints include the provider each stage will actually call).
 providers:
   asr: parakeet      # parakeet | mock
-  # The default editorial voice for every model-calling stage.
+  # The default editorial voice for every model-calling stage, and the whole of
+  # a free run.
   # claude_cli | codex_cli | gemini_cli | gemini_api | mock
   llm: claude_cli
 
-# Main branch configuration uses local / CLI subscription model (claude_cli/codex_cli)
+# Pin one stage to one provider regardless of mode. More explicit than the mode,
+# so it wins over it. Empty is the normal case — let the mode decide.
 llm_by_stage: {}
 
 describe:
+  # Watch every source clip once and write down what it contains, cached by file
+  # identity so re-editing never re-sends footage. Only a video-capable provider
+  # can do it, so this is a statement about a paid run: in free mode the stage is
+  # a no-op rather than a failure.
   enabled: true
 
 transcribe:
@@ -34,7 +61,9 @@ analyze:
   max_video_seconds: 900.0     # the cost ceiling: ~90k tokens at low resolution
   keyframes_per_phrase: 1
   llm_model: sonnet
-  llm_timeout_seconds: 600
+  # Video analysis is slower than reading a transcript; the paid run needs the
+  # headroom and a free run never waits this long anyway.
+  llm_timeout_seconds: 900
   # Clips quieter than this (words per second) are offered to the planner as
   # silent visual inserts. A clip with no words at all always qualifies.
   insert_max_words_per_second: 0.5
