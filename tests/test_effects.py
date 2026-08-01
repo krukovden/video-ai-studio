@@ -12,6 +12,7 @@ import shutil
 import subprocess
 
 import pytest
+import yaml
 
 from videoai.config import Config, EffectsSettings, PolishSettings
 from videoai.core.models import (
@@ -157,6 +158,36 @@ def test_seeding_a_library_elsewhere_reproduces_the_same_bytes(tmp_path: Path):
         assert (tmp_path / "effects" / sprite.file).read_bytes() == (
             default_library_dir() / sprite.file
         ).read_bytes(), sprite.name
+
+
+def test_reseeding_keeps_the_artwork_it_did_not_draw(tmp_path: Path):
+    """`videoai seed-effects` redraws the six seeds. It must not take the shipped
+    badges with it: they are artwork, not drawings, so nothing could restore them
+    and the effects stage would silently lose most of its vocabulary."""
+    directory = tmp_path / "effects"
+    seed_library(directory)
+    manifest = directory / "manifest.yaml"
+    kept = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    kept["sprites"].append(
+        {
+            "name": "badge_borrowed",
+            "file": "badge_borrowed.png",
+            "tags": ["borrowed"],
+            "expresses": "artwork this repository did not draw",
+            "anchor": "center",
+            "default_seconds": 0.8,
+            "animation": "pop-in",
+            "attribution": "Someone else, some licence",
+        }
+    )
+    manifest.write_text(yaml.safe_dump(kept, sort_keys=False), encoding="utf-8")
+
+    seed_library(directory)
+
+    names = [entry["name"] for entry in yaml.safe_load(manifest.read_text())["sprites"]]
+    assert "badge_borrowed" in names
+    assert names.count("badge_borrowed") == 1, "carried across twice"
+    assert "comic_starburst" in names, "the seeds are still redrawn"
 
 
 def test_all_the_shipped_sprites_pass_alpha_validation_on_load():

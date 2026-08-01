@@ -462,14 +462,31 @@ MANIFEST_HEADER = """\
 
 
 def seed_library(directory: Path) -> Path:
-    """Draw every sprite and write the manifest. Returns the manifest path."""
+    """Redraw every seeded sprite and rewrite the manifest around it.
+
+    Entries the seeds do not own are carried across untouched. The library ships
+    with artwork this repository did not draw — the badge set — and those entries
+    are not reproducible from `SEEDS`, so a plain overwrite would silently delete
+    most of the vocabulary the effects stage is offered. Redrawing a seed must
+    never cost the library everything beside it.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     entries: list[dict] = []
     for name, drawing, metadata in SEEDS:
         file = f"{name}.png"
         drawing().save(directory / file)
         entries.append({"name": name, "file": file, **metadata})
+
     path = directory / "manifest.yaml"
+    seeded = {name for name, _, _ in SEEDS}
+    if path.is_file():
+        existing = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        entries.extend(
+            entry
+            for entry in existing.get("sprites") or []
+            if isinstance(entry, dict) and entry.get("name") not in seeded
+        )
+
     body = yaml.safe_dump({"sprites": entries}, sort_keys=False, allow_unicode=True)
     path.write_text(f"{MANIFEST_HEADER}\n{body}", encoding="utf-8")
     return path
