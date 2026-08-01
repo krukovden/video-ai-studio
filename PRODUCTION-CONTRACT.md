@@ -13,6 +13,13 @@ diagnose and fix the cause, retain reusable artifacts, rerun the failed phase,
 and continue until the contract passes or an external decision is genuinely
 required.
 
+**It is also not complete until the record is true.** Before you finish, the
+project's memory — see `## Project memory` below — must say what now exists:
+its issue moved to the state the work is actually in, its entry present in the
+hub's registry, and any approach you abandoned written down with the reason.
+Work nobody can find is work that gets done twice. This is part of the
+definition of done, not an errand afterwards.
+
 Never label a degraded preview as `final.mp4`. A required feature that cannot be
 applied is a production failure. A deliberately degraded artifact must be named
 `preview-fallback.mp4` — the name `failure_policy.fallback_output_name` gives —
@@ -97,6 +104,10 @@ feature nobody can review.
 - Record which features were requested and actually applied.
 - Editing `production-contract.yaml` re-runs delivery: the resolved file's content
   is hashed into the polish stage's fingerprint.
+- Read the project's memory before you start and update it before you stop:
+  the issue in the state the work is really in, the feature in the hub's
+  registry, an abandoned approach written down with its reason. See
+  `## Project memory`.
 
 ## Project memory
 
@@ -127,8 +138,18 @@ without a reason is an invitation to reintroduce it.
 Check the remote before trusting a local checkout. A stale clone makes the
 hub disagree with the code for reasons that have nothing to do with either.
 
+**Keep the issue in the state the work is actually in**, not the state it was
+in when you opened it. Move it to In Progress when you start, and to Done — or
+Canceled, when the outcome is "we are not doing this" — when you stop. A board
+whose states are stale is read as decoration, and then nobody reads it at all.
+
 File the issue before the code, and when the work lands, record what actually
 happened, including approaches attempted and abandoned along the way.
+
+None of this is an errand after the work. `## Definition of done` says so
+first, and the verification rules repeat it, because an obligation that lives
+only at the bottom of a long file is one an agent reads after it has already
+decided it is finished.
 
 ## Standard creator workflow
 
