@@ -767,6 +767,93 @@ def fetch_badges(
     )
 
 
+@app.command("doctor")
+def doctor(
+    project_dir: Path = typer.Option(Path("."), "--dir", help="Project or repo directory to check"),
+    fix: bool = typer.Option(False, "--fix", help="Automatically create missing .env from .env.example"),
+) -> None:
+    """Validate system configuration, environment variables, and dependencies."""
+    import os
+    import platform
+    import shutil
+    import subprocess
+    import sys
+
+    typer.echo("🔍 VideoAI System & Environment Health Check")
+    typer.echo("=" * 45)
+
+    all_ok = True
+
+    # 1. OS & Architecture
+    is_macos = sys.platform == "darwin"
+    arch = platform.machine()
+    is_arm = arch in ("arm64", "aarch64")
+    if is_macos and is_arm:
+        typer.echo("  [✓] Operating System: macOS Apple Silicon (" + arch + ")")
+    else:
+        typer.echo(f"  [!] Operating System: {sys.platform} ({arch}) - Apple Silicon Mac recommended for local MLX GPU ASR")
+
+    # 2. Python version
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    if sys.version_info >= (3, 13):
+        typer.echo(f"  [✓] Python: {py_ver}")
+    else:
+        typer.echo(f"  [✗] Python: {py_ver} (Python >= 3.13 is required)")
+        all_ok = False
+
+    # 3. Executable CLI checks
+    for tool, required in [("ffmpeg", True), ("uv", True), ("git", True), ("claude", False), ("codex", False)]:
+        path = shutil.which(tool)
+        if path:
+            ver = ""
+            try:
+                out = subprocess.check_output([tool, "--version"], stderr=subprocess.STDOUT, text=True)
+                ver = out.splitlines()[0] if out else ""
+            except Exception:
+                pass
+            typer.echo(f"  [✓] CLI tool {tool}: found ({ver[:40]})")
+        elif required:
+            typer.echo(f"  [✗] CLI tool {tool}: missing (Install via: brew install {tool})")
+            all_ok = False
+        else:
+            typer.echo(f"  [-] CLI tool {tool}: not found (Optional subscription CLI)")
+
+    # 4. Cairo / CairoSVG check
+    try:
+        import cairosvg  # noqa: F401
+        typer.echo("  [✓] Library cairosvg: available")
+    except ImportError:
+        typer.echo("  [!] Library cairosvg: missing (Install via: brew install cairo && uv sync)")
+
+    # 5. Check .env file and keys
+    env_file = project_dir / ".env"
+    env_example = project_dir / ".env.example"
+    if env_file.is_file():
+        typer.echo(f"  [✓] Environment file: {env_file.name} exists")
+        from dotenv import load_dotenv
+        load_dotenv(env_file)
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            typer.echo("  [✓] Secret GEMINI_API_KEY: configured")
+        else:
+            typer.echo("  [-] Secret GEMINI_API_KEY: not set (Optional for Gemini multimodal provider)")
+    else:
+        typer.echo(f"  [!] Environment file: .env missing in {project_dir.resolve()}")
+        if env_example.is_file():
+            if fix:
+                shutil.copy(env_example, env_file)
+                typer.echo(f"      -> Auto-created .env from {env_example.name}")
+            else:
+                typer.echo(f"      -> Fix by running: cp .env.example .env (or run 'videoai doctor --fix')")
+        all_ok = False
+
+    typer.echo("=" * 45)
+    if all_ok:
+        typer.echo("🎉 Environment is correctly configured and ready!")
+    else:
+        typer.echo("⚠️  Some required items are missing or misconfigured. Please follow the instructions above.")
+
+
 # At the very bottom, and not in the middle of the file: everything below the
 # `app()` call would otherwise never be defined when the module is run with
 # `python -m videoai.cli`, so half the commands did not exist that way.
